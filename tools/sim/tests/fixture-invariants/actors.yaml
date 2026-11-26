@@ -1,0 +1,24 @@
+domain: weft.actors
+
+summary: The operator of the fixture, and the controller its experiments run as.
+
+naming:
+  wire: actors
+  display: Actors
+
+actors:
+  - name: weft.actors.Operator
+    naming:
+      wire: operator
+      display: Operator
+    may:
+      - weft.nodes.CreateInstance
+      - weft.nodes.Assign
+      - weft.nodes.Release
+  - name: weft.actors.Scheduler
+    naming:
+      wire: scheduler
+      display: Scheduler
+    may:
+      - weft.nodes.Assign
+      - weft.nodes.Release

@@ -1927,8 +1927,8 @@ bindings:
       # negative-size and min-above-max cannot follow: weft.cluster.AddClusterNodePool refuses
       # them. OPEN: unknown-zone and zone-retired (the zone retired between the request and this
       # step) have no escalation event; weft.cluster would add `ClusterNodePoolRefused`.
-      drop: [unknown-zone, zone-retired, negative-size, min-above-max]
-      retry: {except: [unknown-zone, zone-retired, negative-size, min-above-max]}
+      drop: [unknown-zone, zone-retired, negative-size, min-above-max, already-requested]
+      retry: {except: [unknown-zone, zone-retired, negative-size, min-above-max, already-requested]}
   - id: cluster-delete-node-pool
     summary: Delete the infrastructure node pool of a removed dedicated pool.
     when:

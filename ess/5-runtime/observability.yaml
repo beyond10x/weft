@@ -729,6 +729,7 @@ commands:
           entity: weft.observability.LogStream
           where:
             all:
+              - defined(instance_id)
               - instance_id == input.instance_id
               - kind == input.kind
               - process == input.process
@@ -740,6 +741,7 @@ commands:
           entity: weft.observability.LogStream
           where:
             all:
+              - defined(instance_id)
               - instance_id == input.instance_id
               - kind == Events
               - input.kind == Events
@@ -1897,6 +1899,7 @@ commands:
         instances:
           where:
             all:
+              - defined(instance_id)
               - instance_id == input.instance_id
               - state == Open
         sets:
@@ -1940,6 +1943,7 @@ commands:
         instances:
           where:
             all:
+              - defined(instance_id)
               - instance_id == input.instance_id
               - state == Active
         emits:

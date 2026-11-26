@@ -240,6 +240,9 @@ pub struct Catalog {
     /// the bound; 0 when none was set.
     pub retry_bounded: BTreeSet<String>,
     pub retry_bound: u32,
+    /// Commands a binding with `delivery: at_least_once` invokes: each may arrive twice, so it must
+    /// be idempotent (explore's `idempotency` check sends them again).
+    pub redelivered: BTreeSet<usize>,
 }
 
 fn condition_kind(c: &ResolvedCondition) -> &'static str {
@@ -649,7 +652,13 @@ impl Catalog {
         }
 
         let mut bindings_by_event: HashMap<QualifiedName, Vec<BindingInfo>> = HashMap::new();
+        let mut redelivered = BTreeSet::new();
         for (name, binding) in ir.bindings() {
+            if binding.delivery == ess_domain::binding::Delivery::AtLeastOnce {
+                if let Some(ci) = cmd_index.get(binding.command.name()) {
+                    redelivered.insert(*ci);
+                }
+            }
             if let (Some(event), Some(ci)) =
                 (binding.cause.event(), cmd_index.get(binding.command.name()))
             {
@@ -681,6 +690,7 @@ impl Catalog {
             demand,
             retry_bounded: BTreeSet::new(),
             retry_bound: 0,
+            redelivered,
         }
     }
 

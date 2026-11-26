@@ -443,6 +443,12 @@ controllers:
       view: weft.infrastructure.Nodes
       vary: {isolation: [Container, MicroVm]}
       spread: true
+  - name: scheduler-declare-unschedulable
+    limit: 64
+    view: weft.scheduling.PendingRequests
+    command: weft.scheduling.DeclareUnschedulable
+    actor: weft.actors.Scheduler
+    input: {request_id: row.request_id, reason: NoCapacity, detail: no node accepted the request in a scheduler tick}
   - name: node-verify-artifact
     limit: 64
     view: weft.workloads.Instances
@@ -450,6 +456,13 @@ controllers:
     command: weft.workloads.RecordArtifactVerified
     actor: weft.actors.NodeAgent
     input: {instance_id: row.instance_id, node_id: row.node_id, artifact_digest: row.artifact_digest}
+  - name: node-report-verify-failed
+    limit: 64
+    view: weft.workloads.Instances
+    filter: {state: Scheduled}
+    command: weft.workloads.RecordInstanceFailed
+    actor: weft.actors.NodeAgent
+    input: {instance_id: row.instance_id, node_id: row.node_id, reason: artifact verification refused}
   - name: node-report-running
     limit: 64
     view: weft.workloads.Instances

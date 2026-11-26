@@ -22,7 +22,7 @@ fn catalog() -> Catalog {
 fn explore(cat: &Catalog, threads: usize) -> serde_json::Value {
     let cov = Coverage::new(cat, "explore", threads);
     let cands = Candidates::default();
-    let config = Config { seed: 5, walks: 40, steps: 12, threads, max_seconds: 50, setup: None, controllers: None };
+    let config = Config { seed: 5, walks: 40, steps: 12, threads, max_seconds: 50, setup: None, controllers: None, checks: Default::default() };
     explore::run(cat, &cov, &cands, &config, None);
     cov.snapshot(cat, true)
 }
@@ -192,7 +192,7 @@ fn explore_from_a_setup_reaches_what_an_empty_store_cannot_and_names_the_guard_t
             assert!(s.refusals.is_empty(), "{:?}", s.refusals);
             s.steps
         });
-        let config = Config { seed: 5, walks: 48, steps: 16, threads: 2, max_seconds: 50, setup, controllers: None };
+        let config = Config { seed: 5, walks: 48, steps: 16, threads: 2, max_seconds: 50, setup, controllers: None, checks: Default::default() };
         explore::run(&cat, &cov, &cands, &config, None);
         let snap = cov.snapshot(&cat, true);
         let attempts = cov.inner.lock().unwrap().attempts.clone();
@@ -283,7 +283,7 @@ fn settle_and_controller_ticks_start_walks_from_what_the_controllers_did() {
         assert!(s.refusals.is_empty(), "{:?}", s.refusals);
         let info = (s.setup_steps, s.steps.len(), s.settle_ticks, s.settled_at);
         let controllers = (share > 0.0).then(|| explore::WalkControllers { exp: exp.clone(), vars: s.vars.clone(), share });
-        let config = Config { seed: 5, walks: 32, steps: 16, threads: 2, max_seconds: 50, setup: Some(s.steps), controllers };
+        let config = Config { seed: 5, walks: 32, steps: 16, threads: 2, max_seconds: 50, setup: Some(s.steps), controllers, checks: Default::default() };
         explore::run(&cat, &cov, &cands, &config, None);
         (cov.snapshot(&cat, true), info)
     };
@@ -309,4 +309,159 @@ fn settle_and_controller_ticks_start_walks_from_what_the_controllers_did() {
     assert!(hits(&ticked, finished) > hits(&settled, finished));
     let r = &ticked["info"]["setup_replay"];
     assert!(r["controller_ticks"].as_f64().unwrap() > 0.0 && r["controller_sends"].as_f64().unwrap() > 0.0, "{r}");
+}
+
+// ---- system invariants inside explore -------------------------------------------------------
+
+fn fixture_invariants() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture-invariants")
+}
+
+/// The invariants fixture without Assign's `instance-assigned` guard (the lines between the guard
+/// comments): an instance can be assigned twice, and a second delivery of Assign assigns again.
+fn unguarded() -> PathBuf {
+    let from = fixture_invariants();
+    let to = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fixture-invariants-unguarded");
+    std::fs::create_dir_all(&to).unwrap();
+    for entry in std::fs::read_dir(&from).unwrap() {
+        let path = entry.unwrap().path();
+        let mut text = std::fs::read_to_string(&path).unwrap();
+        if path.file_name().unwrap() == "nodes.yaml" {
+            let begin = text.find("      # guard begin").unwrap();
+            let end = text.find("      # guard end\n").unwrap() + "      # guard end\n".len();
+            text.replace_range(begin..end, "");
+            assert!(!text.contains("instance-assigned"));
+        }
+        std::fs::write(to.join(path.file_name().unwrap()), text).unwrap();
+    }
+    to
+}
+
+fn checks(invariants: &[&str], every: usize, converge: usize) -> explore::Checks {
+    explore::Checks { invariants: invariants.iter().map(|s| (*s).to_owned()).collect(), every, converge }
+}
+
+/// Explores `dir` from an empty store (or from `exp`'s setup) with `checks`.
+fn explore_checked(cat: &Catalog, exp: Option<&experiment::Experiment>, checks: explore::Checks) -> serde_json::Value {
+    let cov = Coverage::new(cat, "explore", 2);
+    let cands = Candidates::default();
+    let (setup, controllers) = match exp {
+        Some(exp) => {
+            let s = weft_sim::simulate::record_setup(cat, &cov, &cands, exp, checks.converge).unwrap();
+            assert!(s.refusals.is_empty(), "{:?}", s.refusals);
+            let controllers = explore::WalkControllers { exp: exp.clone(), vars: s.vars.clone(), share: 0.0 };
+            (Some(s.steps), Some(controllers))
+        }
+        None => (None, None),
+    };
+    let config = Config { seed: 5, walks: 32, steps: 16, threads: 2, max_seconds: 50, setup, controllers, checks };
+    explore::run(cat, &cov, &cands, &config, None);
+    cov.snapshot(cat, true)
+}
+
+fn violations<'v>(snap: &'v serde_json::Value, kind: &str) -> Vec<&'v serde_json::Value> {
+    snap["violations"].as_array().unwrap().iter().filter(|v| v["kind"] == kind).collect()
+}
+
+/// Replays the walk of `v` from the run's trace: no answer differs, and the replay's own checks
+/// find a system invariant violation again.
+fn replay_finds_it(cat: &Catalog, snap: &serde_json::Value, v: &serde_json::Value) {
+    let walk = v["walk"].as_u64().unwrap();
+    let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap_or_else(|| panic!("no trace of walk {walk}"));
+    let step = v["step"].as_u64().unwrap() as usize;
+    assert!(trace["steps"].as_array().unwrap().len() >= step, "the trace reaches step {step}");
+    let cov = Coverage::new(cat, "replay", 1);
+    let (differ, broken) = weft_sim::simulate::replay(cat, &cov, walk, trace, &[]).unwrap();
+    assert_eq!(differ, 0, "the replay answers as the walk did");
+    assert!(broken > 0, "the replay finds the violation");
+}
+
+/// no-double-placement (and the other view invariants) after every step of an explore walk:
+/// without the guard a walk assigns an instance twice; the violation names the walk, seed and
+/// step, and its trace replays it. With the guard, none; with the checks off, none reported.
+#[test]
+fn no_double_placement_is_checked_inside_explore_walks_and_replays() {
+    let view_checks = ["no-double-placement", "quota-conservation", "tenant-isolation"];
+    let guarded = Catalog::new(weft_sim::spec::load(&fixture_invariants()).expect("the fixture compiles"));
+    let snap = explore_checked(&guarded, None, checks(&view_checks, 1, 0));
+    assert_eq!(snap["violation_count"], 0, "{}", snap["violations"]);
+
+    let cat = Catalog::new(weft_sim::spec::load(&unguarded()).expect("the unguarded fixture compiles"));
+    let snap = explore_checked(&cat, None, checks(&view_checks, 1, 0));
+    let found = violations(&snap, "no-double-placement");
+    assert!(!found.is_empty(), "{}", snap["violations"]);
+    assert_eq!(found.len(), snap["violation_count"].as_u64().unwrap() as usize, "only no-double-placement");
+    let v = found[0];
+    assert!(v["detail"].as_str().unwrap().starts_with("instance "), "{v}");
+    assert!(v["step"].as_u64().unwrap() >= 1 && v["seed"].as_u64().is_some(), "{v}");
+    // Once per walk: the state stays broken, the walk reports its first step.
+    let walks: std::collections::BTreeSet<u64> = found.iter().map(|v| v["walk"].as_u64().unwrap()).collect();
+    assert_eq!(walks.len(), found.len());
+    replay_finds_it(&cat, &snap, v);
+
+    let off = explore_checked(&cat, None, checks(&view_checks, 0, 0));
+    assert_eq!(off["violation_count"], 0);
+}
+
+/// idempotency inside explore: an accepted Assign (a binding invokes it `at_least_once`) is sent
+/// again and must change no view. Guarded: refused `instance-assigned`, nothing changes.
+/// Unguarded: a second assignment; the trace holds the duplicate (`by: duplicate`).
+#[test]
+fn a_redelivered_command_is_sent_again_and_must_change_no_view() {
+    let guarded = Catalog::new(weft_sim::spec::load(&fixture_invariants()).expect("the fixture compiles"));
+    let assign = guarded.commands.iter().position(|c| c.name.to_string() == "weft.nodes.Assign").unwrap();
+    assert_eq!(guarded.redelivered.iter().copied().collect::<Vec<_>>(), vec![assign]);
+    let snap = explore_checked(&guarded, None, checks(&["idempotency"], 1, 0));
+    assert_eq!(snap["violation_count"], 0, "{}", snap["violations"]);
+    assert!(snap["info"]["checks"]["duplicates"].as_f64().unwrap() > 0.0, "{}", snap["info"]);
+
+    let cat = Catalog::new(weft_sim::spec::load(&unguarded()).expect("the unguarded fixture compiles"));
+    let snap = explore_checked(&cat, None, checks(&["idempotency"], 1, 0));
+    let found = violations(&snap, "idempotency");
+    assert!(!found.is_empty(), "{}", snap["violations"]);
+    assert_eq!(found.len(), snap["violation_count"].as_u64().unwrap() as usize);
+    let v = found[0];
+    assert_eq!(v["command"], "weft.nodes.Assign");
+    assert!(v["detail"].as_str().unwrap().contains("weft.nodes.Assignments: "), "{v}");
+    let walk = v["walk"].as_u64().unwrap();
+    let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap();
+    let step = &trace["steps"][v["step"].as_u64().unwrap() as usize - 1];
+    assert_eq!(step["by"], "duplicate", "{step}");
+    replay_finds_it(&cat, &snap, v);
+}
+
+/// no-convergence with `--settle`: after each walk the experiment's controllers tick with no new
+/// input. The releaser releases the active assignments and then has nothing to do; the
+/// reassigner's Assign is refused on every tick, so a walk that leaves an assignment active never
+/// settles.
+#[test]
+fn a_walk_whose_controllers_never_settle_is_a_no_convergence_violation() {
+    let dir = fixture_invariants();
+    let cat = Catalog::new(weft_sim::spec::load(&dir).expect("the fixture compiles"));
+    let none: [&str; 0] = [];
+
+    let converges = experiment::load(&dir.join("converges.yaml")).unwrap();
+    let snap = explore_checked(&cat, Some(&converges), checks(&none, 0, 4));
+    assert_eq!(snap["violation_count"], 0, "{}", snap["violations"]);
+    let c = &snap["info"]["checks"];
+    assert_eq!(c["converge_walks"], 32.0, "{c}");
+    assert!(c["converge_ticks"].as_f64().unwrap() >= 32.0, "{c}");
+
+    let loops = experiment::load(&dir.join("loops.yaml")).unwrap();
+    let cov = Coverage::new(&cat, "explore", 1);
+    let setup = weft_sim::simulate::record_setup(&cat, &cov, &Candidates::default(), &loops, 4).unwrap();
+    assert_eq!(setup.settled_at, None);
+    assert_eq!(setup.violations.len(), 1, "the setup itself does not settle");
+    assert_eq!(setup.violations[0].kind, "no-convergence");
+    let snap = explore_checked(&cat, Some(&loops), checks(&none, 0, 4));
+    let found = violations(&snap, "no-convergence");
+    assert!(!found.is_empty());
+    assert_eq!(found.len(), snap["violation_count"].as_u64().unwrap() as usize);
+    let v = found[0];
+    assert!(v["detail"].as_str().unwrap().starts_with("the controllers still had work after 4 ticks with no new input: reassigner "), "{v}");
+    // The convergence ticks are in the walk's trace (`by: converge`), so a replay sends them.
+    let walk = v["walk"].as_u64().unwrap();
+    let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap();
+    let ticks = trace["steps"].as_array().unwrap().iter().filter(|s| s["by"] == "converge").count();
+    assert!(ticks >= 4, "at least one refused Assign a tick: {ticks}");
 }

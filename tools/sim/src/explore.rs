@@ -5,7 +5,7 @@
 //! epoch began, so what one walk does depends on its seed and the epochs before it, never on how
 //! threads interleave: the same `--seed --walks --steps` gives the same walks on any `--threads`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Barrier, RwLock};
 use std::time::{Duration, Instant};
@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 use ess_primitives::node::Node;
 
 use crate::catalog::Catalog;
-use crate::coverage::{Coverage, FeedLine};
+use crate::coverage::{Coverage, FeedLine, Violation};
 use crate::experiment::Experiment;
 use crate::gen::{self, Candidates, Input, FRESH_BASE};
 use crate::rng::Rng;
-use crate::simulate::{replay_setup, Recorded, Ticker};
+use crate::simulate::{fingerprint, idempotency_check, replay_setup, system_checks, Recorded, Ticker, ALL_INVARIANTS};
 use crate::walk::{bound_emits, Answer, Request, Session};
 
 pub const EPOCH: u64 = 32;
@@ -31,8 +31,46 @@ pub struct Config {
     /// `--from`: the setup every walk replays before its first step (requests with the answers
     /// recorded when it ran once, and its settle ticks with `--settle`).
     pub setup: Option<Vec<Recorded>>,
-    /// `--controller-share`: the experiment's controllers, ticked inside walks.
+    /// `--controller-share`: the experiment's controllers, ticked inside walks; with
+    /// `checks.converge` also after each walk.
     pub controllers: Option<WalkControllers>,
+    pub checks: Checks,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { seed: 1, walks: 64, steps: 60, threads: 4, max_seconds: 280, setup: None, controllers: None, checks: Checks::default() }
+    }
+}
+
+/// The system checks of a walk.
+#[derive(Clone)]
+pub struct Checks {
+    /// `--invariants`: the system invariants checked (of `simulate::ALL_INVARIANTS`).
+    pub invariants: BTreeSet<String>,
+    /// `--check-every N`: the view invariants after every N-th step of a walk (a controller tick
+    /// counts as one), and an accepted step of a redelivered command sent again on every N-th step
+    /// (`idempotency`); 0 checks nothing.
+    pub every: usize,
+    /// `--settle N`: after each walk, up to N ticks of the experiment's controllers with no new
+    /// input; a walk whose controllers still have work is a `no-convergence` violation. 0: none.
+    pub converge: usize,
+}
+
+impl Default for Checks {
+    fn default() -> Self {
+        Self { invariants: ALL_INVARIANTS.iter().map(|s| (*s).to_owned()).collect(), every: 1, converge: 0 }
+    }
+}
+
+/// What a walk's checks found so far: each invariant (and for `idempotency` each command) is
+/// reported once per walk, at the first step it fails.
+#[derive(Default)]
+struct WalkChecks {
+    reported: BTreeSet<String>,
+    /// Steps of the walk (a controller tick counts as one).
+    steps: usize,
+    nanos: u64,
 }
 
 /// The controllers a walk ticks: those of `exp`, with the variables its setup bound; a step is a
@@ -395,8 +433,71 @@ fn record_step(sess: &mut Session, req: &Request, answer: &Answer, live: bool, a
     post
 }
 
+/// Runs the view invariants on the walk's store; one that fails for the first time in this walk
+/// is a violation at the walk's current step, named after `command` (the last one sent).
+fn check_views(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, command: &str) {
+    let started = Instant::now();
+    for (check, _) in system_checks(sess, &checks.invariants) {
+        if !check.ok && seen.reported.insert(check.name.clone()) {
+            let v = Violation { kind: check.name, detail: check.detail.chars().take(600).collect(), command: command.to_owned(), walk: sess.walk, seed: sess.seed, step: sess.step };
+            sess.findings.violations.push(v);
+        }
+    }
+    seen.nanos += started.elapsed().as_nanos() as u64;
+}
+
+/// The checks after a step of the walk's own: on every `checks.every`-th step, an accepted step of
+/// a command an `at_least_once` binding invokes is sent again (it must change no view), then the
+/// view invariants. The duplicate goes in the trace with `by: duplicate`.
+#[allow(clippy::too_many_arguments)]
+fn check_step(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, req: &Request, answer: &Answer, live: bool, pre: &mut u64, feed: bool, sent: &mut [u32]) -> bool {
+    seen.steps += 1;
+    if checks.every == 0 || !seen.steps.is_multiple_of(checks.every) {
+        return false;
+    }
+    let cat = sess.cat;
+    let name = cat.commands[req.cmd].name.to_string();
+    let duplicate = checks.invariants.contains("idempotency") && cat.redelivered.contains(&req.cmd) && crate::simulate::accepted(cat, answer);
+    if duplicate {
+        let started = Instant::now();
+        let before = fingerprint(sess);
+        // The second delivery arrives at the same instant: a view that reads `now` (silent
+        // sessions, expired leases) must not count as the duplicate's effect.
+        let at = sess.clock.0.load(Ordering::Relaxed);
+        let step_seconds = std::mem::replace(&mut sess.step_seconds, 0);
+        let again = sess.send(req);
+        sess.step_seconds = step_seconds;
+        sent[req.cmd] += 1;
+        let check = idempotency_check(&before, &fingerprint(sess), &again);
+        *pre = record_step(sess, req, &again, live, at, Some("duplicate"), *pre, feed);
+        if !check.ok && seen.reported.insert(format!("idempotency {name}")) {
+            let v = Violation { kind: "idempotency".into(), detail: check.detail.chars().take(600).collect(), command: name.clone(), walk: sess.walk, seed: sess.seed, step: sess.step };
+            sess.findings.violations.push(v);
+        }
+        seen.nanos += started.elapsed().as_nanos() as u64;
+    }
+    check_views(sess, checks, seen, &name);
+    duplicate
+}
+
+/// Adds a walk's check counts and seconds to the run's `info.checks`.
+fn count_checks(sess: &Session, seen: &WalkChecks, duplicates: u64, converge: Option<(u64, u64, u64)>) {
+    let mut inner = sess.cov.inner.lock().expect("coverage");
+    let entry = inner.info.entry("checks".into()).or_insert_with(|| serde_json::json!({}));
+    let add = |v: &mut serde_json::Value, k: &str, n: f64| v[k] = serde_json::json!(v[k].as_f64().unwrap_or(0.0) + n);
+    add(entry, "seconds", seen.nanos as f64 / 1e9);
+    add(entry, "duplicates", duplicates as f64);
+    if let Some((ticks, sends, nanos)) = converge {
+        add(entry, "converge_walks", 1.0);
+        add(entry, "converge_ticks", ticks as f64);
+        add(entry, "converge_sends", sends as f64);
+        add(entry, "converge_seconds", nanos as f64 / 1e9);
+    }
+}
+
 /// One walk: `steps` requests from a fresh scenario, or from the replayed setup; with a ticker,
-/// a share of the steps are a tick of the experiment's controllers.
+/// a share of the steps are a tick of the experiment's controllers. The system invariants are
+/// checked as `checks` says; with `checks.converge` the walk ends with the convergence check.
 #[allow(clippy::too_many_arguments)]
 pub fn run_walk<'a>(
     sess: &mut Session<'a>,
@@ -409,7 +510,10 @@ pub fn run_walk<'a>(
     pattern: Option<&crate::experiment::Pattern>,
     from: Option<&SetupStart<'a>>,
     mut ticker: Option<&mut Ticker<'a, '_>>,
+    checks: &Checks,
 ) {
+    let mut seen = WalkChecks::default();
+    let mut duplicates = 0u64;
     let cat = sess.cat;
     if let Err(e) = sess.begin(walk, seed) {
         let mut inner = sess.cov.inner.lock().expect("coverage");
@@ -469,6 +573,11 @@ pub fn run_walk<'a>(
                     pre = record_step(sess, req, answer, live, *at, Some("controller"), pre, feed);
                 }
                 tick_nanos += started.elapsed().as_nanos() as u64;
+                // A tick counts as one step for the checks; a duplicate is of a walk's own step.
+                seen.steps += 1;
+                if checks.every > 0 && seen.steps.is_multiple_of(checks.every) {
+                    check_views(sess, checks, &mut seen, "(controller tick)");
+                }
                 continue;
             }
         }
@@ -479,6 +588,9 @@ pub fn run_walk<'a>(
         sent[req.cmd] += 1;
         own_steps += 1;
         pre = record_step(sess, &req, &answer, live, at, None, pre, feed);
+        if check_step(sess, checks, &mut seen, &req, &answer, live, &mut pre, feed, &mut sent) {
+            duplicates += 1;
+        }
         if let Some(p) = pattern {
             if let Some(found) = p.matches(sess) {
                 let mut inner = sess.cov.inner.lock().expect("coverage");
@@ -497,6 +609,36 @@ pub fn run_walk<'a>(
         let total = walk_started.elapsed().as_nanos() as u64;
         r.walk_nanos.fetch_add(total.saturating_sub(tick_nanos), Ordering::Relaxed);
     }
+    // Convergence: the controllers with no new input, until a tick without work.
+    let mut converge = None;
+    if let Some(t) = ticker.filter(|_| checks.converge > 0) {
+        let started = Instant::now();
+        let settle = t.settle(sess, checks.converge);
+        for (req, answer, at) in &settle.sends {
+            let live = sess.names_live_rows(req.cmd, &req.input);
+            pre = record_step(sess, req, answer, live, *at, Some("converge"), pre, feed);
+        }
+        match (&settle.error, settle.settled_at) {
+            (Some(e), _) => {
+                let mut inner = sess.cov.inner.lock().expect("coverage");
+                if inner.notes.len() < 20 {
+                    inner.notes.push(format!("walk {walk}: convergence tick: {e}"));
+                }
+            }
+            (None, None) => {
+                let detail = format!("the controllers still had work after {} ticks with no new input: {}", settle.ticks, settle.busy);
+                let v = Violation { kind: "no-convergence".into(), detail, command: String::new(), walk, seed, step: sess.step };
+                sess.findings.violations.push(v);
+            }
+            (None, Some(_)) => {}
+        }
+        converge = Some((settle.ticks as u64, settle.sends.len() as u64, started.elapsed().as_nanos() as u64));
+    }
+    // The store the walk (and its convergence ticks) ends with.
+    if checks.every > 0 {
+        check_views(sess, checks, &mut seen, "(end of walk)");
+    }
+    count_checks(sess, &seen, duplicates, converge);
     let findings = std::mem::take(&mut sess.findings);
     sess.cov.merge(walk, seed, findings);
 }
@@ -529,7 +671,7 @@ pub fn run(
             scope.spawn(move || {
                 let mut sess = Session::new(cat, cov, emits);
                 sess.guided = true;
-                let mut ticker = config.controllers.as_ref().filter(|c| c.share > 0.0).and_then(|c| {
+                let mut ticker = config.controllers.as_ref().filter(|c| c.share > 0.0 || config.checks.converge > 0).and_then(|c| {
                     match Ticker::new(cat, cov, cands, &c.exp, &c.vars) {
                         Ok(mut t) => {
                             t.share = c.share;
@@ -563,7 +705,7 @@ pub fn run(
                             break;
                         }
                         let seed = Rng::walk_seed(config.seed, w);
-                        run_walk(&mut sess, cands, &p, w, seed, config.steps, t == 0, pattern, from, ticker.as_mut());
+                        run_walk(&mut sess, cands, &p, w, seed, config.steps, t == 0, pattern, from, ticker.as_mut(), &config.checks);
                     }
                     epoch_start = end;
                 }

@@ -83,8 +83,10 @@ pub fn replay_setup(sess: &mut Session, setup: &[Recorded]) -> usize {
     differ
 }
 
-/// Sends a recorded walk again; prints each step and counts the answers that differ.
-pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[Recorded]) -> Result<usize, String> {
+/// Sends a recorded walk again; prints each step, and counts the answers that differ and the
+/// system invariant violations (each check that starts to fail, and each duplicate that changed a
+/// view).
+pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[Recorded]) -> Result<(usize, usize), String> {
     let mut sess = Session::new(cat, cov, bound_emits(cat));
     let seed = trace["seed"].as_u64().unwrap_or(0);
     sess.begin(walk, seed)?;
@@ -96,12 +98,21 @@ pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[
     sess.step_seconds = 1;
     sess.step = 0;
     sess.guided = true;
+    // The system invariants, checked after every step as explore does: a check that starts to
+    // fail is printed at the step, and once more when it passes again.
+    let invariants: BTreeSet<String> = ALL_INVARIANTS.iter().map(|s| (*s).to_owned()).collect();
+    let mut failing: BTreeSet<String> = BTreeSet::new();
+    let mut broken = 0;
     for (i, step) in trace["steps"].as_array().into_iter().flatten().enumerate() {
         let req = request_from_trace(cat, step)?;
         // `at`: the clock before the send (a walk's clock jumps and controller ticks move it).
         if let Some(at) = step["at"].as_u64() {
             sess.clock.0.store(at, Ordering::Relaxed);
         }
+        let by = step["by"].as_str().unwrap_or("");
+        let before = (by == "duplicate").then(|| fingerprint(&sess));
+        // A duplicate was sent at the instant of the step it repeats (explore's check_step).
+        sess.step_seconds = if by == "duplicate" { 0 } else { 1 };
         let answer = sess.send(&req);
         let recorded = step["answer"].as_str().unwrap_or("");
         let same = recorded == answer.label;
@@ -109,16 +120,32 @@ pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[
             differ += 1;
         }
         println!(
-            "{:>4} {} {} -> {}{}",
+            "{:>4} {} {}{} -> {}{}",
             i + 1,
             if same { " " } else { "!" },
             cat.commands[req.cmd].name,
+            if by.is_empty() { String::new() } else { format!(" ({by})") },
             answer.label,
             if same { String::new() } else { format!(" (recorded {recorded})") }
         );
+        if let Some(before) = before {
+            let check = idempotency_check(&before, &fingerprint(&sess), &answer);
+            if !check.ok {
+                broken += 1;
+                println!("       violation idempotency: {}", check.detail);
+            }
+        }
+        for (check, _) in system_checks(&sess, &invariants) {
+            if !check.ok && failing.insert(check.name.clone()) {
+                broken += 1;
+                println!("       violation {}: {}", check.name, check.detail);
+            } else if check.ok && failing.remove(&check.name) {
+                println!("       {} holds again", check.name);
+            }
+        }
     }
-    println!("walk {walk} seed {seed}: {differ} answers differ");
-    Ok(differ)
+    println!("walk {walk} seed {seed}: {differ} answers differ, {broken} system invariant violations");
+    Ok((differ, broken))
 }
 
 // ---- substitution -----------------------------------------------------------------------------
@@ -261,14 +288,179 @@ struct Sim<'a, 'c> {
     /// with its answer and the clock before the send.
     log: Vec<(Request, Answer, u64)>,
     logging: bool,
-    /// Inside an explore walk: no invariant checks, patterns or abstract states per step.
+    /// Inside an explore walk's controller tick: no invariant checks, patterns or abstract states
+    /// per request (explore checks the system invariants itself, after the tick).
     light: bool,
+    /// The non-`steady` controllers that sent requests in the last tick, with the count.
+    last_work: Vec<(String, usize)>,
 }
 
-const ALL_INVARIANTS: [&str; 4] = ["idempotency", "no-double-placement", "quota-conservation", "tenant-isolation"];
+pub const ALL_INVARIANTS: [&str; 4] = ["idempotency", "no-double-placement", "quota-conservation", "tenant-isolation"];
+
+/// True when `state` is a terminal state of `entity`.
+fn terminal(sess: &Session, entity: &str, state: Option<&Node>) -> bool {
+    let Some(Node::Text(s)) = state else { return false };
+    let Ok(q) = QualifiedName::new(entity) else { return false };
+    sess.cat.ent_index.get(&q).is_some_and(|e| {
+        let ent = &sess.cat.entities[*e];
+        ent.terminal.iter().any(|t| ent.states[*t] == *s)
+    })
+}
+
+/// The system invariants read from the store's views (`no-double-placement`,
+/// `quota-conservation`, `tenant-isolation`; `idempotency` needs a second send and is
+/// [`idempotency_check`]), each with the number of rows or nodes that break it. A view the model
+/// does not declare passes its check. `simulate` runs them after every step, `explore` after every
+/// N steps of a walk.
+pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Check, usize)> {
+    let mut out = Vec::new();
+    let view = |name: &str| sess.view(name, BTreeMap::new()).ok();
+    let id_of = |r: &BTreeMap<String, Node>, f: &str| r.get(f).map(|n| to_value(n).to_string()).unwrap_or_default();
+    let wants = |name: &str| invariants.contains(name);
+    let assignments = if wants("no-double-placement") || wants("tenant-isolation") { view("weft.nodes.Assignments") } else { None };
+    if wants("no-double-placement") {
+        let check = match &assignments {
+            None => (Check { name: "no-double-placement".into(), ok: true, detail: "view weft.nodes.Assignments not readable".into() }, 0),
+            Some(rows) => {
+                let mut active: BTreeMap<String, Vec<String>> = BTreeMap::new();
+                for r in rows {
+                    if terminal(sess, "weft.nodes.Assignment", r.get("state")) {
+                        continue;
+                    }
+                    active.entry(id_of(r, "instance_id")).or_default().push(id_of(r, "node_id"));
+                }
+                let doubles: Vec<String> = active
+                    .iter()
+                    .filter(|(_, nodes)| nodes.len() > 1)
+                    .map(|(i, nodes)| format!("instance {i} active on {}", nodes.join(", ")))
+                    .collect();
+                (Check { name: "no-double-placement".into(), ok: doubles.is_empty(), detail: doubles.join("; ") }, doubles.len())
+            }
+        };
+        out.push(check);
+    }
+    if wants("quota-conservation") {
+        let check = match view("weft.accounts.QuotaIndex") {
+            None => (Check { name: "quota-conservation".into(), ok: true, detail: "view weft.accounts.QuotaIndex not readable".into() }, 0),
+            Some(rows) => {
+                let num = |r: &BTreeMap<String, Node>, f: &str| -> Option<i64> {
+                    match r.get(f) {
+                        Some(Node::Number(n)) => n.to_string().parse::<f64>().ok().map(|v| v as i64),
+                        _ => None,
+                    }
+                };
+                let mut bad = Vec::new();
+                let mut children: BTreeMap<String, i64> = BTreeMap::new();
+                for r in &rows {
+                    let id = id_of(r, "quota_id");
+                    if let (Some(limit), Some(remaining)) = (num(r, "limit"), num(r, "remaining")) {
+                        if remaining < 0 || remaining > limit {
+                            bad.push(format!("quota {id}: remaining {remaining} outside 0..={limit}"));
+                        }
+                    }
+                    if let (Some(p), Some(limit)) = (r.get("parent_quota_id"), num(r, "limit")) {
+                        if *p != Node::Null && !terminal(sess, "weft.accounts.Quota", r.get("state")) {
+                            *children.entry(to_value(p).to_string()).or_default() += limit;
+                        }
+                    }
+                }
+                for r in &rows {
+                    let id = id_of(r, "quota_id");
+                    if let (Some(sum), Some(limit)) = (children.get(&id), num(r, "limit")) {
+                        if *sum > limit {
+                            bad.push(format!("quota {id}: sub-accounts hold {sum} of a limit {limit}"));
+                        }
+                    }
+                }
+                (Check { name: "quota-conservation".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())
+            }
+        };
+        out.push(check);
+    }
+    if wants("tenant-isolation") {
+        // The tenant of an assignment is its placement decision's (weft.scheduling holds it).
+        let check = match (&assignments, view("weft.scheduling.PlacementDecisions")) {
+            (Some(assignments), Some(decisions)) => {
+                let decision: BTreeMap<String, (String, String)> = decisions
+                    .iter()
+                    .filter_map(|r| {
+                        let id = to_value(r.get("decision_id")?).to_string();
+                        let tenant = to_value(r.get("tenant_id")?).to_string();
+                        let isolation = match r.get("isolation") { Some(Node::Text(t)) => t.clone(), _ => String::new() };
+                        Some((id, (tenant, isolation)))
+                    })
+                    .collect();
+                let mut per_node: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+                for r in assignments {
+                    if terminal(sess, "weft.nodes.Assignment", r.get("state")) {
+                        continue;
+                    }
+                    let d = id_of(r, "placement_decision_id");
+                    let (tenant, isolation) = decision.get(&d).cloned().unwrap_or_else(|| ("?".into(), String::new()));
+                    per_node.entry(id_of(r, "node_id")).or_default().push((tenant, isolation));
+                }
+                // Two tenants share a kernel when each has an instance below MicroVm on the node;
+                // a MicroVm has its own (scheduling.yaml `shared-kernel`, hardening pass 6: a
+                // MicroVm beside another tenant's container is no breach).
+                let mut bad = Vec::new();
+                for (node_id, list) in &per_node {
+                    let sharing: BTreeSet<&String> = list.iter().filter(|(t, iso)| t != "?" && iso != "MicroVm").map(|(t, _)| t).collect();
+                    if sharing.len() > 1 {
+                        bad.push(format!("node {node_id}: {} tenants share its kernel (instances below MicroVm)", sharing.len()));
+                    }
+                }
+                (Check { name: "tenant-isolation".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())
+            }
+            _ => (Check { name: "tenant-isolation".into(), ok: true, detail: "views not readable".into() }, 0),
+        };
+        out.push(check);
+    }
+    out
+}
+
+/// The rows of every parameterless read-your-writes view.
+pub type Fingerprint = BTreeMap<String, Vec<BTreeMap<String, Node>>>;
+
+/// What a duplicated step must leave unchanged: the rows of every parameterless read-your-writes
+/// view.
+pub fn fingerprint(sess: &Session) -> Fingerprint {
+    let mut out = BTreeMap::new();
+    for (name, view) in sess.cat.ir.views() {
+        if view.consistency != ess_domain::view::Consistency::ReadYourWrites || !view.params.is_empty() {
+            continue;
+        }
+        if let Ok(rows) = sess.view(&name.to_string(), BTreeMap::new()) {
+            out.insert(name.to_string(), rows);
+        }
+    }
+    out
+}
+
+/// The `idempotency` check of a step sent a second time: a declared answer and no view changed
+/// (an `unsupported` or `unavailable` answer cannot be checked and passes).
+pub fn idempotency_check(before: &Fingerprint, after: &Fingerprint, answer: &Answer) -> Check {
+    let changed: Vec<String> = after
+        .iter()
+        .filter(|(k, v)| before.get(*k) != Some(*v))
+        .map(|(k, v)| format!("{k}: {} -> {} rows", before.get(k).map_or(0, Vec::len), v.len()))
+        .collect();
+    let unchecked = matches!(answer.error.as_ref().map(|e| e.0.as_str()), Some("unsupported" | "unavailable"));
+    let ok = unchecked || (changed.is_empty() && answer.outcome.is_some());
+    Check {
+        name: "idempotency".into(),
+        ok,
+        detail: if unchecked {
+            format!("not checkable: the interpreter answered {}", answer.label)
+        } else if ok {
+            format!("answered {}", answer.label)
+        } else {
+            format!("answered {}; changed {}", answer.label, if changed.is_empty() { "nothing".to_owned() } else { changed.join(", ") })
+        },
+    }
+}
 
 /// A declared outcome that is not an error answered.
-fn accepted(cat: &Catalog, answer: &Answer) -> bool {
+pub fn accepted(cat: &Catalog, answer: &Answer) -> bool {
     answer.error.is_none()
         && answer.outcome.is_some_and(|g| {
             let (c, o) = cat.outcome_of[g];
@@ -378,114 +570,13 @@ impl<'a, 'c> Sim<'a, 'c> {
 
     fn checks(&mut self) -> Vec<Check> {
         let mut out = Vec::new();
-        let terminal = |entity: &str, state: Option<&Node>| -> bool {
-            let Some(Node::Text(s)) = state else { return false };
-            let Ok(q) = QualifiedName::new(entity) else { return false };
-            self.sess.cat.ent_index.get(&q).is_some_and(|e| {
-                let ent = &self.sess.cat.entities[*e];
-                ent.terminal.iter().any(|t| ent.states[*t] == *s)
-            })
-        };
-        let assignments = self.view("weft.nodes.Assignments", BTreeMap::new());
-        if self.invariants.contains("no-double-placement") {
-            let check = match &assignments {
-                None => Check { name: "no-double-placement".into(), ok: true, detail: "view weft.nodes.Assignments not readable".into() },
-                Some(rows) => {
-                    let mut active: BTreeMap<String, Vec<String>> = BTreeMap::new();
-                    for r in rows {
-                        if terminal("weft.nodes.Assignment", r.get("state")) {
-                            continue;
-                        }
-                        let instance = r.get("instance_id").map(|n| to_value(n).to_string()).unwrap_or_default();
-                        let node_id = r.get("node_id").map(|n| to_value(n).to_string()).unwrap_or_default();
-                        active.entry(instance).or_default().push(node_id);
-                    }
-                    let doubles: Vec<String> = active
-                        .iter()
-                        .filter(|(_, nodes)| nodes.len() > 1)
-                        .map(|(i, nodes)| format!("instance {i} active on {}", nodes.join(", ")))
-                        .collect();
-                    self.kpis.double_placements = self.kpis.double_placements.max(doubles.len());
-                    Check { name: "no-double-placement".into(), ok: doubles.is_empty(), detail: doubles.join("; ") }
-                }
+        for (check, bad) in system_checks(&self.sess, &self.invariants) {
+            let kpi = match check.name.as_str() {
+                "no-double-placement" => &mut self.kpis.double_placements,
+                "quota-conservation" => &mut self.kpis.quota_breaches,
+                _ => &mut self.kpis.cross_tenant_reach,
             };
-            out.push(check);
-        }
-        if self.invariants.contains("quota-conservation") {
-            let check = match self.view("weft.accounts.QuotaIndex", BTreeMap::new()) {
-                None => Check { name: "quota-conservation".into(), ok: true, detail: "view weft.accounts.QuotaIndex not readable".into() },
-                Some(rows) => {
-                    let num = |r: &BTreeMap<String, Node>, f: &str| -> Option<i64> {
-                        match r.get(f) {
-                            Some(Node::Number(n)) => n.to_string().parse::<f64>().ok().map(|v| v as i64),
-                            _ => None,
-                        }
-                    };
-                    let mut bad = Vec::new();
-                    let mut children: BTreeMap<String, i64> = BTreeMap::new();
-                    for r in &rows {
-                        let id = r.get("quota_id").map(|n| to_value(n).to_string()).unwrap_or_default();
-                        if let (Some(limit), Some(remaining)) = (num(r, "limit"), num(r, "remaining")) {
-                            if remaining < 0 || remaining > limit {
-                                bad.push(format!("quota {id}: remaining {remaining} outside 0..={limit}"));
-                            }
-                        }
-                        if let (Some(p), Some(limit)) = (r.get("parent_quota_id"), num(r, "limit")) {
-                            if *p != Node::Null && !terminal("weft.accounts.Quota", r.get("state")) {
-                                *children.entry(to_value(p).to_string()).or_default() += limit;
-                            }
-                        }
-                    }
-                    for r in &rows {
-                        let id = r.get("quota_id").map(|n| to_value(n).to_string()).unwrap_or_default();
-                        if let (Some(sum), Some(limit)) = (children.get(&id), num(r, "limit")) {
-                            if *sum > limit {
-                                bad.push(format!("quota {id}: sub-accounts hold {sum} of a limit {limit}"));
-                            }
-                        }
-                    }
-                    self.kpis.quota_breaches = self.kpis.quota_breaches.max(bad.len());
-                    Check { name: "quota-conservation".into(), ok: bad.is_empty(), detail: bad.join("; ") }
-                }
-            };
-            out.push(check);
-        }
-        if self.invariants.contains("tenant-isolation") {
-            // The tenant of an assignment is its placement decision's (weft.scheduling holds it).
-            let check = match (&assignments, self.view("weft.scheduling.PlacementDecisions", BTreeMap::new())) {
-                (Some(assignments), Some(decisions)) => {
-                    let decision: BTreeMap<String, (String, String)> = decisions
-                        .iter()
-                        .filter_map(|r| {
-                            let id = to_value(r.get("decision_id")?).to_string();
-                            let tenant = to_value(r.get("tenant_id")?).to_string();
-                            let isolation = match r.get("isolation") { Some(Node::Text(t)) => t.clone(), _ => String::new() };
-                            Some((id, (tenant, isolation)))
-                        })
-                        .collect();
-                    let mut per_node: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-                    for r in assignments {
-                        if terminal("weft.nodes.Assignment", r.get("state")) {
-                            continue;
-                        }
-                        let node_id = r.get("node_id").map(|n| to_value(n).to_string()).unwrap_or_default();
-                        let d = r.get("placement_decision_id").map(|n| to_value(n).to_string()).unwrap_or_default();
-                        let (tenant, isolation) = decision.get(&d).cloned().unwrap_or_else(|| ("?".into(), String::new()));
-                        per_node.entry(node_id).or_default().push((tenant, isolation));
-                    }
-                    let mut bad = Vec::new();
-                    for (node_id, list) in &per_node {
-                        let tenants: BTreeSet<&String> = list.iter().map(|(t, _)| t).filter(|t| *t != "?").collect();
-                        let below = list.iter().any(|(_, iso)| iso != "MicroVm");
-                        if tenants.len() > 1 && below {
-                            bad.push(format!("node {node_id}: {} tenants below MicroVm", tenants.len()));
-                        }
-                    }
-                    self.kpis.cross_tenant_reach = self.kpis.cross_tenant_reach.max(bad.len());
-                    Check { name: "tenant-isolation".into(), ok: bad.is_empty(), detail: bad.join("; ") }
-                }
-                _ => Check { name: "tenant-isolation".into(), ok: true, detail: "views not readable".into() },
-            };
+            *kpi = (*kpi).max(bad);
             out.push(check);
         }
         for c in &out {
@@ -503,19 +594,8 @@ impl<'a, 'c> Sim<'a, 'c> {
         out
     }
 
-    /// The rows of every parameterless read-your-writes view: what a duplicated step must leave
-    /// unchanged.
-    fn fingerprint(&self) -> BTreeMap<String, Vec<BTreeMap<String, Node>>> {
-        let mut out = BTreeMap::new();
-        for (name, view) in self.sess.cat.ir.views() {
-            if view.consistency != ess_domain::view::Consistency::ReadYourWrites || !view.params.is_empty() {
-                continue;
-            }
-            if let Ok(rows) = self.sess.view(&name.to_string(), BTreeMap::new()) {
-                out.insert(name.to_string(), rows);
-            }
-        }
-        out
+    fn fingerprint(&self) -> Fingerprint {
+        fingerprint(&self.sess)
     }
 
     /// Checks the patterns; `views` also checks those that read views (at the end of a tick).
@@ -961,22 +1041,11 @@ impl<'a, 'c> Sim<'a, 'c> {
                         };
                         let before = self.fingerprint();
                         let answer = self.sess.send(&req);
-                        let after = self.fingerprint();
-                        let changed: Vec<String> = after
-                            .iter()
-                            .filter(|(k, v)| before.get(*k) != Some(*v))
-                            .map(|(k, v)| format!("{k}: {} -> {} rows", before.get(k).map_or(0, Vec::len), v.len()))
-                            .collect();
-                        let unchecked = matches!(answer.error.as_ref().map(|e| e.0.as_str()), Some("unsupported" | "unavailable"));
-                        let ok = unchecked || (changed.is_empty() && answer.outcome.is_some());
+                        let check = idempotency_check(&before, &self.fingerprint(), &answer);
+                        let ok = check.ok;
                         if !ok {
                             self.kpis.duplicate_effects += 1;
                         }
-                        let check = Check {
-                            name: "idempotency".into(),
-                            ok,
-                            detail: if unchecked { format!("not checkable: the interpreter answered {}", answer.label) } else if ok { format!("answered {}", answer.label) } else { format!("answered {}; changed {}", answer.label, changed.join(", ")) },
-                        };
                         if !ok && self.invariants.contains("idempotency") {
                             self.violations.push(Violation {
                                 kind: "idempotency".into(),
@@ -1121,6 +1190,9 @@ pub struct SetupRun {
     pub settled_at: Option<usize>,
     /// The experiment's variables after the setup bound its answers.
     pub vars: BTreeMap<String, Value>,
+    /// The experiment's invariants broken after a setup or settle step (checked after each), and
+    /// `no-convergence` when the controllers still had work after `settle` ticks.
+    pub violations: Vec<Violation>,
 }
 
 /// Runs `exp`'s `setup:` (no traffic, faults or patterns) on walk 0, then up to `settle` ticks of
@@ -1148,6 +1220,10 @@ pub fn record_setup(cat: &Catalog, cov: &Coverage, cands: &Candidates, exp: &Exp
                 break;
             }
         }
+        if settle > 0 && settled_at.is_none() {
+            let detail = format!("the setup's controllers still had work after {settle} ticks: {}", sim.busy());
+            sim.violations.push(Violation { kind: "no-convergence".into(), detail, command: String::new(), walk: 0, seed: exp.seed, step: sim.sess.step });
+        }
     }
     Ok(SetupRun {
         steps: sim.log.drain(..).map(|(req, answer, at)| Recorded { req, answer: answer.label, at }).collect(),
@@ -1157,6 +1233,7 @@ pub fn record_setup(cat: &Catalog, cov: &Coverage, cands: &Candidates, exp: &Exp
         settle_ticks,
         settled_at,
         vars: sim.vars.clone(),
+        violations: std::mem::take(&mut sim.violations),
     })
 }
 
@@ -1167,14 +1244,36 @@ impl Sim<'_, '_> {
         self.sess.advance_clock(30);
         self.vars.insert("tick".into(), json!(tick));
         let mut work = 0;
+        self.last_work.clear();
         for c in self.exp.controllers.clone() {
             let n = self.controller(&c)?;
             if !c.steady {
                 work += n;
+                if n > 0 {
+                    self.last_work.push((c.name.clone(), n));
+                }
             }
         }
         Ok(work)
     }
+
+    /// The controllers that sent requests in the last tick, with the count: `placer 3, renew 1`.
+    fn busy(&self) -> String {
+        self.last_work.iter().map(|(c, n)| format!("{c} {n}")).collect::<Vec<_>>().join(", ")
+    }
+}
+
+/// A walk's convergence check: the controllers ticked with no new input until a tick with no
+/// work, at most `max` ticks.
+pub struct Settle {
+    /// (request, answer, clock before the send) of every request the ticks sent.
+    pub sends: Vec<(Request, Answer, u64)>,
+    pub ticks: usize,
+    /// The tick with no work; `None`: the controllers still had work after `max` ticks.
+    pub settled_at: Option<usize>,
+    /// The controllers that had work in the last tick, with their requests.
+    pub busy: String,
+    pub error: Option<String>,
 }
 
 /// The experiment's controllers, run inside explore walks: a tick swaps the walk's session in,
@@ -1219,6 +1318,36 @@ impl<'a, 'c> Ticker<'a, 'c> {
         std::mem::swap(&mut self.sim.sess, sess);
         (std::mem::take(&mut self.sim.log), result.err())
     }
+
+    /// Convergence (sketch § 14: "Convergence is a checked property"): after a walk, its
+    /// controllers tick with no new input until a tick in which no non-`steady` controller sent
+    /// anything, at most `max` ticks.
+    pub fn settle(&mut self, sess: &mut Session<'a>, max: usize) -> Settle {
+        std::mem::swap(&mut self.sim.sess, sess);
+        let step_seconds = self.sim.sess.step_seconds;
+        let mut out = Settle { sends: Vec::new(), ticks: 0, settled_at: None, busy: String::new(), error: None };
+        for tick in 0..max {
+            out.ticks += 1;
+            let result = self.sim.controller_tick(self.ticks);
+            self.ticks += 1;
+            match result {
+                Ok(0) => {
+                    out.settled_at = Some(tick);
+                    break;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    out.error = Some(e);
+                    break;
+                }
+            }
+        }
+        out.busy = self.sim.busy();
+        self.sim.sess.step_seconds = step_seconds;
+        std::mem::swap(&mut self.sim.sess, sess);
+        out.sends = std::mem::take(&mut self.sim.log);
+        out
+    }
 }
 
 fn new_sim<'a, 'c>(
@@ -1258,6 +1387,7 @@ fn new_sim<'a, 'c>(
         log: Vec::new(),
         logging: false,
         light: false,
+        last_work: Vec::new(),
     })
 }
 
