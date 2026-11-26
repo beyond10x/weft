@@ -284,6 +284,23 @@ types:
   - name: weft.shared.UsageReportId
     kind: newtype
     of: Uuid
+  # weft.node (5-runtime/node.yaml, design:components): the node agent's own records.
+  - name: weft.shared.LocalProcessId
+    kind: newtype
+    of: Uuid
+  - name: weft.shared.LocalEndpointSessionId
+    kind: newtype
+    of: Uuid
+  # weft.edge (5-runtime/edge.yaml, design:components): the gateway's own records.
+  - name: weft.shared.RouteBackendId
+    kind: newtype
+    of: Uuid
+  - name: weft.shared.HeldRequestId
+    kind: newtype
+    of: Uuid
+  - name: weft.shared.EdgeCertificateId
+    kind: newtype
+    of: Uuid
   - name: weft.shared.BucketId
     kind: newtype
     of: Uuid

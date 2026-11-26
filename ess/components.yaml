@@ -12,32 +12,42 @@
 #     "weft-node -> weft-control") or one of weft-control's own actors issues (Scheduler,
 #     ReleaseController, ControlPlane; lines 63 and 73: "state store, scheduler, translators,
 #     identity issuer, secret delivery"), as granted in ess/9-actors/actors.yaml.
-#   - weft-api: every other domain. Line 61 names "Tenants, accounts, formations"; access is
-#     weft-api's own (ManagementApi, line 122). The Translator writes formation rows as a client of
-#     weft-api, the way a Deployer does.
+#   - weft-api: every other domain of the user's. Line 61 names "Tenants, accounts, formations";
+#     access is weft-api's own (ManagementApi, line 122). The Translator writes formation rows as a
+#     client of weft-api, the way a Deployer does.
+#   - weft-node: weft.node, the node agent's records of its own node (line 74).
+#   - weft-edge: weft.edge, the gateway's records in front of the public endpoints (line 75).
 #
-# OPEN: the sketch's management plane also names "secrets, deploys" (line 62), while line 73 gives
-# "secret delivery" and "translators" to weft-control. One domain has one owner, so `secrets` and
-# `deployments` sit whole with weft-control here. Split them (custody and sources in weft-api;
-# delivery, translation and releases in weft-control), or keep them whole in weft-control?
+# D2 (the owner, 2026-11-26, design:components, "A: whole in weft-control"): the sketch's management
+# plane also names "secrets, deploys" (line 62), while line 73 gives "secret delivery" and
+# "translators" to weft-control. `secrets` and `deployments` stay whole in weft-control, no split;
+# with D1 the user reaches them through weft-api.
 #
-# OPEN: the user API (surfaces/http/weft-api.yaml, ess-http/1, line 83) routes the commands and
-# views of one `reached_by: network` component. With this placement the user commands of the
-# weft-control domains (DefineWorkload, CreateSecret, SubmitDeploymentSource, CreateVolume, ...)
-# are served by weft-control, not weft-api: ESS has no gateway component that accepts a command
-# on behalf of the owner of its domain. Either weft-control gets an HTTP binding of its own behind
-# weft-api, or those domains move to weft-api and the node agent's reports then land on weft-api
-# (against line 96). Which?
+# D1 (the owner, 2026-11-26, design:components, "A: weft-api forwards"): weft-api forwards the user
+# commands of the weft-control domains (DefineWorkload, CreateSecret, SubmitDeploymentSource,
+# CreateVolume, ...) to weft-control over an internal HTTP binding; the user sees one API, and each
+# domain keeps one owner. Written here as weft-control `reached_by: network`: its accepted commands
+# and the views of its domains get an HTTP surface of their own (ESS's derived routes), the one
+# weft-api calls. Not taken: those domains moving to weft-api (the node agent's reports would land
+# on weft-api, against line 96).
+# OPEN (ESS): the forward itself has no form in ESS 0.99.2. A component accepts only the commands
+# of the domains it owns (ESS-COMPONENT-004), `ess-http/1` binds each route to the component that
+# accepts its command (its OpenAPI document is that component's), and nothing declares that
+# weft-api presents, authorizes and relays a command another component accepts. So the user API
+# is two surfaces in the model, weft-api's and weft-control's, behind one URL (sketch § 14 "the
+# CLI reaches both through one URL"). ESS would need a component key such as `forwards:
+# {commands, to}` that validate checks (the commands are accepted by `to`, `to` is reached by
+# network) and that the OpenAPI projection merges into the forwarding component's document. No
+# `ess-http/1` document is written: `surfaces/http/` does not exist in this repository yet, and a
+# binding pins the specification's source digest, which no gate here holds.
 #
-# UNMAPPED: weft-node (line 74, the node agent, worker plane) and weft-edge (line 75, the gateway
-# in front of public endpoints, data plane) are not declared. No domain of the sketch is theirs:
-# `nodes` is "the control plane's record of each node session" (line 47), a worker "holds no state
-# the control plane does not know" (line 66), and endpoints, routes and the border are desired
-# state of `formations`. ESS refuses a component that owns nothing ("`edge` owns nothing, accepts
-# nothing and publishes nothing", ESS-COMPONENT-007, probed on ess 0.99.2). In the model the node
-# agent is the actor weft.actors.NodeAgent, a client of weft-control as the CLI is of weft-api.
-# Settled by a node-local domain (the process restart of R9, the local endpoint for identity and
-# secrets of line 100) and an edge domain (the ready backends of each route, § 15 line 626).
+# weft-node and weft-edge (design:components, step 1). Until 2026-11-26 neither was declared: no
+# domain was theirs, and ESS refuses a component that owns nothing (ESS-COMPONENT-007, gap 1).
+# weft.node (5-runtime/node.yaml) holds the process restarts of R9 and the local endpoint of line
+# 100; weft.edge (5-runtime/edge.yaml) the ready backends of each route (§ 15), the requests held
+# while a service wakes (R8) and the certificates of the public endpoints. A worker still "holds no
+# state the control plane does not know" (line 66): every weft.node fact reaches weft-control by
+# a binding below, which weft-control records (and stamps where a time is needed).
 #
 # weft.shared (types only) and weft.actors (actors only) have no command and no event; no
 # component owns them.
@@ -252,7 +262,8 @@ components:
         - weft.secrets
         # § 16 (lines 613-642): stored logs, series, alert rules and alerts are decided centrally.
         # OPEN: the node-local endpoint that takes OTLP from instances (lines 628 and 634) runs on
-        # weft-node; with weft-node undeclared (above), its intake is a NodeAgent command here.
+        # weft-node; its intake stays a NodeAgent command of weft.observability here, as weft.node
+        # (design:components) does not hold telemetry. Move it to weft.node's local endpoint?
         - weft.observability
         - weft.deployments
         - weft.catalog
@@ -974,6 +985,91 @@ components:
         - weft.workloads.WarmPoolResized
         - weft.workloads.WorkloadDefined
         - weft.workloads.WorkloadRetired
+    # D1: weft-api forwards the user commands of these domains here over an internal HTTP binding
+    # (see the top). Line 96: the node's session also ends here.
+    reached_by: network
+
+  # Line 74: "the node agent (worker plane)"; line 65: "starts, observes and stops instances. Holds
+  # no state the control plane does not know"; line 100: the instance's local endpoint.
+  # Acts as NodeAgent (its own processes) and answers Instance (the local endpoint).
+  # Consumes, as bindings below: workloads.AliveCheckFailed (R9), nodes.AssignmentEnded and
+  # nodes.AssignmentReleased (R2, R3). The assignments themselves (R4) reach it over the node
+  # channel (protocols/node-channel.yaml); StartProcess reads weft-control's record of them.
+  # Publishes to weft-control: ProcessRestarted (r9-record-process-restarted).
+  # Reached in process: the node dials out (line 96, "Workers open no inbound port"), and the local
+  # endpoint is reachable from inside its instance only (line 100).
+  - component: weft-node
+    summary: >-
+      The node agent: the processes of the instances assigned to its node, their restarts and
+      backoff, and the local endpoint where an instance asks for its identity document and its
+      secrets.
+    owns:
+      domains:
+        - weft.node
+    accepts:
+      commands:
+        - weft.node.CloseAssignmentEndpointSessions
+        - weft.node.MarkRestartDue
+        - weft.node.OpenLocalEndpointSession
+        - weft.node.RequestIdentityDocument
+        - weft.node.RequestSecret
+        - weft.node.RestartProcess
+        - weft.node.StartProcess
+        - weft.node.StopAssignmentProcesses
+        - weft.node.StopProcess
+    publishes:
+      events:
+        - weft.node.IdentityDocumentRequested
+        - weft.node.LocalEndpointSessionClosed
+        - weft.node.LocalEndpointSessionOpened
+        - weft.node.LocalProcessStarted
+        - weft.node.LocalProcessStopped
+        - weft.node.ProcessBackingOff
+        - weft.node.ProcessRestartDue
+        - weft.node.ProcessRestarted
+        - weft.node.SecretRequested
+
+  # Line 75: "the gateway in front of public endpoints (data plane)"; line 67: "traffic to
+  # endpoints". Acts as EdgeGateway. Accepts no user command: its rows change through the bindings
+  # below (formations route and endpoint events, workloads readiness events, its own
+  # BackendSetChanged) and EdgeGateway's own commands.
+  # Publishes: WakeRequested (r8-edge-wake, R8) and BackendSetChanged (r8-edge-forward).
+  # OPEN: the public traffic it serves is no command of the model, so the component is reached in
+  # process here; a request is the EdgeGateway's HoldRequest only when its service sleeps.
+  - component: weft-edge
+    summary: >-
+      The edge gateway: the ready instances behind each route of a formation, the requests held
+      while a sleeping service wakes, and the certificate of each public endpoint.
+    owns:
+      domains:
+        - weft.edge
+    accepts:
+      commands:
+        - weft.edge.DropRouteHeldRequests
+        - weft.edge.ForwardHeldRequests
+        - weft.edge.HoldRequest
+        - weft.edge.MissHeldRequest
+        - weft.edge.RecordBackendNotReady
+        - weft.edge.RecordBackendReady
+        - weft.edge.RecordCertificateFailed
+        - weft.edge.RecordCertificateIssued
+        - weft.edge.RemoveBackend
+        - weft.edge.RequestCertificate
+        - weft.edge.RestoreBackend
+        - weft.edge.RetireEndpointCertificates
+        - weft.edge.RetryCertificate
+    publishes:
+      events:
+        - weft.edge.BackendSetChanged
+        - weft.edge.CertificateFailed
+        - weft.edge.CertificateIssued
+        - weft.edge.CertificateRenewed
+        - weft.edge.CertificateRequested
+        - weft.edge.CertificateRetired
+        - weft.edge.HeldRequestDropped
+        - weft.edge.HeldRequestForwarded
+        - weft.edge.HeldRequestMissed
+        - weft.edge.WakeRequested
 
 # Reconciliation loops, § 14 lines 584-618, in the four forms of lines 594-606 (edge, level, time,
 # many rows) the domains support since wave 4 (docs/open-questions.md, wave 4 sections; their
@@ -998,7 +1094,10 @@ components:
 # at its binding with the event its domain would add.
 #
 # The node agent's Record* call is the one source of an observation (line 607): no binding below
-# records an observation, and no binding invokes a NodeAgent command.
+# copies an observation into a second record, and no binding invokes a NodeAgent command. Since
+# design:components one observation has a node-local source instead: a process restart is written
+# by weft-node in weft.node (RestartProcess), and r9-record-process-restarted carries it to
+# workloads.RecordProcessRestarted, which NodeAgent is no longer granted.
 
 bindings:
   # ---------------------------------------------------------------------------------------------
@@ -1030,7 +1129,12 @@ bindings:
   #                                                  or deployments.EscalateDrift   -> ReleaseController
   #   R8 level  workloads.ServicesBelowScale (Waking rows) -> workloads.RequestReplica -> Scheduler
   #   R8 time   workloads.WakesOverdue            -> workloads.MissWake             -> Scheduler
-  #   (§ 16)    observability.LogStreamsPastRetention -> observability.ExpireLogStream -> ControlPlane
+  #   R8 time   edge.HeldRequestsPastDeadline     -> edge.MissHeldRequest           -> EdgeGateway
+  #             (weft-edge: the held request's named answer, also when the wake was refused)
+  #   R9 level  node.RestartsDue                  -> node.RestartProcess            -> NodeAgent
+  #             (weft-node: after the process's backoff on the node's own clock; reason
+  #             AliveCheckFailed, its count in the window and the wait it took)
+  #   (§ 16)   observability.LogStreamsPastRetention -> observability.ExpireLogStream -> ControlPlane
   #   (clusters) cluster.UnlinkedClusterNodePools + infrastructure.TenantNodePools
   #                                               -> cluster.RecordClusterNodePoolReady (Requested rows)
   #                                                  or RecordRemovedClusterNodePool (Removed rows) -> ControlPlane
@@ -1049,10 +1153,11 @@ bindings:
   # RenewLease frames carry no time: weft-control's node-channel endpoint records each as the
   # ControlPlane with `received_at` from its clock on receipt (protocols/node-channel.yaml).
   #
-  # R9 (line 593) is node-local: workloads.AliveCheckFailed (`restart: true`) reaches weft-node,
-  # which restarts the process and records it with workloads.RecordProcessRestarted (NodeAgent).
-  # weft-node is no component here (see the top), so that step is neither a binding nor a level
-  # step of weft-control; RecordProcessRestarted is the record line 593 asks for.
+  # R9 (line 593) is node-local, since design:components a loop across weft-control and weft-node
+  # (block "R9" below): workloads.AliveCheckFailed (`restart: true`) marks the process due on the
+  # node (edge), the node restarts it after its backoff (level step above), and its
+  # ProcessRestarted reaches workloads.RecordProcessRestarted (edge), the record line 593 asks for.
+  # weft-node's RestartProcess takes no time, so no stamped time crosses here.
   #
   # OPEN: the time commands of system actors without a gap view, so the actor has no row to
   # read: access.ExpireLogin, access.ExpireApiToken (ManagementApi), identity.ExpireIdentityDocument
@@ -1841,3 +1946,302 @@ bindings:
       # deletes it once empty. An empty pool is deleted here at once.
       drop: [no-such-pool, wrong-state, pool-has-nodes]
       retry: {except: [no-such-pool, wrong-state, pool-has-nodes]}
+
+  # ---------------------------------------------------------------------------------------------
+  # R9 (line 593): alive check failed past its threshold -> process restart (node-local,
+  # recorded). weft-node, design:components (2026-11-26).
+  # Edge 1: weft-control recorded the alive check failed past its threshold
+  # (workloads.RecordCheckResult, NodeAgent); the node marks the process due. `restart` is false
+  # under the policy `never`, where the node reports the instance failed instead.
+  - id: r9-mark-restart-due
+    summary: Mark a process due for a restart once its alive check failed past its threshold.
+    when:
+      event: weft.workloads.AliveCheckFailed
+      where: [event.restart == true]
+    invoke:
+      command: weft.node.MarkRestartDue
+    mapping:
+      instance_id: event.instance_id
+      node_id: event.node_id
+      process: event.process
+    delivery: at_least_once
+    on_failure:
+      # not-running: harmless; a repeated delivery (the process is already RestartDue), or the node
+      # already restarted the process on its own observation or stopped it. A transport failure is
+      # retried.
+      drop: [not-running]
+      retry: {except: [not-running]}
+  # Level (block above): RestartsDue -> RestartProcess, NodeAgent, after the backoff.
+  # Edge 2: the restart the node made reaches weft-control's record of the instance (§ 15 health,
+  # backing off past the policy's limit).
+  - id: r9-record-process-restarted
+    summary: Record on the instance a process restart its node made.
+    when:
+      event: weft.node.ProcessRestarted
+    invoke:
+      command: weft.workloads.RecordProcessRestarted
+    mapping:
+      instance_id: event.instance_id
+      node_id: event.node_id
+      process: event.process
+      reason: event.reason
+      restarts_in_window: event.restarts_in_window
+      backoff_seconds: event.backoff_seconds
+    delivery: at_least_once
+    on_failure:
+      # other-state: harmless; the instance ended (exited, failed, evicted) before the record
+      # arrived, and its end is recorded by its own report.
+      drop: [other-state]
+      # invalid-count, count-above-total, backoff-out-of-range and restart-never cannot follow:
+      # weft.node.RestartProcess checks the same bounds against the same policy, read from the
+      # instance. no-such-instance, wrong-node and no-such-process cannot follow (StartProcess read
+      # the instance and its assignment to this node). OPEN: a repeated delivery is recorded twice
+      # (`restarts` counts it again); workloads.RecordProcessRestarted would take the node's
+      # `restarts` to refuse a count it already holds. A transport failure is retried.
+      retry: {except: [other-state]}
+
+  # ---------------------------------------------------------------------------------------------
+  # weft-node, R2 and R3 (lines 586-587): an assignment that ended or was released holds nothing
+  # on its node any more; its processes stop and its instance's local endpoint closes (line 100).
+  - id: node-stop-processes-on-end
+    summary: Stop the processes of an assignment that ended.
+    when:
+      event: weft.nodes.AssignmentEnded
+    invoke:
+      command: weft.node.StopAssignmentProcesses
+    mapping:
+      assignment_id: event.assignment_id
+    delivery: at_least_once
+    on_failure:
+      # none-running: harmless; the processes already stopped (the node observed the instance
+      # stopped before the assignment ended), or a repeated delivery.
+      drop: [none-running]
+      retry: {except: [none-running]}
+  - id: node-stop-processes-on-release
+    summary: Stop the processes of an assignment released because its lease ended.
+    when:
+      event: weft.nodes.AssignmentReleased
+    invoke:
+      command: weft.node.StopAssignmentProcesses
+    mapping:
+      assignment_id: event.assignment_id
+    delivery: at_least_once
+    on_failure:
+      # none-running: harmless, as above.
+      drop: [none-running]
+      retry: {except: [none-running]}
+  - id: node-close-endpoint-on-end
+    summary: Close the local endpoint sessions of an assignment that ended.
+    when:
+      event: weft.nodes.AssignmentEnded
+    invoke:
+      command: weft.node.CloseAssignmentEndpointSessions
+    mapping:
+      assignment_id: event.assignment_id
+    delivery: at_least_once
+    on_failure:
+      # none-open: harmless; the instance opened no session, or a repeated delivery.
+      drop: [none-open]
+      retry: {except: [none-open]}
+  - id: node-close-endpoint-on-release
+    summary: Close the local endpoint sessions of an assignment released because its lease ended.
+    when:
+      event: weft.nodes.AssignmentReleased
+    invoke:
+      command: weft.node.CloseAssignmentEndpointSessions
+    mapping:
+      assignment_id: event.assignment_id
+    delivery: at_least_once
+    on_failure:
+      # none-open: harmless, as above.
+      drop: [none-open]
+      retry: {except: [none-open]}
+
+  # ---------------------------------------------------------------------------------------------
+  # weft-edge, § 15 (lines 627-628): "Readiness gates traffic: an edge route ... forward[s] only to
+  # ready instances". The health events of weft.workloads keep the edge's backends.
+  - id: edge-backend-ready
+    summary: Add an instance that became ready to the backends of its routes.
+    when:
+      event: weft.workloads.InstanceReady
+    invoke:
+      command: weft.edge.RecordBackendReady
+    mapping:
+      instance_id: event.instance_id
+      workload_id: event.workload_id
+    delivery: at_least_once
+    on_failure:
+      # known: harmless; the instance is a backend already, and edge-backend-restore moves it back
+      # into traffic, or this is a repeated delivery.
+      drop: [known]
+      # no-such-instance, no-such-workload and other-workload cannot follow (the event is the
+      # instance's own). A transport failure is retried.
+      retry: {except: [known]}
+  - id: edge-backend-restore
+    summary: Put a backend that is ready again back into traffic.
+    when:
+      event: weft.workloads.InstanceReady
+    invoke:
+      command: weft.edge.RestoreBackend
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure:
+      # not-out-of-traffic: harmless; the instance's first readiness (edge-backend-ready adds it),
+      # or a repeated delivery.
+      drop: [not-out-of-traffic]
+      retry: {except: [not-out-of-traffic]}
+  - id: edge-backend-not-ready
+    summary: Take a backend whose ready check fails out of traffic.
+    when:
+      event: weft.workloads.InstanceNotReady
+    invoke:
+      command: weft.edge.RecordBackendNotReady
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: &edge-not-ready-failure
+      # not-ready: harmless; the instance was never ready (no backend yet) or is out of traffic
+      # already, or a repeated delivery.
+      drop: [not-ready]
+      retry: {except: [not-ready]}
+  - id: edge-backend-restarting
+    summary: Take a backend whose process restarts out of traffic.
+    when:
+      event: weft.workloads.InstanceHealthStarting
+    invoke:
+      command: weft.edge.RecordBackendNotReady
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: *edge-not-ready-failure
+  - id: edge-backend-backing-off
+    summary: Take a backend that backs off out of traffic.
+    when:
+      event: weft.workloads.InstanceBackingOff
+    invoke:
+      command: weft.edge.RecordBackendNotReady
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: *edge-not-ready-failure
+  - id: edge-backend-exited
+    summary: Remove a backend whose instance exited.
+    when:
+      event: weft.workloads.InstanceExited
+    invoke:
+      command: weft.edge.RemoveBackend
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: &edge-remove-failure
+      # no-backend: harmless; the instance was never ready, so it never was a backend, or a
+      # repeated delivery.
+      drop: [no-backend]
+      retry: {except: [no-backend]}
+  - id: edge-backend-failed
+    summary: Remove a backend whose instance failed.
+    when:
+      event: weft.workloads.InstanceFailed
+    invoke:
+      command: weft.edge.RemoveBackend
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: *edge-remove-failure
+  - id: edge-backend-evicted
+    summary: Remove a backend whose instance was evicted.
+    when:
+      event: weft.workloads.InstanceEvicted
+    invoke:
+      command: weft.edge.RemoveBackend
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: *edge-remove-failure
+
+  # ---------------------------------------------------------------------------------------------
+  # R8 (line 592): wake requested -> an instance scheduled; deadline missed -> named failure.
+  # § 4 "Sleep and wake": the edge holds the first request and asks for an instance.
+  # Edge 1: the held request's wake reaches workloads (WakeService records the Wake; StartWaking
+  # and the level step on ServicesBelowScale bring the instance).
+  - id: r8-edge-wake
+    summary: Ask weft-control to wake the service of a request the edge holds.
+    when:
+      event: weft.edge.WakeRequested
+    invoke:
+      command: weft.workloads.WakeService
+    mapping:
+      service_id: event.service_id
+      source: EdgeRequest
+      deadline_at: event.deadline_at
+    delivery: at_least_once
+    on_failure:
+      # deadline-past and retired: the wake cannot happen; the edge's own time step
+      # (HeldRequestsPastDeadline -> MissHeldRequest) answers the held request by name at its
+      # deadline, so nothing is retried. no-service cannot follow (HoldRequest read the service).
+      # OPEN: a repeated delivery records a second Wake of the same request; WakeService takes no
+      # request key. A transport failure is retried.
+      drop: [deadline-past, retired]
+      retry: {except: [deadline-past, retired]}
+  # Edge 2: an instance of the held request's workload became ready; the edge forwards.
+  - id: r8-edge-forward
+    summary: Forward the requests held for a workload once one of its instances is ready.
+    when:
+      event: weft.edge.BackendSetChanged
+      where: [event.ready == true]
+    invoke:
+      command: weft.edge.ForwardHeldRequests
+    mapping:
+      workload_id: event.workload_id
+    delivery: at_least_once
+    on_failure:
+      # nothing-held: harmless; most backends become ready with no request held.
+      drop: [nothing-held]
+      retry: {except: [nothing-held]}
+
+  # ---------------------------------------------------------------------------------------------
+  # weft-edge, § 3 `Border`: routes and endpoints are formations' desired state; the edge follows
+  # their removal and gives each public endpoint a certificate.
+  - id: edge-drop-held-on-route-removed
+    summary: Answer the requests held on a removed route by name.
+    when:
+      event: weft.formations.RouteRemoved
+    invoke:
+      command: weft.edge.DropRouteHeldRequests
+    mapping:
+      route_id: event.route_id
+    delivery: at_least_once
+    on_failure:
+      # nothing-held: harmless; no request was held on the route.
+      drop: [nothing-held]
+      retry: {except: [nothing-held]}
+  - id: edge-request-certificate
+    summary: Ask for the certificate of a public endpoint once it is added.
+    when:
+      event: weft.formations.EndpointAdded
+    invoke:
+      command: weft.edge.RequestCertificate
+    mapping:
+      endpoint_id: event.endpoint_id
+      formation_id: event.formation_id
+      host: event.host
+    delivery: at_least_once
+    on_failure:
+      # already-requested: harmless; a repeated delivery. no-such-endpoint: harmless; the
+      # endpoint was removed before the edge asked, and nothing is served for it.
+      drop: [already-requested, no-such-endpoint]
+      retry: {except: [already-requested, no-such-endpoint]}
+  - id: edge-retire-certificates
+    summary: Retire the certificate of a removed public endpoint.
+    when:
+      event: weft.formations.EndpointRemoved
+    invoke:
+      command: weft.edge.RetireEndpointCertificates
+    mapping:
+      endpoint_id: event.endpoint_id
+    delivery: at_least_once
+    on_failure:
+      # no-certificate: harmless; none was requested, or a repeated delivery.
+      drop: [no-certificate]
+      retry: {except: [no-certificate]}

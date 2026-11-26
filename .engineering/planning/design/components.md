@@ -4,7 +4,7 @@ id: design:components
 kind: design
 status: draft
 title: 'weft components: api, control, node, edge and their contracts'
-revision: 3
+revision: 4
 ---
 ## Goal
 
@@ -119,3 +119,24 @@ the interpreter can run.
 2. Does `weft-edge` keep its own copy of route desired state? Default: no; it reads formations events.
 3. In the `local` placement all four server components run in one process (sketch line 78): one
    deployment unit, four components in the model. Default: yes.
+
+## Specified (2026-11-26)
+
+- Step 1: `ess/5-runtime/node.yaml` (domain `weft.node`, component `weft-node`): `LocalProcess` and
+  `LocalEndpointSession`, 9 commands, 9 events, 4 views; R9 as edge `r9-mark-restart-due`
+  (`workloads.AliveCheckFailed` -> `MarkRestartDue`), node level step `RestartsDue` ->
+  `RestartProcess` (NodeAgent) and edge `r9-record-process-restarted` (-> `workloads.RecordProcessRestarted`,
+  no longer granted to NodeAgent). Assignment ends stop processes and close endpoint sessions (4
+  bindings). No time input from the node.
+- Step 1: `ess/5-runtime/edge.yaml` (domain `weft.edge`, component `weft-edge`): `RouteBackend` (view
+  `RouteBackends`: the ready instances of a route), `HeldRequest`, `EdgeCertificate`; 13 commands, 10
+  events, 5 views; actor `EdgeGateway`. 13 bindings: workloads readiness events keep the backends,
+  `r8-edge-wake` (`WakeRequested` -> `workloads.WakeService`, source `EdgeRequest`), `r8-edge-forward`
+  (`BackendSetChanged`), formations route and endpoint events; edge time step
+  `HeldRequestsPastDeadline` -> `MissHeldRequest`.
+- Step 4: D1 and D2 in the header of `ess/components.yaml`; D1 is `weft-control` `reached_by:
+  network` plus an OPEN naming what ESS lacks (a component that forwards commands another component
+  accepts). No `ess-http/1` document: `surfaces/http/` does not exist yet.
+- Gate: `slot task check` green; weft-sim experiments all exit 0; explore from the full setup (256
+  walks): 0 violations, no Unsupported answer in the new domains.
+- Not run by synthesis (`docs/ess-gaps.md` gap 24).

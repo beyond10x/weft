@@ -24,6 +24,8 @@ domains:
   - weft.identity
   - weft.secrets
   - weft.observability
+  - weft.node
+  - weft.edge
   - weft.deployments
   - weft.pipelines
   - weft.catalog

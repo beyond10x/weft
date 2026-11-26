@@ -1,0 +1,777 @@
+# Edge: the records weft-edge keeps in front of the public endpoints. Which instances behind the
+# routes are ready, the requests held while a sleeping service wakes, and the certificate of each
+# public endpoint.
+# Sources: docs/domain-sketch.md § Structure "Planes" (line 67, data plane: "traffic to endpoints:
+# the edge gateway"), "Components" (line 75, weft-edge), § 3 `Border` (endpoints and routes), § 4
+# "Sleep and wake" (lines 286-291, `Wake`, `WakeDeadline`), § 14 R8 (line 592), § 15 "Health"
+# ("Readiness gates traffic: an edge route ... forward[s] only to ready instances") and
+# .engineering/planning/design/components.md (design:components, weft-edge).
+#
+# No user command: every row changes through a binding in ess/components.yaml (from formations,
+# workloads and this domain's own events) or through the gateway's own actor, EdgeGateway
+# (ess/9-actors/actors.yaml). Routes and endpoints stay the desired state of weft.formations; the
+# edge reads them and keeps no copy (design:components open question 2, default taken).
+domain: weft.edge
+
+summary: >-
+  What weft-edge keeps in front of the public endpoints: the ready instances behind each route,
+  the requests held while a sleeping service wakes, and the certificate of each public endpoint.
+
+naming:
+  wire: weft
+  display: Edge
+
+entities:
+  # § 15 "Health": "Readiness gates traffic: an edge route ... forward[s] only to ready instances".
+  # A route (§ 3) sends to one component of a formation; the instances of that component's
+  # workload are its backends. One row per instance that was ever ready, kept from the readiness
+  # events of weft.workloads. The ready instances of a route are the view RouteBackends (the rows
+  # of the route's formation and component in state Ready).
+  # OPEN: a route names a formation and a component, not an environment, while a workload is one
+  # environment's (workloads.Workload.environment_id; formations.yaml OPEN "whether each
+  # environment gets its own hosts"). Taken: the edge serves every environment's ready instance
+  # behind the route until per-environment hosts are decided.
+  - name: weft.edge.RouteBackend
+    naming:
+      summary: One instance behind the routes to its component, and whether it gets traffic.
+    identity:
+      name: backend_id
+      type: weft.shared.RouteBackendId
+    fields:
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: workload_id
+        type: weft.shared.WorkloadId
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: component
+        type: weft.shared.ComponentName
+    relations:
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: workload
+        kind: references
+        target: weft.workloads.Workload
+        cardinality: one
+        via: workload_id
+      - name: formation
+        kind: references
+        target: weft.formations.Formation
+        cardinality: one
+        via: formation_id
+      - name: environment
+        kind: references
+        target: weft.formations.Environment
+        cardinality: one
+        via: environment_id
+    lifecycle:
+      initial: Ready
+      states:
+        - {name: Ready, summary: The instance is ready; the edge forwards requests to it.}
+        - {name: NotReady, wire: not-ready, summary: "Its ready check fails, it restarts or backs off; it gets no traffic."}
+        - {name: Gone, summary: "The instance exited, failed or was evicted."}
+      terminal: [Gone]
+      transitions:
+        - name: unready
+          from: [Ready]
+          to: NotReady
+        - name: ready
+          from: [NotReady]
+          to: Ready
+        - name: remove
+          from: [Ready, NotReady]
+          to: Gone
+
+  # § 4 "Sleep and wake": "`Wake`: the edge ... holds the first request, asks for an instance, and
+  # forwards the request when one is ready. The caller waits up to a `WakeDeadline`; past it, the
+  # request fails with a named answer, never silence." § 14 R8 (line 592). One row per held
+  # request; its end is a named state.
+  # OPEN: a held request is one row, so a burst of requests to a sleeping service is a burst of
+  # rows, each asking for a wake (workloads.WakeService records each; StartWaking moves the service
+  # once). Whether the edge should hold later requests behind the first one's wake is not decided.
+  - name: weft.edge.HeldRequest
+    naming:
+      summary: A request to a sleeping service, held at the edge until an instance is ready.
+    identity:
+      name: held_request_id
+      type: weft.shared.HeldRequestId
+    fields:
+      - name: route_id
+        type: weft.shared.RouteId
+      - name: service_id
+        type: weft.shared.ServiceId
+      - name: workload_id
+        type: weft.shared.WorkloadId
+      # The request's arrival plus the Service's WakeDeadline, on the edge's clock (as
+      # workloads.WakeService takes it). A held request past it fails with `Missed`.
+      - name: deadline_at
+        type: Timestamp
+      - name: held_at
+        type: Timestamp
+    relations:
+      - name: route
+        kind: references
+        target: weft.formations.Route
+        cardinality: one
+        via: route_id
+      - name: service
+        kind: references
+        target: weft.workloads.Service
+        cardinality: one
+        via: service_id
+      - name: workload
+        kind: references
+        target: weft.workloads.Workload
+        cardinality: one
+        via: workload_id
+    lifecycle:
+      initial: Held
+      states:
+        - {name: Held, summary: The caller waits; the edge asked for an instance.}
+        - {name: Forwarded, summary: An instance of the service became ready and the request went to it.}
+        - {name: Missed, summary: "The deadline passed with no ready instance; the caller got the named answer `wake-deadline-missed`."}
+        - {name: Dropped, summary: "The route was removed while the request was held; the caller got the named answer `route-removed`."}
+      terminal: [Forwarded, Missed, Dropped]
+      transitions:
+        - name: forward
+          from: [Held]
+          to: Forwarded
+        - name: miss
+          from: [Held]
+          to: Missed
+        - name: drop
+          from: [Held]
+          to: Dropped
+
+  # § 3 `Border` (public `Endpoint`s); § 14 "# OPEN: an `edge` domain for routes, held wake requests
+  # and certificates". One certificate per public endpoint at a time.
+  # OPEN: the issuer (ACME, a cluster CA, a certificate the account uploads) and its challenge are
+  # not decided; the edge records only what the issuer answered.
+  - name: weft.edge.EdgeCertificate
+    naming:
+      summary: The certificate of one public endpoint, and how long it is valid.
+    identity:
+      name: certificate_id
+      type: weft.shared.EdgeCertificateId
+    fields:
+      - name: endpoint_id
+        type: weft.shared.EndpointId
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: host
+        type: weft.formations.Host
+      # The issuer's `notAfter`; absent until issued.
+      - name: not_after
+        type: Optional<Timestamp>
+      - name: failure
+        type: Optional<String>
+    relations:
+      - name: endpoint
+        kind: references
+        target: weft.formations.Endpoint
+        cardinality: one
+        via: endpoint_id
+      - name: formation
+        kind: references
+        target: weft.formations.Formation
+        cardinality: one
+        via: formation_id
+    lifecycle:
+      initial: Requested
+      states:
+        - {name: Requested, summary: The edge asked the issuer for a certificate of the host.}
+        - {name: Issued, summary: The edge holds a valid certificate and serves the host over TLS.}
+        - {name: Failed, summary: The issuer refused; the host is not served over TLS.}
+        - {name: Retired, summary: The endpoint was removed.}
+      terminal: [Retired]
+      transitions:
+        - name: issue
+          from: [Requested]
+          to: Issued
+        - name: fail
+          from: [Requested]
+          to: Failed
+        - name: request_again
+          from: [Failed]
+          to: Requested
+        - name: retire
+          from: [Requested, Issued, Failed]
+          to: Retired
+
+errors:
+  - name: weft.edge.InstanceNotFound
+    summary: No instance has this identifier, or it is an instance of another workload; nothing changed.
+  - name: weft.edge.BackendAlreadyKnown
+    summary: The instance is already a backend, ready or not, and nothing was added.
+  - name: weft.edge.BackendNotReady
+    summary: The instance is no ready backend, so nothing was taken out of traffic.
+  - name: weft.edge.BackendNotFound
+    summary: The instance was never a backend, or already left, and nothing changed.
+  - name: weft.edge.DeadlineInPast
+    summary: The request's deadline already passed, so nothing is held; the caller gets the named answer at once.
+  - name: weft.edge.RouteNotFound
+    summary: No route has this identifier, and nothing is held.
+  - name: weft.edge.ServiceNotFound
+    summary: No service has this identifier, or it serves another workload; nothing is held.
+  - name: weft.edge.ServiceRetired
+    summary: The service is retired; nothing wakes it, and nothing is held.
+  - name: weft.edge.BackendsReady
+    summary: The service has a ready instance; the edge forwards the request and holds nothing.
+  - name: weft.edge.NothingHeld
+    summary: No request is held for it, and nothing changed.
+  - name: weft.edge.HeldRequestNotFound
+    summary: No held request has this identifier, and nothing changed.
+  - name: weft.edge.DeadlineNotReached
+    summary: The held request's deadline has not passed; it stays held.
+  - name: weft.edge.HeldRequestEnded
+    summary: The request was already forwarded, missed or dropped, and nothing changed.
+  - name: weft.edge.EndpointNotFound
+    summary: No public endpoint has this identifier, and no certificate is requested.
+  - name: weft.edge.CertificateExists
+    summary: The endpoint already has a certificate requested or issued, and nothing changed.
+  - name: weft.edge.CertificateNotFound
+    summary: No certificate has this identifier, and nothing changed.
+  - name: weft.edge.NotAfterInPast
+    summary: The certificate's end of validity already passed, so it is not recorded as issued.
+  - name: weft.edge.CertificateStateConflict
+    summary: The certificate is in a state that does not take this step, and nothing changed.
+
+events:
+  # § 15: the set of ready instances behind the routes to a component changed by one instance.
+  - name: weft.edge.BackendSetChanged
+    fields:
+      - {name: backend_id, type: weft.shared.RouteBackendId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: ready, type: Boolean}
+
+  # § 4 "Sleep and wake", § 14 R8: the edge holds a request and asks for an instance. The binding
+  # r8-edge-wake carries it to workloads.WakeService (source EdgeRequest).
+  - name: weft.edge.WakeRequested
+    fields:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+      - {name: service_id, type: weft.shared.ServiceId}
+      - {name: deadline_at, type: Timestamp}
+
+  - name: weft.edge.HeldRequestForwarded
+    fields:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+      - {name: service_id, type: weft.shared.ServiceId}
+
+  # Sketch lines 288-289: "past it, the request fails with a named answer, never silence".
+  - name: weft.edge.HeldRequestMissed
+    fields:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+      - {name: service_id, type: weft.shared.ServiceId}
+
+  - name: weft.edge.HeldRequestDropped
+    fields:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+      - {name: route_id, type: weft.shared.RouteId}
+
+  - name: weft.edge.CertificateRequested
+    fields:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: host, type: weft.formations.Host}
+
+  - name: weft.edge.CertificateIssued
+    fields:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: not_after, type: Timestamp}
+
+  - name: weft.edge.CertificateRenewed
+    fields:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: not_after, type: Timestamp}
+
+  - name: weft.edge.CertificateFailed
+    fields:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: reason, type: String}
+
+  - name: weft.edge.CertificateRetired
+    fields:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+
+commands:
+  # § 15: an instance became ready (workloads.InstanceReady, bound in ess/components.yaml); it
+  # joins the backends of the routes to its component, or rejoins them.
+  - name: weft.edge.RecordBackendReady
+    naming:
+      display: Record a ready backend
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+    outcomes:
+      - name: no-such-instance
+        when_related: {via: input.instance_id, exists: false}
+        error: weft.edge.InstanceNotFound
+      - name: no-such-workload
+        when_related: {via: input.workload_id, exists: false}
+        error: weft.edge.InstanceNotFound
+      - name: other-workload
+        when_related: {via: input.instance_id, predicate: workload_id != input.workload_id}
+        error: weft.edge.InstanceNotFound
+      # A known instance is moved back by RestoreBackend, bound to the same event; this answer is
+      # the binding's harmless drop.
+      - name: known
+        when_related:
+          entity: weft.edge.RouteBackend
+          where: instance_id == input.instance_id
+          exists: true
+        error: weft.edge.BackendAlreadyKnown
+      - name: added
+        creates: weft.edge.RouteBackend
+        instance: backend_id
+        sets:
+          instance_id: input.instance_id
+          workload_id: input.workload_id
+          formation_id: {related: {via: input.workload_id, field: formation_id}}
+          environment_id: {related: {via: input.workload_id, field: environment_id}}
+          component: {related: {via: input.workload_id, field: component}}
+        emits: [weft.edge.BackendSetChanged]
+        payload:
+          weft.edge.BackendSetChanged:
+            backend_id: {generated: true}
+            instance_id: input.instance_id
+            workload_id: input.workload_id
+            ready: true
+
+  # § 15: a backend that was taken out of traffic is ready again (workloads.InstanceReady, bound
+  # beside RecordBackendReady; ESS 0.99.2 selects a set outcome by input only, so one command
+  # cannot both create a row and move an existing one).
+  - name: weft.edge.RestoreBackend
+    naming:
+      display: Put a backend back into traffic
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: not-out-of-traffic
+        when_related:
+          entity: weft.edge.RouteBackend
+          where: {all: [instance_id == input.instance_id, state == NotReady]}
+          exists: false
+        error: weft.edge.BackendNotFound
+      - name: restored
+        moves: weft.edge.RouteBackend.ready
+        instances:
+          where: {all: [instance_id == input.instance_id, state == NotReady]}
+        emits:
+          - {event: weft.edge.BackendSetChanged, each: changed}
+        payload:
+          weft.edge.BackendSetChanged:
+            backend_id: {changed: backend_id}
+            instance_id: input.instance_id
+            workload_id: {changed: workload_id}
+            ready: true
+
+  # § 15: the instance stopped being ready (a failing ready check, a restart, backing off; bound
+  # to workloads.InstanceNotReady, InstanceHealthStarting and InstanceBackingOff); it gets no
+  # traffic until it is ready again.
+  - name: weft.edge.RecordBackendNotReady
+    naming:
+      display: Take a backend out of traffic
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: not-ready
+        when_related:
+          entity: weft.edge.RouteBackend
+          where: {all: [instance_id == input.instance_id, state == Ready]}
+          exists: false
+        error: weft.edge.BackendNotReady
+      - name: taken-out
+        moves: weft.edge.RouteBackend.unready
+        instances:
+          where: {all: [instance_id == input.instance_id, state == Ready]}
+        emits:
+          - {event: weft.edge.BackendSetChanged, each: changed}
+        payload:
+          weft.edge.BackendSetChanged:
+            backend_id: {changed: backend_id}
+            instance_id: input.instance_id
+            workload_id: {changed: workload_id}
+            ready: false
+
+  # § 15: the instance exited, failed or was evicted (bound to workloads.InstanceExited,
+  # InstanceFailed and InstanceEvicted); it leaves the routes for good.
+  - name: weft.edge.RemoveBackend
+    naming:
+      display: Remove a backend
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-backend
+        when_related:
+          entity: weft.edge.RouteBackend
+          where: {all: [instance_id == input.instance_id, state != Gone]}
+          exists: false
+        error: weft.edge.BackendNotFound
+      - name: removed
+        moves: weft.edge.RouteBackend.remove
+        instances:
+          where: {all: [instance_id == input.instance_id, state != Gone]}
+        emits:
+          - {event: weft.edge.BackendSetChanged, each: changed}
+        payload:
+          weft.edge.BackendSetChanged:
+            backend_id: {changed: backend_id}
+            instance_id: input.instance_id
+            workload_id: {changed: workload_id}
+            ready: false
+
+  # § 4 "Sleep and wake" (lines 286-289), § 14 R8: a request reached a route whose service sleeps;
+  # the edge holds it and asks for an instance (WakeRequested, bound to workloads.WakeService with
+  # source EdgeRequest). The edge resolves the route to its component's service itself (§ 3 Route
+  # names the component; workloads.Service names the workload).
+  # OPEN: that the service is the route's component's is not checked here: Route names a
+  # ComponentId and Workload a ComponentName, two hops apart, and a guard reads one related row.
+  - name: weft.edge.HoldRequest
+    naming:
+      display: Hold a request while its service wakes
+    input:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: service_id, type: weft.shared.ServiceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: deadline_at, type: Timestamp}
+    outcomes:
+      - name: deadline-past
+        when: deadline_at < now
+        error: weft.edge.DeadlineInPast
+      - name: no-such-route
+        when_related: {via: input.route_id, exists: false}
+        error: weft.edge.RouteNotFound
+      - name: no-such-service
+        when_related: {via: input.service_id, exists: false}
+        error: weft.edge.ServiceNotFound
+      - name: service-of-other-workload
+        when_related: {via: input.service_id, predicate: workload_id != input.workload_id}
+        error: weft.edge.ServiceNotFound
+      - name: service-retired
+        when_related: {via: input.service_id, predicate: state == Retired}
+        error: weft.edge.ServiceRetired
+      - name: backends-ready
+        when_related:
+          entity: weft.edge.RouteBackend
+          where: {all: [workload_id == input.workload_id, state == Ready]}
+          exists: true
+        error: weft.edge.BackendsReady
+      - name: held
+        creates: weft.edge.HeldRequest
+        instance: held_request_id
+        sets:
+          route_id: input.route_id
+          service_id: input.service_id
+          workload_id: input.workload_id
+          deadline_at: input.deadline_at
+          held_at: {generated: true}
+        emits: [weft.edge.WakeRequested]
+        payload:
+          weft.edge.WakeRequested:
+            held_request_id: {generated: true}
+            service_id: input.service_id
+            deadline_at: input.deadline_at
+
+  # § 4 "Sleep and wake": the edge "forwards the request when one is ready". Bound to this
+  # domain's BackendSetChanged with `ready: true` (ess/components.yaml r8-edge-forward).
+  - name: weft.edge.ForwardHeldRequests
+    naming:
+      display: Forward the requests held for a workload
+    input:
+      - {name: workload_id, type: weft.shared.WorkloadId}
+    outcomes:
+      - name: nothing-held
+        when_related:
+          entity: weft.edge.HeldRequest
+          where: {all: [workload_id == input.workload_id, state == Held]}
+          exists: false
+        error: weft.edge.NothingHeld
+      - name: forwarded
+        moves: weft.edge.HeldRequest.forward
+        instances:
+          where: {all: [workload_id == input.workload_id, state == Held]}
+        emits:
+          - {event: weft.edge.HeldRequestForwarded, each: changed}
+        payload:
+          weft.edge.HeldRequestForwarded:
+            held_request_id: {changed: held_request_id}
+            service_id: {changed: service_id}
+
+  # Sketch lines 288-289: past the WakeDeadline "the request fails with a named answer, never
+  # silence". The time form of § 14 (lines 600-602): EdgeGateway reads HeldRequestsPastDeadline
+  # and runs this per row on its own clock; the guard on `now` is the rule. It also ends a held
+  # request whose wake weft-control refused (WakeService `retired`, `deadline-past`), which no
+  # workloads.WakeMissed reaches.
+  - name: weft.edge.MissHeldRequest
+    naming:
+      display: Fail a held request past its deadline
+    input:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+    outcomes:
+      - name: no-such-request
+        unknown_instance: true
+        error: weft.edge.HeldRequestNotFound
+      - name: deadline-not-reached
+        when_subject: {predicate: deadline_at > now}
+        error: weft.edge.DeadlineNotReached
+      - name: missed
+        moves: weft.edge.HeldRequest.miss
+        instance: held_request_id
+        emits: [weft.edge.HeldRequestMissed]
+        payload:
+          weft.edge.HeldRequestMissed:
+            held_request_id: input.held_request_id
+            service_id: {subject: service_id}
+      - name: ended
+        wrong_state: true
+        error: weft.edge.HeldRequestEnded
+
+  # § 3: a removed route takes no traffic; its held requests end with a named answer. Bound to
+  # formations.RouteRemoved.
+  - name: weft.edge.DropRouteHeldRequests
+    naming:
+      display: Drop the requests held on a removed route
+    input:
+      - {name: route_id, type: weft.shared.RouteId}
+    outcomes:
+      - name: nothing-held
+        when_related:
+          entity: weft.edge.HeldRequest
+          where: {all: [route_id == input.route_id, state == Held]}
+          exists: false
+        error: weft.edge.NothingHeld
+      - name: dropped
+        moves: weft.edge.HeldRequest.drop
+        instances:
+          where: {all: [route_id == input.route_id, state == Held]}
+        emits:
+          - {event: weft.edge.HeldRequestDropped, each: changed}
+        payload:
+          weft.edge.HeldRequestDropped:
+            held_request_id: {changed: held_request_id}
+            route_id: input.route_id
+
+  # § 3 `Border`: a public endpoint is served over TLS. Bound to formations.EndpointAdded.
+  - name: weft.edge.RequestCertificate
+    naming:
+      display: Request the certificate of a public endpoint
+    input:
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: host, type: weft.formations.Host}
+    outcomes:
+      - name: no-such-endpoint
+        when_related: {via: input.endpoint_id, exists: false}
+        error: weft.edge.EndpointNotFound
+      - name: already-requested
+        when_related:
+          entity: weft.edge.EdgeCertificate
+          where: {all: [endpoint_id == input.endpoint_id, state != Retired]}
+          exists: true
+        error: weft.edge.CertificateExists
+      - name: requested
+        creates: weft.edge.EdgeCertificate
+        instance: certificate_id
+        sets:
+          endpoint_id: input.endpoint_id
+          formation_id: input.formation_id
+          host: input.host
+        emits: [weft.edge.CertificateRequested]
+        payload:
+          weft.edge.CertificateRequested:
+            certificate_id: {generated: true}
+            endpoint_id: input.endpoint_id
+            host: input.host
+
+  # The issuer answered with a certificate: first issue (Requested) or a renewal (Issued). The
+  # end of validity is the issuer's, not the edge's clock.
+  - name: weft.edge.RecordCertificateIssued
+    naming:
+      display: Record an issued certificate
+    input:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: not_after, type: Timestamp}
+    outcomes:
+      - name: not-after-past
+        when: not_after < now
+        error: weft.edge.NotAfterInPast
+      - name: no-such-certificate
+        unknown_instance: true
+        error: weft.edge.CertificateNotFound
+      - name: issued
+        when_subject_state: Requested
+        moves: weft.edge.EdgeCertificate.issue
+        instance: certificate_id
+        sets:
+          not_after: input.not_after
+        emits: [weft.edge.CertificateIssued]
+        payload:
+          weft.edge.CertificateIssued:
+            certificate_id: input.certificate_id
+            endpoint_id: {subject: endpoint_id}
+            not_after: input.not_after
+      - name: renewed
+        when_subject_state: Issued
+        updates: weft.edge.EdgeCertificate
+        instance: certificate_id
+        sets:
+          not_after: input.not_after
+        emits: [weft.edge.CertificateRenewed]
+        payload:
+          weft.edge.CertificateRenewed:
+            certificate_id: input.certificate_id
+            endpoint_id: {subject: endpoint_id}
+            not_after: input.not_after
+      - name: other-state
+        error: weft.edge.CertificateStateConflict
+
+  # The issuer refused. The endpoint is not served over TLS until a retry is issued.
+  - name: weft.edge.RecordCertificateFailed
+    naming:
+      display: Record a refused certificate
+    input:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-certificate
+        unknown_instance: true
+        error: weft.edge.CertificateNotFound
+      - name: failed
+        moves: weft.edge.EdgeCertificate.fail
+        instance: certificate_id
+        sets:
+          failure: input.reason
+        emits: [weft.edge.CertificateFailed]
+        payload:
+          weft.edge.CertificateFailed:
+            certificate_id: input.certificate_id
+            endpoint_id: {subject: endpoint_id}
+            reason: input.reason
+      - name: other-state
+        wrong_state: true
+        error: weft.edge.CertificateStateConflict
+
+  # OPEN: when a refused certificate is asked for again (a backoff, the account's fix of its DNS).
+  # Taken: EdgeGateway decides; the row returns to Requested.
+  - name: weft.edge.RetryCertificate
+    naming:
+      display: Ask for a refused certificate again
+    input:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+    outcomes:
+      - name: no-such-certificate
+        unknown_instance: true
+        error: weft.edge.CertificateNotFound
+      - name: requested-again
+        moves: weft.edge.EdgeCertificate.request_again
+        instance: certificate_id
+        emits: [weft.edge.CertificateRequested]
+        payload:
+          weft.edge.CertificateRequested:
+            certificate_id: input.certificate_id
+            endpoint_id: {subject: endpoint_id}
+            host: {subject: host}
+      - name: other-state
+        wrong_state: true
+        error: weft.edge.CertificateStateConflict
+
+  # § 3: a removed endpoint is served no more. Bound to formations.EndpointRemoved.
+  - name: weft.edge.RetireEndpointCertificates
+    naming:
+      display: Retire the certificates of a removed endpoint
+    input:
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+    outcomes:
+      - name: no-certificate
+        when_related:
+          entity: weft.edge.EdgeCertificate
+          where: {all: [endpoint_id == input.endpoint_id, state != Retired]}
+          exists: false
+        error: weft.edge.CertificateNotFound
+      - name: retired
+        moves: weft.edge.EdgeCertificate.retire
+        instances:
+          where: {all: [endpoint_id == input.endpoint_id, state != Retired]}
+        emits:
+          - {event: weft.edge.CertificateRetired, each: changed}
+        payload:
+          weft.edge.CertificateRetired:
+            certificate_id: {changed: certificate_id}
+            endpoint_id: input.endpoint_id
+
+views:
+  # § 15 "Readiness gates traffic: an edge route ... forward[s] only to ready instances". The
+  # ready instances behind a route: the edge reads the route's formation and its component's name
+  # (weft.formations Route and Component) and passes them here.
+  - name: weft.edge.RouteBackends
+    source: weft.edge.RouteBackend
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+    filter: {all: [formation_id == param.formation_id, component == param.component, state == Ready]}
+    fields:
+      - {name: backend_id, type: weft.shared.RouteBackendId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+
+  # Every backend the edge knows, ready or not.
+  - name: weft.edge.Backends
+    source: weft.edge.RouteBackend
+    consistency: read_your_writes
+    fields:
+      - {name: backend_id, type: weft.shared.RouteBackendId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: state, type: weft.edge.RouteBackend.State}
+
+  # § 4 "Sleep and wake": every held request and how it ended.
+  - name: weft.edge.HeldRequests
+    source: weft.edge.HeldRequest
+    consistency: read_your_writes
+    fields:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: service_id, type: weft.shared.ServiceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: deadline_at, type: Timestamp}
+      - {name: held_at, type: Timestamp}
+      - {name: state, type: weft.edge.HeldRequest.State}
+
+  # § 14 R8, time form: the held requests past their deadline; EdgeGateway runs MissHeldRequest
+  # per row.
+  - name: weft.edge.HeldRequestsPastDeadline
+    source: weft.edge.HeldRequest
+    consistency: read_your_writes
+    filter: {all: [state == Held, deadline_at < now]}
+    fields:
+      - {name: held_request_id, type: weft.shared.HeldRequestId}
+      - {name: service_id, type: weft.shared.ServiceId}
+      - {name: deadline_at, type: Timestamp}
+
+  # § 3 `Border`: the certificate of each public endpoint.
+  - name: weft.edge.Certificates
+    source: weft.edge.EdgeCertificate
+    consistency: read_your_writes
+    fields:
+      - {name: certificate_id, type: weft.shared.EdgeCertificateId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: host, type: weft.formations.Host}
+      - {name: not_after, type: Optional<Timestamp>}
+      - {name: failure, type: Optional<String>}
+      - {name: state, type: weft.edge.EdgeCertificate.State}

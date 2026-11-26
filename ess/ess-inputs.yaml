@@ -19,6 +19,8 @@ specification:
   - 5-runtime/identity.yaml
   - 5-runtime/secrets.yaml
   - 5-runtime/observability.yaml
+  - 5-runtime/node.yaml
+  - 5-runtime/edge.yaml
   - 6-delivery/deployments.yaml
   - 6-delivery/pipelines.yaml
   - 7-services/catalog.yaml
