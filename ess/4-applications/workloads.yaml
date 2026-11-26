@@ -861,6 +861,10 @@ entities:
     fields:
       - name: workload_id
         type: weft.shared.WorkloadId
+      # Isolation pass 2: copied from the workload at create, so a command can tie the row to the
+      # caller's account without a second hop.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: deadline_at
         type: Timestamp
       # OPEN: how large a request and a result may be, and whether a large one travels as an
@@ -883,6 +887,11 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       - name: instance
         kind: references
         target: weft.workloads.Instance
@@ -928,6 +937,9 @@ entities:
     fields:
       - name: workload_id
         type: weft.shared.WorkloadId
+      # Isolation pass 2: copied from the workload at create.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: parallelism
         type: Integer
       - name: gang
@@ -950,6 +962,11 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       - name: schedule
         kind: references
         target: weft.workloads.Schedule
@@ -1089,6 +1106,9 @@ entities:
     fields:
       - name: workload_id
         type: weft.shared.WorkloadId
+      # Isolation pass 2: copied from the workload at open.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: kind
         type: weft.workloads.SessionKind
       # The principal that opened it; only it attaches.
@@ -1102,6 +1122,11 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       - name: principal
         kind: references
         target: weft.accounts.Principal
@@ -1127,6 +1152,9 @@ entities:
     fields:
       - name: workload_id
         type: weft.shared.WorkloadId
+      # Isolation pass 2: copied from the workload at create.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: last_fired_at
         type: Optional<Timestamp>
     relations:
@@ -1135,6 +1163,11 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
     lifecycle:
       initial: Active
       states: [Active, Paused, Deleted]
@@ -1160,6 +1193,9 @@ entities:
     fields:
       - name: workload_id
         type: weft.shared.WorkloadId
+      # Isolation pass 2: copied from the workload at create.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: kind
         type: weft.workloads.TriggerKind
       # The route, queue or event name the trigger listens on.
@@ -1171,6 +1207,11 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
     lifecycle:
       initial: Enabled
       states: [Enabled, Disabled, Deleted]
@@ -1253,6 +1294,9 @@ entities:
     fields:
       - name: workload_id
         type: weft.shared.WorkloadId
+      # Isolation pass 2: copied from the workload at create.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: size
         type: Integer
     relations:
@@ -1261,6 +1305,11 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
     invariants:
       - size >= 0
     lifecycle:
@@ -3246,6 +3295,9 @@ commands:
 
   # Section 11 line 466 `Stop`; actor list line 106. A pending instance no node holds is withdrawn
   # at once; any other live instance is asked to stop and the node reports its exit.
+  # OPEN (isolation pass 2): not tied to the caller's account. Scheduler sends it too and declares no
+  # caller attributes, so a caller read is refused (ESS-COMMAND-004). Split the tenant path into
+  # a command of its own, or give those actors an account?
   - name: weft.workloads.StopInstance
     naming:
       display: Stop an instance
@@ -3452,12 +3504,20 @@ commands:
       display: Define a service
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: replicas, type: Integer}
       - {name: scale_rule, type: weft.workloads.ScaleRule}
       - {name: disruption_budget, type: Optional<weft.workloads.DisruptionBudget>}
       - {name: sleep_policy, type: Optional<weft.shared.SleepPolicy>}
       - {name: wake_deadline, type: Optional<weft.workloads.WakeDeadline>}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: bad-bounds
         when:
           any:
@@ -3480,6 +3540,11 @@ commands:
         error: weft.workloads.SleepPolicyRequiresMinZero
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
         error: weft.workloads.WorkloadNotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
@@ -3901,6 +3966,9 @@ commands:
   # OPEN: the edge, a link, a queue and a schedule are components, not actors of the sketch's
   # list (lines 98-115). Smallest answer: Deployer and Automation for `explicit`, Scheduler for
   # the other sources.
+  # OPEN (isolation pass 2): not tied to the caller's account. Instance and Scheduler send it too
+  # and declare no caller attributes, so a caller read is refused (ESS-COMMAND-004). Split the
+  # tenant path into a command of its own, or give those actors an account?
   - name: weft.workloads.WakeService
     naming:
       display: Wake a service
@@ -4235,6 +4303,9 @@ commands:
   # Sketch line 243: one call, one result, a deadline. CLI section: `weft invoke shop/orders`. A
   # Schedule's workload starts Invocations too (line 257). An invocation past a quota is refused by
   # name (outcome group `quota`).
+  # OPEN (isolation pass 2): not tied to the caller's account. Instance sends it too and declares no
+  # caller attributes, so a caller read is refused (ESS-COMMAND-004). Split the tenant path into
+  # a command of its own, or give those actors an account?
   - name: weft.workloads.Invoke
     naming:
       display: Invoke a workload
@@ -4280,6 +4351,7 @@ commands:
         instance: invocation_id
         sets:
           workload_id: input.workload_id
+          account_id: {related: {via: input.workload_id, field: account_id}}
           deadline_at: input.deadline_at
           request: input.request
           schedule_id: input.schedule_id
@@ -4417,11 +4489,19 @@ commands:
       display: Submit a job
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: parallelism, type: Integer}
       - {name: gang, type: Boolean}
       - {name: max_retries, type: Integer}
       - {name: schedule_id, type: Optional<weft.shared.ScheduleId>}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: bad-counts
         when:
           any:
@@ -4435,6 +4515,11 @@ commands:
       - name: schedule-missing
         when_related: {via: input.schedule_id, exists: false}
         error: weft.workloads.NotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
+        error: weft.workloads.WorkloadNotFound
       - name: schedule-of-other-workload
         when_related: {via: input.schedule_id, predicate: workload_id != input.workload_id}
         error: weft.workloads.ForeignOwner
@@ -4452,6 +4537,7 @@ commands:
         instance: job_id
         sets:
           workload_id: input.workload_id
+          account_id: {related: {via: input.workload_id, field: account_id}}
           parallelism: input.parallelism
           gang: input.gang
           max_retries: input.max_retries
@@ -4640,6 +4726,11 @@ commands:
       - name: no-such-job
         unknown_instance: true
         error: weft.workloads.NotFound
+      # Isolation pass 2: only the job's own account acts on it; another account's job
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
       - name: cancelled
         moves: weft.workloads.Job.cancel
         instance: job_id
@@ -4659,10 +4750,18 @@ commands:
       display: Create a box
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: size, type: weft.workloads.BoxSize}
       - {name: volume_id, type: Optional<weft.shared.VolumeId>}
       - {name: endpoint_id, type: Optional<weft.shared.EndpointId>}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: bad-size
         when:
           any:
@@ -4683,6 +4782,11 @@ commands:
       - name: endpoint-missing
         when_related: {via: input.endpoint_id, exists: false}
         error: weft.workloads.NotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
+        error: weft.workloads.WorkloadNotFound
       # hardening pass 1 W2, W3: the ties, after every existence check (ESS precedence).
       - name: volume-foreign
         when: defined(volume_id)
@@ -5140,11 +5244,24 @@ commands:
       display: Open a session
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: kind, type: weft.workloads.SessionKind}
       # hardening pass 1 D2: the session's owner is the caller, not a request input.
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
         error: weft.workloads.WorkloadNotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
@@ -5157,6 +5274,7 @@ commands:
         instance: session_id
         sets:
           workload_id: input.workload_id
+          account_id: {related: {via: input.workload_id, field: account_id}}
           kind: input.kind
           principal_id: {caller: principal_id}
           attached: true
@@ -5178,6 +5296,11 @@ commands:
     outcomes:
       - name: no-such-session
         unknown_instance: true
+        error: weft.workloads.NotFound
+      # Isolation pass 2: only the session's own account acts on it; another account's session
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.workloads.NotFound
       - name: not-owner
         when_subject: {predicate: principal_id != caller.principal_id}
@@ -5206,6 +5329,11 @@ commands:
       - name: no-such-session
         unknown_instance: true
         error: weft.workloads.NotFound
+      # Isolation pass 2: only the session's own account acts on it; another account's session
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
       - name: not-owner
         when_subject: {predicate: principal_id != caller.principal_id}
         error: weft.workloads.NotSessionOwner
@@ -5233,8 +5361,13 @@ commands:
       - name: no-such-session
         unknown_instance: true
         error: weft.workloads.NotFound
-      # hardening pass 1 D2: "closed by its owner" (comment above); the session holds no account,
-      # so its owner is the only tie to the caller. The control plane's idle close has no actor.
+      # Isolation pass 2: only the session's own account acts on it; another account's session
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
+      # hardening pass 1 D2: "closed by its owner" (comment above); within its account only the
+      # principal that opened it closes it. The control plane's idle close has no actor.
       - name: not-owner
         when_subject: {predicate: principal_id != caller.principal_id}
         error: weft.workloads.NotSessionOwner
@@ -5257,9 +5390,22 @@ commands:
       display: Create a schedule
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
         error: weft.workloads.WorkloadNotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
@@ -5278,6 +5424,7 @@ commands:
         instance: schedule_id
         sets:
           workload_id: input.workload_id
+          account_id: {related: {via: input.workload_id, field: account_id}}
         emits: [weft.workloads.ScheduleCreated]
         payload:
           weft.workloads.ScheduleCreated:
@@ -5320,6 +5467,11 @@ commands:
       - name: no-such-schedule
         unknown_instance: true
         error: weft.workloads.NotFound
+      # Isolation pass 2: only the schedule's own account acts on it; another account's schedule
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
       - name: paused
         moves: weft.workloads.Schedule.pause
         instance: schedule_id
@@ -5339,6 +5491,11 @@ commands:
     outcomes:
       - name: no-such-schedule
         unknown_instance: true
+        error: weft.workloads.NotFound
+      # Isolation pass 2: only the schedule's own account acts on it; another account's schedule
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.workloads.NotFound
       - name: resumed
         moves: weft.workloads.Schedule.resume
@@ -5360,6 +5517,11 @@ commands:
       - name: no-such-schedule
         unknown_instance: true
         error: weft.workloads.NotFound
+      # Isolation pass 2: only the schedule's own account acts on it; another account's schedule
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
       - name: deleted
         moves: weft.workloads.Schedule.delete
         instance: schedule_id
@@ -5379,11 +5541,24 @@ commands:
       display: Create a trigger
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: kind, type: weft.workloads.TriggerKind}
       - {name: source, type: String}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
         error: weft.workloads.WorkloadNotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
@@ -5400,6 +5575,7 @@ commands:
         instance: trigger_id
         sets:
           workload_id: input.workload_id
+          account_id: {related: {via: input.workload_id, field: account_id}}
           kind: input.kind
           source: input.source
         emits: [weft.workloads.TriggerCreated]
@@ -5418,6 +5594,11 @@ commands:
     outcomes:
       - name: no-such-trigger
         unknown_instance: true
+        error: weft.workloads.NotFound
+      # Isolation pass 2: only the trigger's own account acts on it; another account's trigger
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.workloads.NotFound
       - name: disabled
         moves: weft.workloads.Trigger.disable
@@ -5439,6 +5620,11 @@ commands:
       - name: no-such-trigger
         unknown_instance: true
         error: weft.workloads.NotFound
+      # Isolation pass 2: only the trigger's own account acts on it; another account's trigger
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
       - name: enabled
         moves: weft.workloads.Trigger.enable
         instance: trigger_id
@@ -5459,6 +5645,11 @@ commands:
       - name: no-such-trigger
         unknown_instance: true
         error: weft.workloads.NotFound
+      # Isolation pass 2: only the trigger's own account acts on it; another account's trigger
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.workloads.NotFound
       - name: deleted
         moves: weft.workloads.Trigger.delete
         instance: trigger_id
@@ -5478,9 +5669,22 @@ commands:
       display: Take a snapshot
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
+      # Isolation pass 2: the account the request acts in, so the instance can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing instance (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.NotFound
       - name: no-instance
         when_related: {via: input.instance_id, exists: false}
+        error: weft.workloads.NotFound
+      # Isolation pass 2: a instance of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: instance-of-other-account
+        when_related: {via: input.instance_id, predicate: account_id != input.account_id}
         error: weft.workloads.NotFound
       - name: not-live
         when_related:
@@ -5571,12 +5775,25 @@ commands:
     input:
       - {name: snapshot_id, type: weft.shared.SnapshotId}
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: no-snapshot
         when_related: {via: input.snapshot_id, exists: false}
         error: weft.workloads.NotFound
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
         error: weft.workloads.WorkloadNotFound
       # hardening pass 1 disclosure: a snapshot of another account than the workload's answers
       # like a missing one, and before its state is read.
@@ -5661,13 +5878,26 @@ commands:
       display: Create a warm pool
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Isolation pass 2: the account the request acts in, so the workload can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: size, type: Integer}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing workload (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.workloads.WorkloadNotFound
       - name: negative-size
         when: size < 0
         error: weft.workloads.InvalidAmount
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Isolation pass 2: a workload of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: workload-of-other-account
+        when_related: {via: input.workload_id, predicate: account_id != input.account_id}
         error: weft.workloads.WorkloadNotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
@@ -5689,6 +5919,7 @@ commands:
         instance: warm_pool_id
         sets:
           workload_id: input.workload_id
+          account_id: {related: {via: input.workload_id, field: account_id}}
           size: input.size
         emits: [weft.workloads.WarmPoolCreated]
         payload:
@@ -5709,6 +5940,11 @@ commands:
         error: weft.workloads.InvalidAmount
       - name: no-such-pool
         unknown_instance: true
+        error: weft.workloads.NotFound
+      # Isolation pass 2: only the pool's own account acts on it; another account's pool
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.workloads.NotFound
       - name: resized
         when_subject_state: Active
@@ -5732,6 +5968,11 @@ commands:
     outcomes:
       - name: no-such-pool
         unknown_instance: true
+        error: weft.workloads.NotFound
+      # Isolation pass 2: only the pool's own account acts on it; another account's pool
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.workloads.NotFound
       - name: deleted
         moves: weft.workloads.WarmPool.delete

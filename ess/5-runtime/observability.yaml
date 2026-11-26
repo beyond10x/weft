@@ -720,7 +720,7 @@ commands:
       - name: instance-not-on-node
         when_related:
           via: input.instance_id
-          predicate: node_id != input.node_id
+          predicate: {any: [not defined(node_id), node_id != input.node_id]}
         error: weft.observability.InstanceNotOnNode
       # Two guards: `process == input.process` is unknown when both are absent, so the one Events
       # stream of an instance needs its own selector, or a second one would open.
@@ -1167,7 +1167,7 @@ commands:
       - name: instance-not-on-node
         when_related:
           via: input.instance_id
-          predicate: node_id != input.node_id
+          predicate: {any: [not defined(node_id), node_id != input.node_id]}
         error: weft.observability.InstanceNotOnNode
       - name: identity-not-valid
         when_related:

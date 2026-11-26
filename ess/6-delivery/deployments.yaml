@@ -394,6 +394,10 @@ entities:
     fields:
       - name: source_id
         type: weft.shared.DeploymentSourceId
+      # Isolation pass 2: the source's account, copied so a plan ties the translation to the
+      # caller's account without a second hop.
+      - name: account_id
+        type: weft.shared.AccountId
       # The source's formation, copied so a plan is checked against it.
       - name: formation_id
         type: weft.shared.FormationId
@@ -427,6 +431,7 @@ entities:
         target: weft.deployments.Translator
         cardinality: one
         via: translator_id
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
       - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
       - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
       # The revision this translation produced. formations.FormationRevision stores no
@@ -501,6 +506,9 @@ entities:
       name: plan_id
       type: weft.shared.PlanId
     fields:
+      # Isolation pass 2: the account of the translation or the release it was made from.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: formation_id
         type: weft.shared.FormationId
       - name: environment_id
@@ -540,6 +548,7 @@ entities:
         target: weft.deployments.Release
         cardinality: one
         via: live_release_id
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
       - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
       - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
       - {name: formation_revision, kind: references, target: weft.formations.FormationRevision, cardinality: one, via: formation_revision_id}
@@ -575,6 +584,9 @@ entities:
       name: release_id
       type: weft.shared.ReleaseId
     fields:
+      # Isolation pass 2: the plan's account, copied at apply.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: formation_id
         type: weft.shared.FormationId
       - name: environment_id
@@ -606,6 +618,7 @@ entities:
         target: weft.deployments.Release
         cardinality: one
         via: rollback_of
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
       - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
       - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
       - {name: formation_revision, kind: references, target: weft.formations.FormationRevision, cardinality: one, via: formation_revision_id}
@@ -1256,19 +1269,24 @@ commands:
   # in ESS 0.99.2.)
   # OPEN: whether the caller picks the translator or weft picks the newest registered one for the
   # kind and format version. Taken: the caller names it (the CLI picks the newest).
-  # OPEN (hardening pass 1 D3): not tied to caller.account_id: the account is on the source, a
-  # related row, and ESS compares the caller only with an input field or a stored field of the
-  # subject.
   - name: weft.deployments.TranslateSource
     naming:
       display: Translate a deployment source
     input:
       - {name: source_id, type: weft.shared.DeploymentSourceId}
+      # Isolation pass 2: the account the request acts in, so the source can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: source_kind, type: weft.deployments.SourceKind}
       - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
       - {name: translator_id, type: weft.shared.TranslatorId}
       - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing source (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.deployments.NotFound
       - name: environment-required
         when:
           all:
@@ -1286,6 +1304,11 @@ commands:
         error: weft.deployments.NotFound
       - name: no-such-translator
         when_related: {via: input.translator_id, exists: false}
+        error: weft.deployments.NotFound
+      # Isolation pass 2: a source of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: source-of-other-account
+        when_related: {via: input.source_id, predicate: account_id != input.account_id}
         error: weft.deployments.NotFound
       - name: source-withdrawn
         when_related: {via: input.source_id, predicate: state == Withdrawn}
@@ -1336,6 +1359,7 @@ commands:
         instance: translation_id
         sets:
           source_id: input.source_id
+          account_id: {related: {via: input.source_id, field: account_id}}
           formation_id: {related: {via: input.source_id, field: formation_id}}
           source_digest: {related: {via: input.source_id, field: source_digest}}
           translator_id: input.translator_id
@@ -1545,9 +1569,17 @@ commands:
       display: Plan a revision for an environment
     input:
       - {name: translation_id, type: weft.shared.TranslationId}
+      # Isolation pass 2: the account the request acts in, so the translation can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: environment_id, type: weft.shared.EnvironmentId}
       - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing translation (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.deployments.NotFound
       - name: no-such-translation
         when_related: {via: input.translation_id, exists: false}
         error: weft.deployments.NotFound
@@ -1555,13 +1587,16 @@ commands:
       - name: no-such-environment
         when_related: {via: input.environment_id, exists: false}
         error: weft.deployments.NotFound
+      # Isolation pass 2: a translation of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: translation-of-other-account
+        when_related: {via: input.translation_id, predicate: account_id != input.account_id}
+        error: weft.deployments.NotFound
       # hardening pass 1 disclosure (CreatePlan translation_id): the revision tie answers before
       # any state of the translation, with the not-found error, so a translation of another
       # formation discloses neither its existence nor its state to a caller who does not hold its
       # revision. A translation that holds no revision yet (Requested, Refused, Failed) still
       # answers its state below.
-      # OPEN: the real tie is the translation's account against caller.account_id; Translation has
-      # no account and a related row's field cannot be compared with the caller (ESS caller values).
       - name: translation-mismatch
         when_related:
           via: input.translation_id
@@ -1611,6 +1646,7 @@ commands:
         creates: weft.deployments.Plan
         instance: plan_id
         sets:
+          account_id: {related: {via: input.translation_id, field: account_id}}
           formation_id: {related: {via: input.translation_id, field: formation_id}}
           environment_id: input.environment_id
           formation_revision_id: input.formation_revision_id
@@ -1635,15 +1671,26 @@ commands:
       display: Plan a rollback to an earlier release
     input:
       - {name: release_id, type: weft.shared.ReleaseId}
+      # Isolation pass 2: the account the request acts in, so the release can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: environment_id, type: weft.shared.EnvironmentId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing release (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.deployments.NotFound
       - name: no-such-release
         when_related: {via: input.release_id, exists: false}
         error: weft.deployments.NotFound
+      # Isolation pass 2: a release of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: release-of-other-account
+        when_related: {via: input.release_id, predicate: account_id != input.account_id}
+        error: weft.deployments.NotFound
       # hardening pass 1 disclosure (PlanRollback release_id): a release of another environment
       # answers like a missing one, before its state, so its existence is not disclosed.
-      # OPEN: the real tie is the release's account against caller.account_id; Release has no
-      # account and a related row's field cannot be compared with the caller (ESS caller values).
       - name: release-mismatch
         when_related:
           via: input.release_id
@@ -1661,6 +1708,7 @@ commands:
         creates: weft.deployments.Plan
         instance: plan_id
         sets:
+          account_id: {related: {via: input.release_id, field: account_id}}
           formation_id: {related: {via: input.release_id, field: formation_id}}
           environment_id: input.environment_id
           formation_revision_id: {related: {via: input.release_id, field: formation_revision_id}}
@@ -1731,9 +1779,6 @@ commands:
         error: weft.deployments.StateConflict
 
   # Section 5 "Plan ... shown before apply": the user's "ask" step of `weft deploy` answered no.
-  # OPEN (hardening pass 1 D3): not tied to caller.account_id: Plan stores no account (only
-  # formation_id), and ESS compares the caller only with an input field or a stored field of the
-  # subject.
   - name: weft.deployments.DiscardPlan
     naming:
       display: Discard a plan
@@ -1742,6 +1787,11 @@ commands:
     outcomes:
       - name: no-such-plan
         unknown_instance: true
+        error: weft.deployments.NotFound
+      # Isolation pass 2: only the plan's own account acts on it; another account's plan
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.deployments.NotFound
       - name: discarded
         moves: weft.deployments.Plan.discard
@@ -1760,18 +1810,28 @@ commands:
   # no request can name another one (this replaces the refusal plan-mismatch, error PlanMismatch,
   # whose comparison with the input left the command without scenarios beside a row set in
   # ESS 0.99.2; see TranslateSource).
-  # OPEN (hardening pass 1 D3): not tied to caller.account_id: Plan stores no account (only
-  # formation_id), and ESS compares the caller only with an input field or a stored field of the
-  # subject.
   - name: weft.deployments.ApplyPlan
     naming:
       display: Apply a plan as a release
     input:
       - {name: plan_id, type: weft.shared.PlanId}
+      # Isolation pass 2: the account the request acts in, so the plan can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: strategy, type: weft.deployments.RolloutStrategy}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing plan (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.deployments.NotFound
       - name: no-such-plan
         when_related: {via: input.plan_id, exists: false}
+        error: weft.deployments.NotFound
+      # Isolation pass 2: a plan of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: plan-of-other-account
+        when_related: {via: input.plan_id, predicate: account_id != input.account_id}
         error: weft.deployments.NotFound
       - name: simulation-violations
         when_related: {via: input.plan_id, predicate: state == Blocked}
@@ -1789,6 +1849,7 @@ commands:
         creates: weft.deployments.Release
         instance: release_id
         sets:
+          account_id: {related: {via: input.plan_id, field: account_id}}
           formation_id: {related: {via: input.plan_id, field: formation_id}}
           environment_id: {related: {via: input.plan_id, field: environment_id}}
           formation_revision_id: {related: {via: input.plan_id, field: formation_revision_id}}

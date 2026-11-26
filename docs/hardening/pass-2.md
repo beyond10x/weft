@@ -832,3 +832,101 @@ Run: `task sim-explore-from` (seed 1, 1024 walks x 300 steps, 8 threads, settle 
 4. Walks reach Active assignments now: `nodes.Assign/assigned` 2901 hits, `CompleteDrain/drained`
    34, `RemoveNode/not-empty` 1 (the pool open items of pass 4). A Draining pool going back to
    Active stays an OPEN at `ess/1-infrastructure/infrastructure.yaml:874`.
+
+## Pass 8: isolation, the untied commands of pass 1 (2026-11-26)
+
+Work list: the "Untied" and "FOLLOW-UP" lines of `docs/hardening/pass-1.md` for workloads (:564),
+deployments (:559), pipelines (:539) and formations (:514-515). Rule: the frame of pass 1 (anchor,
+tie, closed transitively). Branch `hardening/isolation-2`, one commit per domain.
+
+Check (scratch, not committed): a jq script over `ess specify compile --path ess --format json`
+lists every command a tenant actor may send whose identifier inputs (operator rows left out) are not
+all tied, transitively, to an anchor `<x> != caller.account_id` (input `when`) or
+`account_id != caller.account_id` (subject). Plant first: with `secret-of-other-account` of
+`AddSecretVersion` (`ess/5-runtime/secrets.yaml:548`) deleted in a scratch copy it reported
+`AddSecretVersion untied=secret_id`; on the real tree it reports nothing for secrets.
+
+| domain | untied before | untied after | commands tied | rows given `account_id` |
+| --- | --- | --- | --- | --- |
+| workloads | 24 | 3 | 21 | Invocation, Job, Session, Schedule, Trigger, WarmPool |
+| deployments | 5 | 0 | 5 | Translation, Plan, Release |
+| pipelines | 8 | 2 | 6 | RunnerJob, BuildCache, DeployGate, GateCheck |
+| formations | 27 | 10 | 17 | Environment |
+
+Every new row field is copied at create (from the workload, source, translation, release, plan,
+pool, gate or formation, or from the account input the create already ties) and has a
+`references` relation to `weft.accounts.Account`. Every new refusal answers with the not-found
+error of the row it guards, after the existence checks and before any state check (no
+disclosure). 78 outcomes were added (2444 -> 2522 declared).
+
+### What changed
+
+- workloads: 12 commands addressed by the row get `not-callers-account` on the subject
+  (`CancelJob` `ess/4-applications/workloads.yaml:4720`, Attach/Detach/CloseSession,
+  Pause/Resume/DeleteSchedule, Disable/Enable/DeleteTrigger, Resize/DeleteWarmPool). 9 commands
+  addressed through a workload or an instance get an `account_id` input, an input guard against
+  the caller and `workload-of-other-account` or `instance-of-other-account`
+  (`WorkloadNotFound`, `NotFound`): DefineService (:3502), CreateSchedule, CreateTrigger,
+  CreateWarmPool, OpenSession, SubmitJob, CreateBox, RestoreSnapshot, TakeSnapshot (:5667).
+- deployments: TranslateSource (`ess/6-delivery/deployments.yaml:1272`), CreatePlan (:1567),
+  PlanRollback (:1669), ApplyPlan (:1813) get an `account_id` input, an input guard and a
+  source/translation/release/plan-of-other-account tie; DiscardPlan (:1782) a subject guard. All
+  answer `NotFound`. Translation got `account_id` beside Plan and Release, so CreatePlan ties its
+  translation in one hop. The four OPEN notes saying these could not be tied are removed.
+- pipelines: the 6 commands whose account was on a related row: AddDeployGate
+  (`ess/6-delivery/pipelines.yaml:1421`: `account_id` input, input guard, row set
+  `environment-of-other-account` at :1515 over the environment's formation,
+  `EnvironmentUnavailable`), CancelRunnerJob (:1123), EvictBuildCache (:1388), RemoveDeployGate
+  (:1555), ApproveGateCheck (:1745), RejectGateCheck (:1796) (subject guard, `NotFound`, before
+  `gate-mismatch`).
+- formations: 15 commands anchored on `formation_id` get the secrets pattern (`account_id`
+  input, input guard, `formation-of-other-account`, `NoSuchFormation`): RemoveComponent
+  (`ess/4-applications/formations.yaml:1192`), RemoveFromBorder, RemoveLink, RemoveEndpoint,
+  RemoveRoute, ChangeConfig, RemoveConfig, UnmountConfig,
+  ChangeConfigOverride, RemoveConfigOverride, SetScale, ChangeScale, RemoveScale,
+  CreateEnvironment (:914), CreatePreviewEnvironment. Environment gets `account_id`, so
+  SetEnvironmentQuota (:974) and RetireEnvironment get a subject guard (`NoSuchEnvironment`).
+- `sim/experiments/full-setup.yaml`, `stuck-placement.yaml`: `account_id` added to the inputs of
+  DefineService and CreateEnvironment (new required input).
+
+### What stays untied and why
+
+- workloads Invoke (:4309), StopInstance (:3301), WakeService (:3972): Instance or Scheduler send
+  them too and declare no caller attributes; a caller read is then refused (ESS-COMMAND-004,
+  probed). OPEN at each: split the tenant path into its own command, or give those actors an
+  account.
+- pipelines DisconnectForge (:717), RetireRunnerPool (:841): ESS-COMMAND-009 (a row-set guard
+  beside a subject guard), out of this pass as pass 1 marked it.
+- formations: the 9 commands Translator also sends, left as the brief says: AddComponent (:1151),
+  AddEndpoint (:1480), AddLink (:1279), AddRoute (:1734), AddToBorder (:1372), CommitRevision
+  (:880), CreateConfig (:1839), MountConfig (:1983), SetConfigOverride (:2085). Translator now
+  declares caller attributes (`ess/9-actors/actors.yaml:28`), so the reason of pass 1 is gone;
+  they can be tied the same way in a later pass. CreateExport (:1582): `to_account_id` is
+  another account by design (same tenant, external), `endpoint_id` is held by an external
+  (`endpoint-not-in-account`).
+- formations RetireEnvironment: `releases-live` is `before_row` and answers before the new
+  account guard, so another account's environment with a live release answers `ReleasesLive`
+  (OPEN at :1123).
+
+### Explore and gate
+
+`task sim-explore-from` (seed 1, 1024 walks x 300 steps, 8 threads, settle 12). Before: the same
+weft-sim binary on a snapshot of `4ce56ee`.
+
+| | outcomes | states | transitions | violations | unsupported | undeclared | time |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| before | 1566 / 2444 | 197 / 328 | 116 / 221 | 0 | 0 | 0 | 283.3 s |
+| after | 1594 / 2522 | 195 / 328 | 114 / 221 | 0 | 1 | 0 | 283.9 s |
+
+30 of the 78 new outcomes were reached (23 ties, 7 subject guards). No input
+`not-callers-account` was: weft-sim takes the caller's account from the request's `account_id`
+(`tools/sim/src/explore.rs:106`). Outcomes that existed before: 1564 reached against 1566, and no
+changed command lost an accepting outcome. States and transitions moved by 2 each, inside the
+seed variance. The one `unsupported` answer was
+`observability.OpenLogStream/instance-not-on-node` (`ess/5-runtime/observability.yaml:720-723`,
+`node_id != input.node_id` on an Instance with no node yet, walk 550), unchanged since pass 7 and
+reached because the walks shifted. Fixed by the integrator in this branch, as in pass 7 finding 1:
+`any: [not defined(node_id), node_id != input.node_id]` (an instance with no node is on no node),
+and the same in the guard at :1167-1171. After, rebased on main `3946ced` (step 2b): 0 `unsupported`, 0
+violations, outcomes 1590 / 2525, 288 s.
+`task sim-experiments`: 0 violations in all 5. `slot task check`: exit 0.
