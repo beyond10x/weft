@@ -5,10 +5,17 @@ tasks:
     cmds: [{task: check}]
 
   check:
-    desc: The gate. Validate the ESS specification and hold its layers.
+    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers, test the CI path filter and weft-sim.
     cmds:
       - task: spec
       - task: layers
+      - task: ci-paths
+      - task: sim-test
+
+  ci-paths:
+    desc: Test the planning-only path filter of the CI gate on both sides.
+    cmds:
+      - tools/test-planning-only.sh
 
   spec:
     desc: Validate the ESS domain model.
@@ -37,9 +44,10 @@ tasks:
       - cargo build
 
   sim-test:
-    desc: Test weft-sim. One test binary; a test over 60 s is killed, the step over 120 s fails.
+    desc: Test weft-sim. Builds the test binary first; then a test over 60 s is killed and the test step over 120 s fails.
     dir: tools/sim
     cmds:
+      - cargo nextest run --no-run
       - timeout 120 cargo nextest run
 
   sim-explore:
