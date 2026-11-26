@@ -10,7 +10,7 @@
 #   --snapshot  take files from .check/snapshot, the named paths from the working tree
 # Prints the synthesis summary, the refusal counts by code for this domain's outcomes, then runs the
 # suite against the interpreted target and prints its summary and the failed scenarios of the domain
-# (disclosure variants left out). SLOT_FLAGS defaults to `--timeout 30m` (host operator, 2026-11-26: the build node ends a job at 10 min unless it names its time); SLOT_FLAGS=--local keeps the job on this host (a local `ess` build). Synthesis and the run go through `slot` with `--jobs 2` (host operator, 2026-11-26 05:14 CET: a synthesis held 22 GB and the host ran out of memory). Run one at a time.
+# (disclosure variants left out). SLOT_FLAGS defaults to `--timeout 30m` (2026-11-26: the build node ends a job at 10 min unless it names its time); SLOT_FLAGS=--local keeps the job on this host (a local `ess` build). Synthesis and the run go through `slot` with `--jobs 2` (2026-11-26 05:14 CET: a synthesis held 22 GB and the host ran out of memory). Run one at a time.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"

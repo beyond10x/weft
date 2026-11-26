@@ -528,7 +528,7 @@ held services but no instance. weft-sim changes (`tools/sim`, no `ess/` change):
 
 Numbers. A frozen copy of `ess/` (it validated at 11:20; other sessions were editing). Before: the
 old weft-sim, 1024 walks x 300 steps, 8 threads. After: 16-walk probes only; the 1024-walk run
-after the change was stopped by the host operator's order.
+after the change was stopped by the owner's order.
 
 | | outcomes | PlaceInstance | ScheduleInstance | IssueIdentityDocument | DeliverSecret | replay a walk |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -556,7 +556,7 @@ pass.
 
 ## Seed variance of explore (2026-11-26)
 
-Asked by the owner (relayed by the host operator, 11:55 CET): "could we run multiple seeds in parallell ?", after
+Asked by the owner (11:55 CET): "could we run multiple seeds in parallell ?", after
 pass 4 reported 1312 -> 1327 outcomes from one seed each.
 
 Run: `weft-sim explore --spec ess --from sim/experiments/full-setup.yaml --seed <s> --walks 1024

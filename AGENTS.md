@@ -30,7 +30,7 @@ none is written before the specification of what it implements.
 - `tools/synth-domain.sh [--snapshot] <name> [paths]`: synthesizes the conformance suite of one
   domain on the subset of domains it needs (about 80 s; the whole system takes 451 s) and runs it
   against the interpreted target. Synthesis goes through `slot` with `--jobs 2`, one run at a time
-  (host operator, 2026-11-26: a synthesis held 22 GB and the host ran out of memory).
+  (2026-11-26: a synthesis held 22 GB and the host ran out of memory).
 - `docs/domain-sketch.md`: the design every specification file follows.
 
 ## Rules for the specification
