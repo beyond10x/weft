@@ -4,7 +4,7 @@ id: design:tenant-clusters
 kind: design
 status: draft
 title: 'Clusters as tenant resources: rename the installation to Cloud, account-owned clusters, workloads deploy into a cluster'
-revision: 4
+revision: 6
 ---
 ## Goal
 
@@ -70,6 +70,49 @@ patterns". Distinct from a formation's topology (components and links, sketch §
   `link-crossings`, `hops-per-message`, `cross-link-bytes` per experiment, lower is better; the hill
   climb picks the topology and placement rules that lower them.
 
+
+## Step 2b, scheduling: a placement that crosses a closed link is refused
+
+Specified so far: the topology rows (`ess/3-resources/cluster.yaml`). Not yet: scheduling reading
+them (OPEN at `ess/5-runtime/scheduling.yaml:842`). This section is the rule for that step.
+
+What a placement may not do: put an instance in a group joined by a declared link with
+`crossable: false` to a group that already holds an active placement of the same formation. A
+derived link (Star, Ring, Mesh, Tree, Line) is crossable (cluster.yaml, OPEN on derived links), so
+only a `Custom` topology's declared links can refuse.
+
+How it is written, within ESS 0.99.2 (one nested walk per guard; no join of two row sets):
+
+- `PlacementDecision` stores `formation_id` and `topology_group_id: Optional<TopologyGroupId>`
+  (absent: the cluster has no topology, or the node's pool is in no group).
+- `PlaceInstance` takes three inputs the Scheduler reads from views, as it reads `account_id` and
+  `cluster_id` today: `cluster_node_pool_id: Optional<ClusterNodePoolId>` (the node's pool as a
+  cluster pool; absent for a shared pool), `topology_group_id: Optional<TopologyGroupId>` (the
+  node's group) and `peer_groups: List<TopologyGroupId>` (the groups of the formation's active
+  placements).
+- Guards, in this order, each a refusal (default deny, no fallback), `ess/5-runtime/scheduling.yaml`
+  `PlaceInstance`:
+  1. `cluster-pool-differs` (`TopologyMismatch`): the cluster pool is not the request's cluster's,
+     or its `node_pool_id` is not the node's pool.
+  2. `group-not-of-node` (`TopologyMismatch`): the group is not Active, not of the request's
+     cluster, or does not list that cluster pool.
+  3. `crosses-closed-link` (`CrossesClosedLink`): a Declared link with `crossable == false` joins
+     the group and a peer group, either direction.
+- Not checked, the Scheduler's word (weft-control's own actor, the same trust as `account_id`):
+  that a group is given where the node's pool is in one, and that `peer_groups` names every group
+  of the formation's placements and only those. Each needs a walk inside a walk (a group row
+  inside the node's cluster pool; a placement row inside each listed group), which ESS 0.99.2
+  refuses. A Scheduler that leaves a group out is a Scheduler defect, for weft-sim's link check.
+
+Which instances are peers: every active placement of the formation. Not only the components a
+formation link joins: the formation's links and their `TrafficPattern` are not read by scheduling
+in this step. OPEN: refine peers to linked components once a formation link carries its pattern.
+
+Costs and scores (bandwidth, latency, the KPIs `link-crossings`, `hops-per-message`,
+`cross-link-bytes`) stay in the simulator and in the Scheduler's choice among nodes that pass the
+guards; the specification only refuses. Next for weft-sim: a system check `closed-link`, no two active
+placements of one formation on groups joined by a closed link.
+
 ## Step 3: workloads deploy into a cluster
 
 - `formations.Formation` gets `cluster_id` (required; the CLI fills the default cluster).
@@ -83,6 +126,7 @@ patterns". Distinct from a formation's topology (components and links, sketch §
 - Step 1: `ess/1-infrastructure/infrastructure.yaml` (domain `weft.infrastructure`, entity `Cloud`).
 - Step 2 and 2b: `ess/3-resources/cluster.yaml`: 5 entities, 13 commands, 6 views, `TrafficPattern`; 28 OPENs. Actors, component `weft-control`, bindings `cluster-create-node-pool`, `cluster-delete-node-pool` (`ess/components.yaml`).
 - Step 3: `Formation.cluster_id`, `CreateFormation` refuses with `NoSuchCluster`; `SchedulingRequest.cluster_id` copied from the formation; `PlaceInstance` refuses another cluster's pool, a cluster's weaker isolation and zones outside the cluster (`NodeOutsideCluster`, `IsolationTooWeak`, `ZoneMismatch`). An account cluster with a dedicated pool runs only on its own pools.
+- Step 2b, scheduling: `PlaceInstance` guards `cluster-pool-differs`, `group-not-of-node`, `crosses-closed-link` (errors `TopologyMismatch`, `CrossesClosedLink`); `PlacementDecision.formation_id`, `topology_group_id`.
 - Not run by synthesis: it exceeds 30 min since hardening pass 1 (`docs/ess-gaps.md` gap 24).
 
 ## Stage B (later): dedicated control plane

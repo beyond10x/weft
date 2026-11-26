@@ -199,6 +199,12 @@ entities:
         type: weft.shared.NodeId
       - name: zone
         type: weft.shared.ZoneName
+      # design:tenant-clusters step 2b: the request's formation and the node's topology group (absent:
+      # no topology, or the pool is in no group), so the Scheduler reads a formation's peer groups.
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: topology_group_id
+        type: Optional<weft.shared.TopologyGroupId>
       # The level the node runs the instance at; at least the request's minimum (§10).
       - name: isolation
         type: weft.shared.IsolationLevel
@@ -236,6 +242,8 @@ entities:
       - name: released_at
         type: Optional<Timestamp>
     relations:
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: topology_group, kind: references, target: weft.cluster.TopologyGroup, cardinality: one, via: topology_group_id}
       - name: request
         kind: references
         target: weft.scheduling.SchedulingRequest
@@ -425,6 +433,10 @@ errors:
     summary: The instance has a scheduling request that is pending or unschedulable already.
   - name: weft.scheduling.RequestMismatch
     summary: The command names a tenant or a request other than the one the record holds.
+  - name: weft.scheduling.TopologyMismatch
+    summary: The cluster pool or topology group named is not the node's, not the cluster's, or not active.
+  - name: weft.scheduling.CrossesClosedLink
+    summary: The node's group and a group holding the formation's placements are joined by a link traffic may not cross.
   - name: weft.scheduling.RequestReserved
     summary: The request holds a live placement decision; release it first.
   - name: weft.scheduling.IsolationTooWeak
@@ -839,9 +851,10 @@ commands:
   # instances of different tenants never share a node.
   # design:tenant-clusters step 3: a placement stays inside its request's cluster (cloud, node
   # pools, zones, minimum isolation; guards below).
-  # OPEN: topology-aware placement (design:tenant-clusters step 2b: weft.cluster Topology,
-  # TopologyGroup and TopologyLink against a formation's TrafficPattern; refuse a placement that
-  # crosses a link traffic may not cross) is not specified in this step.
+  # design:tenant-clusters step 2b, scheduling: a placement that crosses a closed link of the
+  # cluster's topology is refused (guards cluster-pool-differs, group-not-of-node,
+  # crosses-closed-link). OPEN: peers are every active placement of the formation, not only the
+  # components a formation link joins; refined once a formation link carries its TrafficPattern.
   - name: weft.scheduling.PlaceInstance
     naming:
       display: Place an instance on a node
@@ -862,6 +875,15 @@ commands:
       - {name: zone, type: weft.shared.ZoneName}
       - {name: isolation, type: weft.shared.IsolationLevel}
       - {name: bindings, type: List<weft.shared.BindingId>}
+      # design:tenant-clusters step 2b, scheduling: the topology of the request's cluster, as the
+      # Scheduler reads it from weft.cluster's views, like account_id and cluster_id above. The
+      # node's pool as a cluster pool (absent for a shared pool), the node's group (absent: no
+      # topology, or the pool is in no group), and the groups of the formation's active placements.
+      # Guards tie the first two to the node; the Scheduler's word is taken that peer_groups is
+      # complete and that a group is given where one exists (design, "Not checked").
+      - {name: cluster_node_pool_id, type: Optional<weft.shared.ClusterNodePoolId>}
+      - {name: topology_group_id, type: Optional<weft.shared.TopologyGroupId>}
+      - {name: peer_groups, type: List<weft.shared.TopologyGroupId>}
       # The decision instant on the Scheduler's clock, never minted: it starts the assignment's
       # lease (PlacementBound -> weft.nodes.Assign `assigned_at`), and a minted Timestamp is a
       # fixed day in 2020 (weft-sim full setup, 2026-11-26). ESS 0.99.2 refuses `now` as a value
@@ -1068,6 +1090,57 @@ commands:
                     that: {all: ["p.cluster_id == cluster_id", "defined(p.node_pool_id)", "p.node_pool_id == input.node_pool_id"]}
           exists: true
         error: weft.scheduling.NodeOutsideCluster
+      # design:tenant-clusters step 2b, scheduling: a placement that crosses a closed link is
+      # refused. Three guards, each one walk (ESS 0.99.2): the cluster pool is the node's pool and
+      # the request's cluster's; the group is Active, of the cluster, and lists that pool; no
+      # declared link with crossable false joins the group and a peer group, either direction.
+      # Derived links are crossable (weft.cluster TopologyLink OPEN), so only a Custom topology's
+      # declared links refuse.
+      - name: cluster-pool-differs
+        when: defined(input.cluster_node_pool_id)
+        when_related:
+          entity: weft.cluster.ClusterNodePool
+          where:
+            all:
+              - cluster_node_pool_id == input.cluster_node_pool_id
+              - any:
+                  - cluster_id != input.cluster_id
+                  - not defined(node_pool_id)
+                  - not defined(input.node_pool_id)
+                  - {all: ["defined(node_pool_id)", "defined(input.node_pool_id)", "node_pool_id != input.node_pool_id"]}
+          exists: true
+        error: weft.scheduling.TopologyMismatch
+      - name: group-not-of-node
+        when: defined(input.topology_group_id)
+        when_related:
+          entity: weft.cluster.TopologyGroup
+          where:
+            all:
+              - topology_group_id == input.topology_group_id
+              - any:
+                  - state != Active
+                  - cluster_id != input.cluster_id
+                  - not defined(input.cluster_node_pool_id)
+                  - not: {exists: {in: node_pools, as: p, that: "p == input.cluster_node_pool_id"}}
+          exists: true
+        error: weft.scheduling.TopologyMismatch
+      - name: crosses-closed-link
+        when: defined(input.topology_group_id)
+        when_related:
+          entity: weft.cluster.TopologyLink
+          where:
+            all:
+              - state == Declared
+              - crossable == false
+              - any:
+                  - all:
+                      - from_group_id == input.topology_group_id
+                      - exists: {in: input.peer_groups, as: g, that: "to_group_id == g"}
+                  - all:
+                      - to_group_id == input.topology_group_id
+                      - exists: {in: input.peer_groups, as: g, that: "from_group_id == g"}
+          exists: true
+        error: weft.scheduling.CrossesClosedLink
       # A node with no observation yet offers no level (default deny).
       - name: isolation-not-offered
         when_related:
@@ -1117,6 +1190,8 @@ commands:
           min_isolation: {related: {via: input.request_id, field: min_isolation}}
           assigned: false
           bindings: input.bindings
+          formation_id: {related: {via: input.request_id, field: formation_id}}
+          topology_group_id: input.topology_group_id
           gang_id: {related: {via: input.request_id, field: gang_id}}
           priority_value: {related: {via: input.request_id, field: priority_value}}
           preemptible: {related: {via: input.request_id, field: preemptible}}

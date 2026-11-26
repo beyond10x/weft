@@ -438,7 +438,7 @@ controllers:
     view: weft.scheduling.PendingRequests
     command: weft.scheduling.PlaceInstance
     actor: weft.actors.Scheduler
-    input: {request_id: row.request_id, tenant_id: row.tenant_id, account_id: row.account_id, cluster_id: row.cluster_id, node_id: cand.node_id, node_pool_id: cand.node_pool_id, zone: cand.zone, isolation: vary.isolation, bindings: [], decided_at: "${now}"}
+    input: {request_id: row.request_id, tenant_id: row.tenant_id, account_id: row.account_id, cluster_id: row.cluster_id, node_id: cand.node_id, node_pool_id: cand.node_pool_id, zone: cand.zone, isolation: vary.isolation, bindings: [], cluster_node_pool_id: null, topology_group_id: null, peer_groups: [], decided_at: "${now}"}
     each:
       view: weft.infrastructure.Nodes
       vary: {isolation: [Container, MicroVm]}
