@@ -4,7 +4,7 @@ id: design:protocol-ports
 kind: design
 status: draft
 title: Protocol ports from RFCs, adapters as managed products, sessions above
-revision: 1
+revision: 2
 ---
 ## Goal
 
