@@ -1,0 +1,183 @@
+format: weft-sim-experiment/1
+name: closed-link
+summary: >-
+  Topology-aware placement (design:tenant-clusters, Step 2b scheduling). acme's cluster has two
+  dedicated pools, a and b, with one Ready node each, and a Custom topology whose groups A and B
+  hold one pool each, joined by a declared link with crossable false. Formation shop has one
+  service of two replicas, so two scheduling requests. The Scheduler places them as setup steps:
+  instance 1 on pool a in group A with no peers is placed; instance 2 on pool b in group B with
+  peer A crosses the closed link; group A given for the node of pool b is not the node's group;
+  cluster pool a given for the node of pool b differs from the node's pool; instance 2 on pool a
+  in group A with peer A is placed. The check closed-link holds after every step.
+seed: 11
+
+vars:
+  zone: z1
+  isolation_facts: {kvm_present: true, cgroups_delegated: true, egress_denied: true, gpu_passthrough: false, levels: [Container, MicroVm]}
+  capacity: [{resource_class: cpu, amount: 32}]
+  claims: [{name: cpu, class: cpu, amount: 1, selector: {}}]
+  processes: [{name: main, role: Main, command: [run], environment: {}, checks: []}]
+  restart_policy: {mode: Always, backoff_initial_seconds: 1, backoff_max_seconds: 60, backoff_limit: 5, backoff_window_seconds: 600}
+  scale_rule: {min_replicas: 1, max_replicas: 4, metric: Requests, target: 10}
+
+chain:
+  - weft.cluster.CreateClusterTopology
+  - weft.cluster.AddTopologyGroup
+  - weft.cluster.DeclareTopologyLink
+  - weft.workloads.RequestReplica
+  - weft.scheduling.PlaceInstance
+
+setup:
+  - label: create-cloud
+    command: weft.infrastructure.CreateCloud
+    actor: weft.actors.ClusterOperator
+    input: {name: sim, placement: Hosts, access_mode: Federated, policy: {minimum_isolation: Container}, control_plane: {replicas: 3}}
+    expect: created
+    bind: {cloud_id: cloud_id}
+  - label: declare-zone
+    command: weft.infrastructure.DeclareZone
+    actor: weft.actors.ClusterOperator
+    input: {zone: "${zone}", cloud_id: "${cloud_id}"}
+    expect: declared
+  - label: define-priority
+    command: weft.infrastructure.DefinePriorityClass
+    actor: weft.actors.ClusterOperator
+    input: {name: standard, value: 100, preempts: false, preemptible: true, grace_seconds: 30}
+    expect: defined
+  - label: register-runtime
+    command: weft.workloads.RegisterRuntime
+    actor: weft.actors.ClusterOperator
+    input: {name: oci, version: "1", package_kinds: [Image], minimum_isolation: Container}
+    expect: registered
+    bind: {runtime_id: runtime_id}
+  - label: create-tenant
+    command: weft.accounts.CreateTenant
+    actor: weft.actors.ClusterOperator
+    input: {name: acme}
+    expect: created
+    bind: {tenant_a: tenant_id}
+  - label: create-account
+    command: weft.accounts.CreateAccount
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}"}
+    input: {tenant_id: "${tenant_a}", name: prod}
+    expect: created
+    bind: {account_a: account_id}
+  - label: grant-quota
+    command: weft.accounts.GrantTopQuota
+    actor: weft.actors.ClusterOperator
+    input: {account_id: "${account_a}", resource_class: cpu, limit: 64}
+    expect: granted
+  - label: create-cluster
+    command: weft.cluster.CreateCluster
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cloud_id: "${cloud_id}", name: acme-main, control_plane: Shared, min_isolation: Container, zones: ["${zone}"]}
+    expect: created
+    bind: {cluster_a: cluster_id}
+  - label: add-pool-a
+    command: weft.cluster.AddClusterNodePool
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", name: pool-a, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 0, max_size: 4}
+    expect: requested
+    bind: {cnp_a: cluster_node_pool_id, pool_a: NodePoolCreated.node_pool_id}
+  - label: add-pool-b
+    command: weft.cluster.AddClusterNodePool
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", name: pool-b, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 0, max_size: 4}
+    expect: requested
+    bind: {cnp_b: cluster_node_pool_id, pool_b: NodePoolCreated.node_pool_id}
+  - {label: pool-a-ready, command: weft.cluster.RecordClusterNodePoolReady, actor: weft.actors.ControlPlane, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {cluster_node_pool_id: "${cnp_a}", node_pool_id: "${pool_a}"}, expect: ready}
+  - {label: pool-b-ready, command: weft.cluster.RecordClusterNodePoolReady, actor: weft.actors.ControlPlane, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {cluster_node_pool_id: "${cnp_b}", node_pool_id: "${pool_b}"}, expect: ready}
+  - {label: provision-a, command: weft.infrastructure.ProvisionPoolNode, actor: weft.actors.ClusterOperator, input: {node_pool_id: "${pool_a}", join_token_expires_at: "2026-01-01T06:00:00Z"}, expect: provisioned, bind: {node_a: node_id, token_a: join_token}}
+  - {label: provision-b, command: weft.infrastructure.ProvisionPoolNode, actor: weft.actors.ClusterOperator, input: {node_pool_id: "${pool_b}", join_token_expires_at: "2026-01-01T06:00:00Z"}, expect: provisioned, bind: {node_b: node_id, token_b: join_token}}
+  - {label: join-a, command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_a}", join_token: "${token_a}"}, expect: joined}
+  - {label: join-b, command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_b}", join_token: "${token_b}"}, expect: joined}
+  - {label: observe-a, command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_a}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: observe-b, command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_b}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: session-a, command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_a}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
+  - {label: session-b, command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_b}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
+  - label: create-topology
+    command: weft.cluster.CreateClusterTopology
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", kind: Custom}
+    expect: created
+    bind: {topology_a: topology_id}
+  - label: add-group-a
+    command: weft.cluster.AddTopologyGroup
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", topology_id: "${topology_a}", name: group-a, node_pools: ["${cnp_a}"], role: Member, position: 0, parent_group_id: null}
+    expect: added
+    bind: {group_a: topology_group_id}
+  - label: add-group-b
+    command: weft.cluster.AddTopologyGroup
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", topology_id: "${topology_a}", name: group-b, node_pools: ["${cnp_b}"], role: Member, position: 1, parent_group_id: null}
+    expect: added
+    bind: {group_b: topology_group_id}
+  - label: declare-closed-link
+    command: weft.cluster.DeclareTopologyLink
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", topology_id: "${topology_a}", from_group_id: "${group_a}", to_group_id: "${group_b}", bandwidth_mbps: 1000, latency_us: 200, crossable: false}
+    expect: declared
+
+  - label: create-formation
+    command: weft.formations.CreateFormation
+    actor: weft.actors.AccountAdmin
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", name: shop, zones: ["${zone}"], cluster_id: "${cluster_a}"}
+    expect: created
+    bind: {formation: formation_id}
+  - {label: add-component, command: weft.formations.AddComponent, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation}", name: api}, expect: added}
+  - {label: commit, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation}"}, expect: committed, bind: {rev: revision_id}}
+  - {label: environment, command: weft.formations.CreateEnvironment, actor: weft.actors.AccountAdmin, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation}", account_id: "${account_a}", name: prod, protected: false}, expect: created, bind: {env: environment_id}}
+  - {label: artifact, command: weft.artifacts.RegisterArtifact, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {artifact_digest: "sha256:acme", account_id: "${account_a}", kind: Image, size_bytes: 1000, signature: sig, signer_key_id: k1, built_from: null}, expect: registered}
+  - label: workload
+    command: weft.workloads.DefineWorkload
+    actor: weft.actors.Deployer
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", formation_id: "${formation}", formation_revision_id: "${rev}", environment_id: "${env}", component: api, package_kind: Image, artifact_digest: "sha256:acme", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
+    expect: defined
+    bind: {workload: workload_id}
+  - {label: service, command: weft.workloads.DefineService, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {workload_id: "${workload}", account_id: "${account_a}", replicas: 2, scale_rule: "${scale_rule}", disruption_budget: null, sleep_policy: null, wake_deadline: null}, expect: defined, bind: {service: service_id}}
+  - {label: request-replica-1, command: weft.workloads.RequestReplica, actor: weft.actors.Scheduler, input: {service_id: "${service}", replica_index: 0}, expect: requested, bind: {req_1: SchedulingRequested.request_id}}
+  - {label: request-replica-2, command: weft.workloads.RequestReplica, actor: weft.actors.Scheduler, input: {service_id: "${service}", replica_index: 1}, expect: requested, bind: {req_2: SchedulingRequested.request_id}}
+
+  - label: place-1-group-a
+    command: weft.scheduling.PlaceInstance
+    actor: weft.actors.Scheduler
+    input: {request_id: "${req_1}", tenant_id: "${tenant_a}", account_id: "${account_a}", cluster_id: "${cluster_a}", node_id: "${node_a}", node_pool_id: "${pool_a}", zone: "${zone}", isolation: Container, bindings: [], cluster_node_pool_id: "${cnp_a}", topology_group_id: "${group_a}", peer_groups: [], decided_at: "${now}"}
+    expect: placed
+  - label: place-2-group-b-crosses
+    command: weft.scheduling.PlaceInstance
+    actor: weft.actors.Scheduler
+    input: {request_id: "${req_2}", tenant_id: "${tenant_a}", account_id: "${account_a}", cluster_id: "${cluster_a}", node_id: "${node_b}", node_pool_id: "${pool_b}", zone: "${zone}", isolation: Container, bindings: [], cluster_node_pool_id: "${cnp_b}", topology_group_id: "${group_b}", peer_groups: ["${group_a}"], decided_at: "${now}"}
+    expect: crosses-closed-link
+  - label: place-2-wrong-group
+    command: weft.scheduling.PlaceInstance
+    actor: weft.actors.Scheduler
+    input: {request_id: "${req_2}", tenant_id: "${tenant_a}", account_id: "${account_a}", cluster_id: "${cluster_a}", node_id: "${node_b}", node_pool_id: "${pool_b}", zone: "${zone}", isolation: Container, bindings: [], cluster_node_pool_id: "${cnp_b}", topology_group_id: "${group_a}", peer_groups: ["${group_a}"], decided_at: "${now}"}
+    expect: group-not-of-node
+  - label: place-2-wrong-cluster-pool
+    command: weft.scheduling.PlaceInstance
+    actor: weft.actors.Scheduler
+    input: {request_id: "${req_2}", tenant_id: "${tenant_a}", account_id: "${account_a}", cluster_id: "${cluster_a}", node_id: "${node_b}", node_pool_id: "${pool_b}", zone: "${zone}", isolation: Container, bindings: [], cluster_node_pool_id: "${cnp_a}", topology_group_id: "${group_b}", peer_groups: ["${group_a}"], decided_at: "${now}"}
+    expect: cluster-pool-differs
+  - label: place-2-group-a
+    command: weft.scheduling.PlaceInstance
+    actor: weft.actors.Scheduler
+    input: {request_id: "${req_2}", tenant_id: "${tenant_a}", account_id: "${account_a}", cluster_id: "${cluster_a}", node_id: "${node_a}", node_pool_id: "${pool_a}", zone: "${zone}", isolation: Container, bindings: [], cluster_node_pool_id: "${cnp_a}", topology_group_id: "${group_a}", peer_groups: ["${group_a}"], decided_at: "${now}"}
+    expect: placed
+
+ticks: 1
+
+invariants: [no-double-placement, quota-conservation, tenant-isolation, closed-link]
+
+find:
+  gaps: true

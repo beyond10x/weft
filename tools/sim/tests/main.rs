@@ -320,17 +320,23 @@ fn fixture_invariants() -> PathBuf {
 /// The invariants fixture without Assign's `instance-assigned` guard (the lines between the guard
 /// comments): an instance can be assigned twice, and a second delivery of Assign assigns again.
 fn unguarded() -> PathBuf {
-    let from = fixture_invariants();
-    let to = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fixture-invariants-unguarded");
+    without_guard(&fixture_invariants(), "nodes.yaml", "instance-assigned")
+}
+
+/// A copy of the fixture `from` (under the test's target directory) whose `file` lacks the lines
+/// between its guard comments, the outcome `guard` among them.
+fn without_guard(from: &std::path::Path, file: &str, guard: &str) -> PathBuf {
+    let name = format!("{}-unguarded", from.file_name().unwrap().to_str().unwrap());
+    let to = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(name);
     std::fs::create_dir_all(&to).unwrap();
-    for entry in std::fs::read_dir(&from).unwrap() {
+    for entry in std::fs::read_dir(from).unwrap() {
         let path = entry.unwrap().path();
         let mut text = std::fs::read_to_string(&path).unwrap();
-        if path.file_name().unwrap() == "nodes.yaml" {
+        if path.file_name().unwrap() == file {
             let begin = text.find("      # guard begin").unwrap();
             let end = text.find("      # guard end\n").unwrap() + "      # guard end\n".len();
             text.replace_range(begin..end, "");
-            assert!(!text.contains("instance-assigned"));
+            assert!(!text.contains(guard));
         }
         std::fs::write(to.join(path.file_name().unwrap()), text).unwrap();
     }
@@ -464,4 +470,45 @@ fn a_walk_whose_controllers_never_settle_is_a_no_convergence_violation() {
     let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap();
     let ticks = trace["steps"].as_array().unwrap().iter().filter(|s| s["by"] == "converge").count();
     assert!(ticks >= 4, "at least one refused Assign a tick: {ticks}");
+}
+
+// ---- closed-link ----------------------------------------------------------------------------
+
+fn fixture_closed_link() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture-closed-link")
+}
+
+/// Runs the closed-link fixture's setup on `dir`: the setup's refusals and its violations.
+fn closed_link_setup(dir: &std::path::Path) -> (Vec<String>, Vec<weft_sim::coverage::Violation>) {
+    let cat = Catalog::new(weft_sim::spec::load(dir).expect("the fixture compiles"));
+    let exp = experiment::load(&fixture_closed_link().join("setup.yaml")).unwrap();
+    let cov = Coverage::new(&cat, "simulate", 1);
+    let s = weft_sim::simulate::record_setup(&cat, &cov, &Candidates::default(), &exp, 0).unwrap();
+    (s.refusals, s.violations)
+}
+
+/// closed-link passes with the guard: a formation in groups an open link joins, another formation
+/// across the closed link, a released placement beside a live one in the closed pair; the last
+/// placement, across the closed link, is refused `crosses-closed-link`.
+#[test]
+fn closed_link_passes_when_the_guard_refuses_the_crossing() {
+    let (refusals, violations) = closed_link_setup(&fixture_closed_link());
+    assert_eq!(refusals.len(), 1, "{refusals:?}");
+    assert!(refusals[0].starts_with("f-in-a-again (weft.scheduling.PlaceInstance) answered crosses-closed-link"), "{refusals:?}");
+    assert!(violations.is_empty(), "{violations:?}");
+}
+
+/// closed-link fires without the guard: the last placement puts formation f in group a beside its
+/// live placement in b, which a closed link joins; one violation, at that step.
+#[test]
+fn closed_link_fires_on_a_formation_placed_across_a_closed_link() {
+    let dir = without_guard(&fixture_closed_link(), "scheduling.yaml", "crosses-closed-link");
+    let (refusals, violations) = closed_link_setup(&dir);
+    assert!(refusals.is_empty(), "{refusals:?}");
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    let v = &violations[0];
+    assert_eq!(v.kind, "closed-link");
+    assert_eq!(v.step, 8, "{v:?}");
+    assert!(v.detail.starts_with("formation 00000000-0000-4000-8000-0000000000f1: placements "), "{}", v.detail);
+    assert!(v.detail.contains("in group 00000000-0000-4000-8000-00000000000a") && v.detail.contains("in group 00000000-0000-4000-8000-00000000000b"), "{}", v.detail);
 }

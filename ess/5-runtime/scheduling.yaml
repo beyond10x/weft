@@ -1806,6 +1806,10 @@ views:
       - {name: account_id, type: weft.shared.AccountId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: zone, type: weft.shared.ZoneName}
+      # design:tenant-clusters step 2b, scheduling: the Scheduler reads a formation's peer groups
+      # here, and weft-sim's check `closed-link` the pairs of a formation's groups.
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: topology_group_id, type: Optional<weft.shared.TopologyGroupId>}
       - {name: isolation, type: weft.shared.IsolationLevel}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: assigned, type: Boolean}
