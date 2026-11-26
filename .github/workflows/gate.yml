@@ -59,9 +59,21 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Install the ESS CLI this repository validates with (ess 0.99.2)
+      - name: Install the ESS CLI this repository validates with (ess 0.99.2, release binary)
         if: steps.paths.outputs.skip != 'true'
-        run: cargo install --git https://github.com/beyond10x/ess --tag 0.99.2 --locked ess-cli
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          dir="$RUNNER_TEMP/ess-tool"
+          mkdir -p "$dir/bin"
+          cd "$RUNNER_TEMP"
+          gh release download 0.99.2 --repo beyond10x/ess --pattern ess-0.99.2-x86_64-unknown-linux-gnu.tar.gz --pattern SHA256SUMS
+          grep " ess-0.99.2-x86_64-unknown-linux-gnu.tar.gz$" SHA256SUMS | sha256sum -c -
+          tar -xzf ess-0.99.2-x86_64-unknown-linux-gnu.tar.gz
+          install -m 0755 "$(find . -type f -name ess -perm -u+x | head -1)" "$dir/bin/ess"
+          echo "$dir/bin" >> "$GITHUB_PATH"
+          "$dir/bin/ess" --version
 
       - name: Run the gate
         if: steps.paths.outputs.skip != 'true'
