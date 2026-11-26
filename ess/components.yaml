@@ -51,6 +51,19 @@ conversions:
       weft.infrastructure (layer 1) names no identifier of weft.cluster (layer 3), so it keeps the
       cluster pool a pool was made for as an opaque Uuid; only weft.cluster reads it back, to refuse
       an infrastructure pool made for another cluster pool.
+  # Hardening pass 5: a stamped instant is stored as a plain one. No conversion runs the other way
+  # (tools/check-stamped-time.sh refuses one), so only a stamped value reaches a stamped input.
+  - from: weft.shared.StampedAt
+    to: Timestamp
+    because: >-
+      An instant weft-control stamped is an instant; the rows and events that keep it compare it
+      with `now` like any other. The type marks the command input, where the caller would
+      otherwise name its own time.
+  - from: weft.shared.StampedAt
+    to: Optional<Timestamp>
+    because: >-
+      As above, for a row field that is empty until weft-control first stamps it
+      (identity.TrustDomain.rotation_ends_at, workloads.Schedule.last_fired_at).
 
 components:
   # Line 72: "the user API (management plane)". Line 95: the CLI and CI reach it over HTTP.
@@ -386,6 +399,7 @@ components:
         - weft.identity.FinishKeyRotation
         - weft.identity.IssueIdentityDocument
         - weft.identity.RenewIdentityDocument
+        - weft.identity.RequestKeyRotation
         - weft.identity.RetireTrustDomain
         - weft.identity.RevokeIdentityDocument
         - weft.identity.RotateSigningKey
@@ -738,6 +752,7 @@ components:
         - weft.identity.IdentityDocumentRenewed
         - weft.identity.IdentityDocumentRevoked
         - weft.identity.KeyRotationFinished
+        - weft.identity.KeyRotationRequested
         - weft.identity.SigningKeyRotated
         - weft.identity.TokenExchanged
         - weft.identity.TrustDomainCreated
@@ -1023,6 +1038,16 @@ bindings:
   #   (clusters) infrastructure.DrainingPoolNodes -> infrastructure.DrainNode or RemoveNode -> ControlPlane
   #   (clusters) infrastructure.DrainingNodePools -> infrastructure.DeleteNodePool   -> ControlPlane
   #             (block "Tenant clusters" below, hardening pass 4)
+  #   (identity) identity.RequestedKeyRotations   -> identity.RotateSigningKey     -> ControlPlane
+  #             (rotation_ends_at: the issuer's clock plus the row's document_ttl_seconds; the
+  #             operator's RequestKeyRotation carries no time, hardening pass 5)
+  #
+  # Stamped time (hardening pass 5, tools/check-stamped-time.sh): an input of type
+  # weft.shared.StampedAt is weft-control's clock. A step above stamps it from the actor's clock;
+  # an edge maps it only from an event field of the same type (r4-assign: PlacementBound.decided_at,
+  # stamped by PlaceInstance). The node agent's OpenNodeSession, SupersedeNodeSession, Heartbeat and
+  # RenewLease frames carry no time: weft-control's node-channel endpoint records each as the
+  # ControlPlane with `received_at` from its clock on receipt (protocols/node-channel.yaml).
   #
   # R9 (line 593) is node-local: workloads.AliveCheckFailed (`restart: true`) reaches weft-node,
   # which restarts the process and records it with workloads.RecordProcessRestarted (NodeAgent).

@@ -224,7 +224,7 @@ entities:
       - name: grace_seconds
         type: Integer
       - name: decided_at
-        type: Timestamp
+        type: weft.shared.StampedAt
       # §10: `Preemption` with a grace period and a reason, recorded on its victim. Set
       # when the decision moves to Evicting.
       - name: preempted_by
@@ -539,7 +539,7 @@ events:
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       # The decision's instant on the Scheduler's clock (PlaceInstance input), the lease start
       # weft.nodes.Assign takes as `assigned_at` (weft-sim full setup, 2026-11-26).
-      - {name: decided_at, type: Timestamp}
+      - {name: decided_at, type: weft.shared.StampedAt}
 
   - name: weft.scheduling.PlacementAssigned
     fields:
@@ -866,7 +866,7 @@ commands:
       # lease (PlacementBound -> weft.nodes.Assign `assigned_at`), and a minted Timestamp is a
       # fixed day in 2020 (weft-sim full setup, 2026-11-26). ESS 0.99.2 refuses `now` as a value
       # (ESS-COMMAND-009). An instant after `now` is refused, so no caller starts a lease late.
-      - {name: decided_at, type: Timestamp}
+      - {name: decided_at, type: weft.shared.StampedAt}
     outcomes:
       - name: decided-in-future
         when: decided_at > now
@@ -1739,7 +1739,7 @@ views:
       - {name: priority_value, type: Integer}
       - {name: preemptible, type: Boolean}
       - {name: grace_seconds, type: Integer}
-      - {name: decided_at, type: Timestamp}
+      - {name: decided_at, type: weft.shared.StampedAt}
       - {name: preempted_by, type: Optional<weft.shared.SchedulingRequestId>}
       - {name: preemption_reason, type: Optional<weft.scheduling.PreemptionReason>}
       - {name: evicting_since, type: Optional<Timestamp>}
@@ -1781,7 +1781,7 @@ views:
       - {name: isolation, type: weft.shared.IsolationLevel}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: gang_id, type: Optional<weft.shared.GangId>}
-      - {name: decided_at, type: Timestamp}
+      - {name: decided_at, type: weft.shared.StampedAt}
 
   # §11 line 476 and §14 R3 (line 587), time form (line 602): the Bound placements no node took
   # within 120 s of the decision (ReleasePlacement, OPEN on the length there). The caller runs
@@ -1801,7 +1801,7 @@ views:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: gang_id, type: Optional<weft.shared.GangId>}
-      - {name: decided_at, type: Timestamp}
+      - {name: decided_at, type: weft.shared.StampedAt}
 
   # §10: what runs on one node, at which isolation, for which tenant.
   - name: weft.scheduling.PlacementsOnNode

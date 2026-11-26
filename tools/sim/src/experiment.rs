@@ -65,6 +65,11 @@ pub struct Step {
     pub command: String,
     #[serde(default)]
     pub actor: Option<String>,
+    /// The actor whose frame this step records (weft-control's channel endpoint, the ControlPlane,
+    /// records a node agent's frame with the time it stamped): a fault's `silence` compares this
+    /// actor with `silent_actor` instead of `actor`.
+    #[serde(default)]
+    pub relays: Option<String>,
     #[serde(default)]
     pub caller: BTreeMap<String, Value>,
     #[serde(default)]
@@ -164,6 +169,9 @@ pub struct Controller {
     pub params: BTreeMap<String, Value>,
     pub command: String,
     pub actor: String,
+    /// As `Step::relays`.
+    #[serde(default)]
+    pub relays: Option<String>,
     #[serde(default)]
     pub caller: BTreeMap<String, Value>,
     /// Input field -> row field (`row.<field>`), candidate field (`cand.<field>`), varied value

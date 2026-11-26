@@ -580,13 +580,16 @@ impl<'a, 'c> Sim<'a, 'c> {
         }
     }
 
-    /// Sends one step; `None` when a silent node would send it (its actor names the node as
-    /// `node_id`): a lost node sends nothing.
+    /// Sends one step; `None` when a silent node would send it (its actor, or the actor whose
+    /// frame it `relays`, names the node as `node_id`): a lost node sends nothing.
     fn send_step(&mut self, phase: &str, step: &Step, scope: &Scope, fault: Option<String>) -> Result<Option<Answer>, String> {
         let req = self.request(step, scope)?;
         if phase != "setup" && phase != "fault" {
             if let Some(n) = req.input.get("node_id") {
-                let actor = req.actor.map(|a| self.sess.cat.actors[a].name.to_string()).unwrap_or_default();
+                let actor = match &step.relays {
+                    Some(r) => r.clone(),
+                    None => req.actor.map(|a| self.sess.cat.actors[a].name.to_string()).unwrap_or_default(),
+                };
                 if self.lost.get(&key_text(&to_value(n))).is_some_and(|silent| *silent == actor) {
                     return Ok(None);
                 }
@@ -679,6 +682,7 @@ impl<'a, 'c> Sim<'a, 'c> {
         let step = Step {
             command: c.command.clone(),
             actor: Some(c.actor.clone()),
+            relays: c.relays.clone(),
             caller: c.caller.clone(),
             input: c.input.clone(),
             expect: None,

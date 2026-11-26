@@ -592,3 +592,76 @@ What it shows:
 - For a ratchet KPI on "outcomes reached", use the minimum (or median) of 8 seeds with fixed seeds 1-8,
   not one seed.
 - 8 seeds in parallel take one seed's wall time on the build node (212-216 s).
+
+## Pass 5: stamped time (2026-11-26)
+
+Finding (independent review): times the model decides on with `now` came from command inputs, and
+that weft-control stamps them was only a comment (`nodes.yaml` OpenNodeSession, Heartbeat). The
+grants said otherwise: `ess/9-actors/actors.yaml` gave `OpenNodeSession`, `Heartbeat` and
+`RenewLease` to `NodeAgent`, so a node could send any `received_at` not after `now` and postpone
+its own loss or lease end; `RotateSigningKey` gave the operator `rotation_ends_at`, which the
+comment called the issuer's clock plus `document_ttl_seconds`.
+
+The rule as a type and a check:
+
+- `weft.shared.StampedAt`, a newtype of Timestamp (`ess/0-foundation/shared.yaml:396`), marks an
+  instant weft-control reads from its own clock. Conversions into Timestamp and
+  Optional<Timestamp> are declared (`ess/components.yaml:56`, `:62`); none into StampedAt, so an
+  edge maps a stamped input only from a stamped event field (`r4-assign` from
+  `PlacementBound.decided_at`, now StampedAt with `PlacementDecision.decided_at` and its three
+  views, `scheduling.yaml:227`, `:542`, `:1742`, `:1784`, `:1804`).
+- `tools/check-stamped-time.sh` reads `ess specify compile` output and fails when a command with
+  a StampedAt input (direct or nested in a declared type) is granted to an actor outside
+  `tools/stamped-time-actors` (ControlPlane, Scheduler, ReleaseController), on a conversion into
+  StampedAt, and on a listed actor the model does not declare. `--inventory` lists every Timestamp
+  and StampedAt input with its grants; `--negative` copies `ess/`, grants NodeAgent
+  `weft.nodes.Heartbeat` and passes only when the check refuses it
+  (`granted outside the stamped-time set: weft.nodes.Heartbeat to weft.actors.NodeAgent`). Task
+  `stamped-time` runs both inside `task check`, 0.5 s each. Rule in `AGENTS.md` § Rules for the
+  specification.
+
+Inventory (27 Timestamp inputs of commands):
+
+| class | inputs |
+| --- | --- |
+| stamped by weft-control (7, now StampedAt) | `nodes.OpenNodeSession.received_at`, `nodes.Heartbeat.received_at`, `nodes.RenewLease.received_at`, `nodes.Assign.assigned_at`, `scheduling.PlaceInstance.decided_at`, `identity.RotateSigningKey.rotation_ends_at` (clock plus TTL), `workloads.RecordScheduleFired.fired_at` |
+| chosen by a user (10) | `access.CreateApiToken.expires_at`, `formations.CreatePreviewEnvironment.expires_at`, `infrastructure.IssueJoinToken` / `ProvisionNode` / `ProvisionPoolNode` `join_token_expires_at` (bounded to 24 h), `pipelines.AddDeployGate.window_opens_at` / `window_closes_at`, `workloads.AcquireBoxLease.expires_at`, `workloads.Invoke.deadline_at`, `workloads.WakeService.deadline_at` |
+| other (10) | `access.ExchangeFederatedToken.expires_at` (the ID token's signed `exp`); the node's own measurement, stored beside a minted `recorded_at` and compared with no `now`: `infrastructure.RecordNodeObservation.observed_at`, `nodes.InstanceObserved.observed_at`, `nodes.NodeObserved.observed_at`, `nodes.UsageReported.window_start` / `window_end`; period bounds weft-control chooses, checked only to have ended: `metering.RecordUsage` and `metering.IssueStatement` `period_start` / `period_end` |
+
+Grants changed:
+
+- `OpenNodeSession`, `SupersedeNodeSession`, `Heartbeat`, `RenewLease`: NodeAgent -> ControlPlane
+  (`actors.yaml:730`, `:1006`). The node's dial, heartbeat and renewal frames carry no time;
+  weft-control's node-channel endpoint records each as the ControlPlane with `received_at` from
+  its clock on receipt, over the session it holds open for the node, with node_id from the
+  session's certificate (`nodes.yaml:863`, `:1248`; `protocols/node-channel.yaml` header).
+  `SupersedeNodeSession` has no time; it moved with `OpenNodeSession` because both are the dial.
+- `RotateSigningKey`: ClusterOperator -> ControlPlane. The operator runs the new
+  `RequestKeyRotation` (`identity.yaml:532`): no time, state Active -> new `RotationRequested`
+  (`:112`), field `requested_signing_key_ref`, event `KeyRotationRequested` (`:418`).
+  `RotateSigningKey` (`:562`) moves RotationRequested -> Rotating, new refusal
+  `key-not-requested` (`:581`, error `KeyNotRequested` `:355`). Level step: view
+  `RequestedKeyRotations` (`:1163`) -> `RotateSigningKey` -> ControlPlane with its clock plus
+  `document_ttl_seconds` (`components.yaml:1041`). `CreateTrustDomain`'s
+  `cluster-has-trust-domain` counts RotationRequested too (`:502`).
+- Scheduler keeps `Assign`, `PlaceInstance`, `RecordScheduleFired`.
+
+Not expressed: `RenewLease` still does not check the node's session. A `session_id` input with
+`session-of-other-node` and `session-not-open` was tried and is refused by ess 0.99.2
+(ESS-COMMAND-004: `lease-expired` and `renewed` answer at precedence step 3, a related-row guard
+at step 4); the session's check stays the endpoint's (UNMAPPED at `nodes.yaml:1248`).
+
+weft-sim: experiment steps and controllers take `relays: <actor>` (`tools/sim/src/experiment.rs`
+`Step`, `Controller`; `simulate.rs` `send_step`): a fault's `silence` compares that actor with
+`silent_actor`, so a silent node's frames stay unsent when the ControlPlane records them. The
+experiments send OpenNodeSession, Heartbeat and RenewLease as ControlPlane relaying NodeAgent. 13
+tests pass (0.11 s).
+
+Result, worktree weft-sim, `--threads 4 --exit-when-done`, every experiment exit 0, 0 violations:
+cluster-pool-lifecycle 0.1 s, duplicate-delivery 0.1 s, full-setup 4.1 s, node-loss 0.1 s,
+stuck-placement 4.8 s. Node outcomes equal the main checkout's weft-sim on main's spec
+(full-setup: Heartbeat `seen` 1057, RenewLease `renewed` 1156, LoseNodeSession `lost` 9,
+ReleaseAssignment `released` 17; stuck-placement: Assign `no-open-session` 68,
+ReleasePlacement `released-unassigned` 17; node-loss: `lost` 13). Without `relays` (scratch copy
+of full-setup) the silent node kept heartbeating: `lost` 0, `released` 0. Validate:
+`weft v1 — 23 file(s), valid`; layers green; no synthesis run (gap 24).

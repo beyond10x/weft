@@ -89,6 +89,10 @@ entities:
       # When the overlap of a rotation ends: rotation start plus the longest document lifetime.
       - name: rotation_ends_at
         type: Optional<Timestamp>
+      # The key the operator asked to rotate to (RequestKeyRotation); weft-control's issuer
+      # rotates to it with its own clock (RotateSigningKey). Hardening pass 5.
+      - name: requested_signing_key_ref
+        type: Optional<weft.identity.SigningKeyRef>
       # Lifetime of each identity document this trust domain signs. Sketch line 392
       # "short-lived".
       # OPEN: the bounds. Taken: 60 s to 3600 s. SPIRE's default X.509-SVID lifetime is 1 h
@@ -105,12 +109,16 @@ entities:
       initial: Active
       states:
         - {name: Active, summary: Signs documents with signing_key_ref.}
+        - {name: RotationRequested, summary: "Signs with signing_key_ref; the operator asked for a rotation that weft-control's issuer has not started."}
         - {name: Rotating, summary: "Signs with the new key; documents signed by the previous key are still accepted."}
         - {name: Retired, summary: "Signs nothing; documents it signed are no longer accepted."}
       terminal: [Retired]
       transitions:
-        - name: rotate
+        - name: request_rotation
           from: [Active]
+          to: RotationRequested
+        - name: rotate
+          from: [RotationRequested]
           to: Rotating
         - name: finish_rotation
           from: [Rotating]
@@ -344,6 +352,9 @@ errors:
     summary: >-
       The end of the overlap is not after the control plane's own decision instant, so the
       previous key would be dropped at once; nothing changed.
+  - name: weft.identity.KeyNotRequested
+    summary: >-
+      The key is not the one the operator asked to rotate to, so nothing was rotated.
   - name: weft.identity.TrustDomainInUse
     summary: Identity documents of this trust domain are still live, so it was not retired.
   - name: weft.identity.UnknownTrustDomain
@@ -402,6 +413,11 @@ events:
       - {name: trust_domain_id, type: weft.shared.TrustDomainId}
       - {name: cloud_id, type: weft.shared.CloudId}
       - {name: name, type: weft.identity.TrustDomainName}
+      - {name: signing_key_ref, type: weft.identity.SigningKeyRef}
+
+  - name: weft.identity.KeyRotationRequested
+    fields:
+      - {name: trust_domain_id, type: weft.shared.TrustDomainId}
       - {name: signing_key_ref, type: weft.identity.SigningKeyRef}
 
   - name: weft.identity.SigningKeyRotated
@@ -483,7 +499,7 @@ commands:
           where:
             all:
               - cloud_id == input.cloud_id
-              - {state: [Active, Rotating]}
+              - {state: [Active, RotationRequested, Rotating]}
           count: {gte: 1}
         error: weft.identity.TrustDomainExists
       - name: created
@@ -507,6 +523,42 @@ commands:
   # document it signed has expired. Documents move to the new key at their next renewal.
   # OPEN: who starts a rotation and how often (on a schedule, by the operator only). Taken: the
   # operator, by hand.
+  # Hardening pass 5 (2026-11-26): the operator asks for the rotation and names the key; the end
+  # of the overlap is weft-control's clock plus document_ttl_seconds, so the operator's request
+  # carries no time and weft-control's issuer (ControlPlane) rotates with its own clock
+  # (RotateSigningKey, level step on RequestedKeyRotations, ess/components.yaml). Before, the
+  # operator named rotation_ends_at and could end the overlap before documents signed by the
+  # previous key expired.
+  - name: weft.identity.RequestKeyRotation
+    naming:
+      display: Ask for a trust domain's signing key rotation
+    input:
+      - {name: trust_domain_id, type: weft.shared.TrustDomainId}
+      - {name: new_signing_key_ref, type: weft.identity.SigningKeyRef}
+    outcomes:
+      - name: no-such-trust-domain
+        unknown_instance: true
+        error: weft.identity.NotFound
+      - name: same-key
+        when_subject:
+          predicate: signing_key_ref == input.new_signing_key_ref
+        error: weft.identity.SameSigningKey
+      - name: requested
+        moves: weft.identity.TrustDomain.request_rotation
+        instance: trust_domain_id
+        sets:
+          requested_signing_key_ref: input.new_signing_key_ref
+        emits: [weft.identity.KeyRotationRequested]
+        payload:
+          weft.identity.KeyRotationRequested:
+            trust_domain_id: input.trust_domain_id
+            signing_key_ref: input.new_signing_key_ref
+      - name: wrong-state
+        wrong_state: true
+        error: weft.identity.StateConflict
+
+  # weft-control's issuer starts a requested rotation. new_signing_key_ref is the row's
+  # requested_signing_key_ref, checked against it.
   - name: weft.identity.RotateSigningKey
     naming:
       display: Rotate a trust domain's signing key
@@ -516,7 +568,7 @@ commands:
       # hardening pass 3: when the overlap ends, stamped by weft-control's issuer as its clock
       # plus document_ttl_seconds (was minted, a fixed 2020 instant in the interpreter, so every
       # rotation was over at once). ESS 0.99.2 refuses `now` plus a field in `sets:`.
-      - {name: rotation_ends_at, type: Timestamp}
+      - {name: rotation_ends_at, type: weft.shared.StampedAt}
     outcomes:
       - name: end-not-ahead
         when: rotation_ends_at <= now
@@ -524,16 +576,22 @@ commands:
       - name: no-such-trust-domain
         unknown_instance: true
         error: weft.identity.NotFound
-      - name: same-key
+      # `defined` first, as in FinishKeyRotation: a trust domain with no request is decided by
+      # wrong-state, not read as Unknown.
+      - name: key-not-requested
         when_subject:
-          predicate: signing_key_ref == input.new_signing_key_ref
-        error: weft.identity.SameSigningKey
+          predicate:
+            all:
+              - defined(requested_signing_key_ref)
+              - requested_signing_key_ref != input.new_signing_key_ref
+        error: weft.identity.KeyNotRequested
       - name: rotated
         moves: weft.identity.TrustDomain.rotate
         instance: trust_domain_id
         sets:
           previous_signing_key_ref: {subject: signing_key_ref}
           signing_key_ref: input.new_signing_key_ref
+          requested_signing_key_ref: {cleared: true}
           rotation_ends_at: input.rotation_ends_at
         emits: [weft.identity.SigningKeyRotated]
         payload:
@@ -1095,8 +1153,21 @@ views:
       - {name: signing_key_ref, type: weft.identity.SigningKeyRef}
       - {name: previous_signing_key_ref, type: Optional<weft.identity.SigningKeyRef>}
       - {name: rotation_ends_at, type: Optional<Timestamp>}
+      - {name: requested_signing_key_ref, type: Optional<weft.identity.SigningKeyRef>}
       - {name: document_ttl_seconds, type: Integer}
       - {name: state, type: weft.identity.TrustDomain.State}
+
+  # Hardening pass 5: the gap view of the rotation's level step. weft-control's issuer
+  # (ControlPlane) reads it and runs RotateSigningKey per row with requested_signing_key_ref and
+  # its clock plus document_ttl_seconds.
+  - name: weft.identity.RequestedKeyRotations
+    source: weft.identity.TrustDomain
+    consistency: read_your_writes
+    filter: state == RotationRequested
+    fields:
+      - {name: trust_domain_id, type: weft.shared.TrustDomainId}
+      - {name: requested_signing_key_ref, type: Optional<weft.identity.SigningKeyRef>}
+      - {name: document_ttl_seconds, type: Integer}
 
   # Sketch lines 390-393. Every document with its state, for the operator and for audit. It shows
   # what the issuer decided, never the signed bytes or a key.

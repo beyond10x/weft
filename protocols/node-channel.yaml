@@ -3,6 +3,12 @@
 # Times: heartbeat every 1000 ms, lease 2500 ms (two missed heartbeats), redial after 3000 ms.
 # OPEN: UNMAPPED: the sketch gives no heartbeat interval, lease length or redial delay; the values
 # above only keep the model finite. Open question for the owner.
+# Time (hardening pass 5, 2026-11-26): no frame of the node carries a time. Control's endpoint
+# records `hello` as weft.nodes.OpenNodeSession (and SupersedeNodeSession on `replace-open-session`),
+# `heartbeat` as weft.nodes.Heartbeat, and the renewal (`renew-lease` here) as weft.nodes.RenewLease,
+# each as the ControlPlane with `received_at` from its own clock on receipt, and the lease timer is
+# control's (ess/5-runtime/nodes.yaml, tools/check-stamped-time.sh). The node's own clock appears
+# only in what it observed (InstanceObserved and NodeObserved `observed_at`, UsageReported windows).
 # OPEN: UNMAPPED: the sketch names Pause, Snapshot, Drain, Attach, Detach, IssueIdentity,
 # DeliverSecret, NodeObserved and UsageReported; this model covers Assign, Stop, Heartbeat and
 # InstanceObserved only.
