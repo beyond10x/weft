@@ -799,8 +799,8 @@ Run: `task sim-explore-from` (seed 1, 1024 walks x 300 steps, 8 threads, settle 
 
 - Before: outcomes 1557 / 2444, states 196 / 328, transitions 114 / 221, 0 violations, 531
   `Unsupported` answers (one guard), 239 s.
-- After: outcomes 1568 / 2444, states 198 / 328, transitions 117 / 221, 0 `Unsupported` answers,
-  686 `idempotency` violations on one command (finding 3), 200 s.
+- After findings 1-2: outcomes 1568 / 2444, states 198 / 328, transitions 117 / 221, 0 `Unsupported` answers,
+  686 `idempotency` violations on one command, 200 s. After finding 3: 0 violations, outcomes 1572.
 - `weft.node` outcomes 22 -> 34 of 38; `weft.workloads` 262 -> 271. Other domains moved by 1-3
   either way, inside the seed variance of the walk (section "Seed variance of explore").
 
@@ -818,12 +818,17 @@ Run: `task sim-explore-from` (seed 1, 1024 walks x 300 steps, 8 threads, settle 
    `weft.shared.ProcessName` for `workloads.Process.name` and every `process` field and input of
    `weft.workloads`, `weft.node` and `weft.observability` (25 declarations). After: `started` 814
    hits, `RestartProcess/restarted` 389, `StopProcess/stopped` 204, `MarkRestartDue/due` 88.
-3. Open, found through finding 2: a repeated delivery of `node.ProcessRestarted` makes
+3. Found through finding 2: a repeated delivery of `node.ProcessRestarted` made
    `workloads.RecordProcessRestarted` count the restart twice (`restarts: {increment: 1}`), 686
-   violations of the `idempotency` check (binding `r9-record-process-restarted`, at least once).
-   It was an OPEN in `ess/components.yaml` already. The command can refuse a restart it counted only
-   if the instance records which restarts it counted; the node counts per process, the instance per
-   instance. Next change: a restart ledger in `weft.workloads`.
+   violations of the `idempotency` check (binding `r9-record-process-restarted`, at least once),
+   an OPEN in `ess/components.yaml`. Changed: the command takes the node's own count of the
+   process (`restarts`, `node.LocalProcess.restarts` after the restart) and the instance keeps
+   `max(subject.restarts, input.restarts)`: the most restarts of any one of its processes, so a
+   repeat changes nothing. `count-above-total` compares the window with the node's count;
+   `invalid-count` also refuses a count below 1. Left in the binding's comment: a repeat that
+   arrives after the process started again sets health back to Starting until its next ready
+   check. After: 0 violations, outcomes 1572 / 2444, 0 `Unsupported`, 0 undeclared refusals,
+   248 s; experiments 0 violations in all 5.
 4. Walks reach Active assignments now: `nodes.Assign/assigned` 2901 hits, `CompleteDrain/drained`
    34, `RemoveNode/not-empty` 1 (the pool open items of pass 4). A Draining pool going back to
    Active stays an OPEN at `ess/1-infrastructure/infrastructure.yaml:874`.
