@@ -1,0 +1,24 @@
+format: weft-sim-experiment/1
+name: closed-link-fixture
+summary: >-
+  Groups a, b and c of one account; a-b is closed, a-c open. Formation f is placed in a, then in
+  c; formation g in b; f's placement in a is released, f is placed in b. Last, f is placed in a
+  with peers b and c: the guard refuses it, and without the guard f sits in a and b across the
+  closed link.
+vars:
+  account: 00000000-0000-4000-8000-0000000000a1
+  f: 00000000-0000-4000-8000-0000000000f1
+  g: 00000000-0000-4000-8000-0000000000f2
+  a: 00000000-0000-4000-8000-00000000000a
+  b: 00000000-0000-4000-8000-00000000000b
+  c: 00000000-0000-4000-8000-00000000000c
+setup:
+  - {label: link-a-b-closed, command: weft.cluster.DeclareTopologyLink, actor: weft.actors.TenantOwner, input: {account_id: "${account}", from_group_id: "${a}", to_group_id: "${b}", crossable: false}, expect: declared}
+  - {label: link-a-c-open, command: weft.cluster.DeclareTopologyLink, actor: weft.actors.TenantOwner, input: {account_id: "${account}", from_group_id: "${a}", to_group_id: "${c}", crossable: true}, expect: declared}
+  - {label: f-in-a, command: weft.scheduling.PlaceInstance, actor: weft.actors.Scheduler, input: {account_id: "${account}", formation_id: "${f}", topology_group_id: "${a}", peer_groups: []}, expect: placed, bind: {f_a: decision_id}}
+  - {label: f-in-c, command: weft.scheduling.PlaceInstance, actor: weft.actors.Scheduler, input: {account_id: "${account}", formation_id: "${f}", topology_group_id: "${c}", peer_groups: ["${a}"]}, expect: placed}
+  - {label: g-in-b, command: weft.scheduling.PlaceInstance, actor: weft.actors.Scheduler, input: {account_id: "${account}", formation_id: "${g}", topology_group_id: "${b}", peer_groups: []}, expect: placed}
+  - {label: release-f-in-a, command: weft.scheduling.ReleasePlacement, actor: weft.actors.Scheduler, input: {decision_id: "${f_a}"}, expect: released}
+  - {label: f-in-b, command: weft.scheduling.PlaceInstance, actor: weft.actors.Scheduler, input: {account_id: "${account}", formation_id: "${f}", topology_group_id: "${b}", peer_groups: ["${c}"]}, expect: placed}
+  - {label: f-in-a-again, command: weft.scheduling.PlaceInstance, actor: weft.actors.Scheduler, input: {account_id: "${account}", formation_id: "${f}", topology_group_id: "${a}", peer_groups: ["${b}", "${c}"]}}
+invariants: [closed-link]

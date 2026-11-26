@@ -930,3 +930,32 @@ reached because the walks shifted. Fixed by the integrator in this branch, as in
 and the same in the guard at :1167-1171. After, rebased on main `3946ced` (step 2b): 0 `unsupported`, 0
 violations, outcomes 1590 / 2525, 288 s.
 `task sim-experiments`: 0 violations in all 5. `slot task check`: exit 0.
+
+## Step 2b exercised (2026-11-26)
+
+Before, explore had 0 hits on the `PlaceInstance` guards `cluster-pool-differs`, `group-not-of-node`
+and `crosses-closed-link` (PR 13): no walk builds a `Custom` topology with a closed link.
+
+- Experiment `sim/experiments/closed-link.yaml`: one account cluster, two dedicated pools a and b
+  with one Ready node each, a `Custom` topology with group A (pool a) and group B (pool b), a
+  declared link A-B with `crossable: false`, formation shop with a service of two replicas. Every
+  `expect:` is reached: instance 1 on pool a, group A, no peers -> `placed`; instance 2 on pool b,
+  group B, peers [A] -> `crosses-closed-link`; group A for the node of pool b ->
+  `group-not-of-node`; cluster pool a for the node of pool b -> `cluster-pool-differs`; instance 2
+  on pool a, group A, peers [A] -> `placed`. No spec defect: all five answered as written.
+- New system check `closed-link` (`tools/sim/src/simulate.rs`, in `ALL_INVARIANTS`, so explore
+  runs it after every step): a violation when two active (not Released) placements of one
+  formation sit in groups a Declared link with `crossable == false` joins, either direction. It
+  reads `weft.scheduling.PlacementDecisions`, which gained `formation_id` and `topology_group_id`
+  (`ess/5-runtime/scheduling.yaml`), and `weft.cluster.TopologyLinks` of the account of each
+  formation placed in two groups or more. KPI `closed_link_pairs`.
+- Tests (`tools/sim/tests/main.rs`, fixture `tests/fixture-closed-link`): with the guard, the
+  crossing placement is refused and the check passes (open link, another formation, a released
+  placement beside a live one in the closed pair); without it (guard lines cut from a copy), one
+  violation at the crossing step. 0.01 s each. On a scratch copy of `ess/` without
+  `crosses-closed-link`, the experiment's second placement is `placed` and the check fires.
+- Numbers: `task sim-experiments` 0 violations in all 6. `task sim-explore-from`: 0 violations,
+  0 `unsupported` or `undeclared` errors, outcomes 1557 / 2447, 640 walks in the 280 s cap at a
+  load average of 45-60. Beside it, with `--invariants` without `closed-link` at a load of 19-29:
+  960 walks, outcomes 1571; the walk count follows the host load, the check costs under 1 ms a
+  step. `slot task check` exit 0, test step 0.2 s.

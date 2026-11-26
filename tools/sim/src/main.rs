@@ -23,7 +23,7 @@ const USAGE: &str = "usage:
                     [--controller-share P] a share P (0-1) of walk steps is a tick of its controllers
                     [--retry-bound N]     unbounded binding retries stop after N attempts (default 16; 0: as the spec)
                     [--invariants LIST]   system invariants checked in walks, comma-separated, or none
-                                          (default: idempotency,no-double-placement,quota-conservation,tenant-isolation)
+                                          (default: closed-link,idempotency,no-double-placement,quota-conservation,tenant-isolation)
                     [--check-every N]     check them after every N-th step of a walk (default 1; 0: never)
   weft-sim simulate --spec DIR --experiment FILE --out DIR
                     [--threads T] [--serve [ADDR]] [--exit-when-done] [--no-search]

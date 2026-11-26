@@ -235,6 +235,8 @@ pub struct Kpis {
     pub double_placements: usize,
     pub quota_breaches: usize,
     pub cross_tenant_reach: usize,
+    /// Pairs of a formation's active placements in groups a closed topology link joins.
+    pub closed_link_pairs: usize,
     pub duplicate_effects: usize,
     pub unconverged: usize,
     pub steps_to_converge: usize,
@@ -295,7 +297,7 @@ struct Sim<'a, 'c> {
     last_work: Vec<(String, usize)>,
 }
 
-pub const ALL_INVARIANTS: [&str; 4] = ["idempotency", "no-double-placement", "quota-conservation", "tenant-isolation"];
+pub const ALL_INVARIANTS: [&str; 5] = ["closed-link", "idempotency", "no-double-placement", "quota-conservation", "tenant-isolation"];
 
 /// True when `state` is a terminal state of `entity`.
 fn terminal(sess: &Session, entity: &str, state: Option<&Node>) -> bool {
@@ -307,7 +309,7 @@ fn terminal(sess: &Session, entity: &str, state: Option<&Node>) -> bool {
     })
 }
 
-/// The system invariants read from the store's views (`no-double-placement`,
+/// The system invariants read from the store's views (`closed-link`, `no-double-placement`,
 /// `quota-conservation`, `tenant-isolation`; `idempotency` needs a second send and is
 /// [`idempotency_check`]), each with the number of rows or nodes that break it. A view the model
 /// does not declare passes its check. `simulate` runs them after every step, `explore` after every
@@ -318,6 +320,7 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
     let id_of = |r: &BTreeMap<String, Node>, f: &str| r.get(f).map(|n| to_value(n).to_string()).unwrap_or_default();
     let wants = |name: &str| invariants.contains(name);
     let assignments = if wants("no-double-placement") || wants("tenant-isolation") { view("weft.nodes.Assignments") } else { None };
+    let decisions = if wants("tenant-isolation") || wants("closed-link") { view("weft.scheduling.PlacementDecisions") } else { None };
     if wants("no-double-placement") {
         let check = match &assignments {
             None => (Check { name: "no-double-placement".into(), ok: true, detail: "view weft.nodes.Assignments not readable".into() }, 0),
@@ -379,7 +382,7 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
     }
     if wants("tenant-isolation") {
         // The tenant of an assignment is its placement decision's (weft.scheduling holds it).
-        let check = match (&assignments, view("weft.scheduling.PlacementDecisions")) {
+        let check = match (&assignments, &decisions) {
             (Some(assignments), Some(decisions)) => {
                 let decision: BTreeMap<String, (String, String)> = decisions
                     .iter()
@@ -415,7 +418,69 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
         };
         out.push(check);
     }
+    if wants("closed-link") {
+        out.push(closed_link_check(sess, decisions.as_deref()));
+    }
     out
+}
+
+/// `closed-link` (design:tenant-clusters, Step 2b scheduling): no two active placements of one
+/// formation sit in topology groups that a Declared link with `crossable == false` joins, either
+/// direction. Reads weft.scheduling.PlacementDecisions (a decision that is not Released, with a
+/// group) and, for an account with a formation placed in two groups or more,
+/// weft.cluster.TopologyLinks.
+fn closed_link_check(sess: &Session, decisions: Option<&[BTreeMap<String, Node>]>) -> (Check, usize) {
+    let text = |r: &BTreeMap<String, Node>, f: &str| match r.get(f) {
+        None | Some(Node::Null) => String::new(),
+        Some(n) => key_text(&to_value(n)),
+    };
+    let Some(decisions) = decisions else {
+        return (Check { name: "closed-link".into(), ok: true, detail: "view weft.scheduling.PlacementDecisions not readable".into() }, 0);
+    };
+    // formation -> group -> the decisions placed there; formation -> its account's raw id.
+    let mut groups_of: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+    let mut account_of: BTreeMap<String, Node> = BTreeMap::new();
+    for r in decisions {
+        if terminal(sess, "weft.scheduling.PlacementDecision", r.get("state")) {
+            continue;
+        }
+        let (formation, group) = (text(r, "formation_id"), text(r, "topology_group_id"));
+        if formation.is_empty() || group.is_empty() {
+            continue;
+        }
+        if let Some(a) = r.get("account_id") {
+            account_of.insert(formation.clone(), a.clone());
+        }
+        groups_of.entry(formation).or_default().entry(group).or_default().push(text(r, "decision_id"));
+    }
+    let mut accounts: BTreeMap<String, Node> = BTreeMap::new();
+    for (formation, groups) in &groups_of {
+        if let (true, Some(a)) = (groups.len() > 1, account_of.get(formation)) {
+            accounts.insert(key_text(&to_value(a)), a.clone());
+        }
+    }
+    let mut closed: BTreeSet<(String, String)> = BTreeSet::new();
+    for account in accounts.values() {
+        let Ok(links) = sess.view("weft.cluster.TopologyLinks", [("account_id".to_owned(), account.clone())].into()) else { continue };
+        for l in links {
+            if text(&l, "state") == "Declared" && text(&l, "crossable") == "false" {
+                let (a, b) = (text(&l, "from_group_id"), text(&l, "to_group_id"));
+                closed.insert((b.clone(), a.clone()));
+                closed.insert((a, b));
+            }
+        }
+    }
+    let mut bad = Vec::new();
+    for (formation, groups) in &groups_of {
+        for (a, da) in groups {
+            for (b, db) in groups.range::<String, _>((std::ops::Bound::Excluded(a), std::ops::Bound::Unbounded)) {
+                if closed.contains(&(a.clone(), b.clone())) {
+                    bad.push(format!("formation {formation}: placements {} in group {a} and {} in group {b} across a closed link", da.join(","), db.join(",")));
+                }
+            }
+        }
+    }
+    (Check { name: "closed-link".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())
 }
 
 /// The rows of every parameterless read-your-writes view.
@@ -574,6 +639,7 @@ impl<'a, 'c> Sim<'a, 'c> {
             let kpi = match check.name.as_str() {
                 "no-double-placement" => &mut self.kpis.double_placements,
                 "quota-conservation" => &mut self.kpis.quota_breaches,
+                "closed-link" => &mut self.kpis.closed_link_pairs,
                 _ => &mut self.kpis.cross_tenant_reach,
             };
             *kpi = (*kpi).max(bad);
