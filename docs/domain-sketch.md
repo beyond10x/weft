@@ -615,7 +615,7 @@ on the inputs, context, state, some actions will be taken by the system to reach
   `weft-node` (domain `weft.node`: local processes, R9 restart, the local endpoint) and `weft-edge`
   (domain `weft.edge`: route backends, held wake requests, certificates), design:components
   (2026-11-26). `weft-api` forwards the user commands of control-owned domains to `weft-control`
-  (D1, the owner 2026-11-26); the CLI reaches both through one URL.
+  (D1, the owner, 2026-11-26); the CLI reaches both through one URL.
 - Convergence is a checked property: from any reachable state with no new input, every loop ends
   with observed equal to desired or with a named refusal (conformance and protocol exploration).
 
