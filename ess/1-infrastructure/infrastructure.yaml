@@ -312,6 +312,8 @@ errors:
     summary: The addressed record does not exist, and nothing changed.
   - name: weft.infrastructure.StateConflict
     summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.infrastructure.PoolAlreadyRequested
+    summary: A node pool for this requested cluster pool exists already, and nothing changed.
   # Sketch lines 147-148: `single-user` is the local placement; a single-user API without login
   # beyond one host would open the cluster to anyone who reaches it.
   - name: weft.infrastructure.SingleUserOutsideLocal
@@ -713,6 +715,17 @@ commands:
       - name: zone-retired
         when_related: {via: input.zone, predicate: state == Retired}
         error: weft.infrastructure.UnknownZone
+      # A repeated delivery of cluster-create-node-pool (at_least_once) must not make a second
+      # pool (weft-sim pass 6: idempotency, 9,858 violations over 8 seeds).
+      - name: already-requested
+        when_related:
+          entity: weft.infrastructure.NodePool
+          where:
+            all:
+              - defined(requested_for)
+              - requested_for == input.requested_for
+          exists: true
+        error: weft.infrastructure.PoolAlreadyRequested
       - name: created
         creates: weft.infrastructure.NodePool
         instance: node_pool_id

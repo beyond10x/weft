@@ -778,3 +778,16 @@ before the compare (the form pass 4 used for `wrong-node`).
 
 Rerun: build with `slot --fetch tools/sim/target/debug/weft-sim task sim-build`, then the command
 above per seed as a slot job (`slot --tokens 4 --timeout 30m --fetch sim/out/<dir>/s<n> ...`).
+
+### Pass 6 fixes (integrator, 2026-11-26)
+
+- `weft.infrastructure.CreateNodePool` gains the first-row refusal `already-requested`
+  (`PoolAlreadyRequested`) when a NodePool with the same `requested_for` exists; binding
+  `cluster-create-node-pool` drops it. A repeated delivery no longer makes a second pool.
+- `weft.observability`: four `instance_id == input.instance_id` filters (`OpenLogStream` x2,
+  `CloseInstanceLogStreams`, `RetireInstanceMetricSeries`) read `defined(instance_id)` first.
+- After, seed 1 (`--from full-setup`, 1024 x 300, 4 threads, invariants on): violations 0 (was
+  idempotency about 640 per seed); unsupported answers 8, all `OpenLogStream` (was about 3,100
+  in `ReleaseAssignment` per seed); outcomes 1393 / 2444 (one seed: inside the seed band).
+- Gate: `weft v1 — 25 file(s), valid`; layers green; stamped-time and its negative pass; all 5
+  experiments exit 0.
