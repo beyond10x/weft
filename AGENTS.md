@@ -59,6 +59,16 @@ none is written before the specification of what it implements.
   without `slot`.
 - No Python in anything committed (`~/beyond10x/AGENTS.md`). Tools are POSIX sh or Rust.
 
+## Gates and bot commits
+
+weft is enrolled in the organization's Gates policy (gates-policy PR 9, baseline `fc11f840`, the
+owner's order of 2026-11-26). Every commit after the baseline is a bot commit; the hooks
+(`b10x-gates install`) and the `Shared source gates` workflow refuse any other author.
+
+- Commit: `b10x-gates bot --repository beyond10x/weft --policy ~/beyond10x/gates-policy/policy.json -- commit -F <file>`.
+- Push: the same with `-- push …`. Pull requests: `b10x-gates api --method POST --path /repos/beyond10x/weft/pulls …`.
+- `cherry-pick` and `rebase` re-create commits under another author: use `merge` or a new bot commit.
+
 ## Ecosystem specs
 
 Other specification formats of the ecosystem enter only as deployable workloads, through a
