@@ -665,3 +665,116 @@ ReleaseAssignment `released` 17; stuck-placement: Assign `no-open-session` 68,
 ReleasePlacement `released-unassigned` 17; node-loss: `lost` 13). Without `relays` (scratch copy
 of full-setup) the silent node kept heartbeating: `lost` 0, `released` 0. Validate:
 `weft v1 — 23 file(s), valid`; layers green; no synthesis run (gap 24).
+
+## Pass 6: system invariants in explore (2026-11-26)
+
+Finding (independent review): explore's "0 violations" covered entity invariants only. The four
+system invariants (no-double-placement, quota-conservation, tenant-isolation, idempotency) ran
+only in `simulate`, on 8 mutation points; the pass-4 settle row at 1024 walks never ran.
+
+weft-sim changes (`tools/sim`, no `ess/` change):
+
+- `explore` checks no-double-placement, quota-conservation and tenant-isolation after every N-th
+  step of a walk (`--check-every N`, default 1, 0 off; a controller tick counts as one step) and
+  at the end of the walk; `--invariants LIST|none`, default all four. The checks are simulate's
+  (`simulate::system_checks`). Each invariant is reported once per walk, at the first step it
+  fails, with walk, seed, step and the last command.
+- idempotency: on the same cadence an accepted step of a command that an `at_least_once` binding
+  invokes (`Catalog::redelivered`, 41 commands; ESS: "At least once, so the command must be
+  idempotent") is sent again at the same instant and must change no parameterless
+  read-your-writes view. The duplicate is in the trace with `by: duplicate`.
+- `--settle N` now also checks convergence (sketch § 14 "Convergence is a checked property"):
+  after each walk the experiment's controllers tick with no new input up to N ticks; a walk whose
+  controllers still send requests is `no-convergence`, named with the busy controllers. The ticks
+  are in the trace (`by: converge`). A setup that does not settle is one too.
+- A violating walk keeps its trace (three per invariant; per command for idempotency). `replay`
+  checks the invariants after every step and prints the step where one starts to fail; every
+  replay below answered as recorded (0 answers differ) and found its violation at the same step.
+- `simulate`'s tenant-isolation check counted a node with two tenants and any instance below
+  MicroVm; it now counts tenants that each have an instance below MicroVm (the spec's
+  `shared-kernel`, `ess/5-runtime/scheduling.yaml:973`). A MicroVm has its own kernel: the old
+  rule flagged 9 legal placements after convergence ticks.
+- `sim/experiments/full-setup.yaml`: two controllers the stand-in scheduler and node agent lacked
+  (sim defects the convergence check found, 10 of 32 walks in a probe). `scheduler-declare-unschedulable`:
+  a pending request no node took in a tick is declared Unschedulable (`NoCapacity`; the spec leaves
+  when open, `scheduling.yaml:51`); before, `PlaceInstance` answered `outside-cluster-zones` 180
+  times a tick forever. `node-report-verify-failed`: an instance whose artifact verification was
+  refused (`revoked`, `workloads.yaml:2427`) is reported failed (`RecordInstanceFailed`, which the
+  `fail` transition allows from Scheduled); before, it stayed Scheduled and was re-verified every
+  tick. The five experiments still exit 0 with 0 violations.
+- Tests (`tests/fixture-invariants`, one model whose Assign guard the test removes): one test per
+  check, each with a model that breaks it and one that does not: no-double-placement 0.10 s,
+  idempotency 0.07 s, no-convergence 0.05 s; 16 tests pass in 0.17 s.
+
+Cost of the checks. Seed 1, 1024 walks x 300 steps, 4 threads on `build-1d`: checks off 173 s,
+on 181 s (+5 %); the checks take 65 s of the run's thread time (about 9 %), 4,319 duplicates.
+32-walk probe here: every step 1.5 s summed, every 10th step 0.1 s. Per step is the default.
+With `--settle 12` the convergence ticks take 566-590 s of thread time per seed (about 2 ticks
+a walk, 2,061-2,075 ticks a seed), a quarter of the run.
+
+Runs: `weft-sim explore --spec ess --from sim/experiments/full-setup.yaml --seed <s> --walks 1024
+--steps 300 --threads 4 --max-seconds 1700`, seeds 1-8, each its own slot job (`--tokens 4
+--timeout 30m`) on `build-1d`, at commit `505670b` (binary sha256 prefix `c2edb2371a0f0480`).
+Every seed ran all 1024 walks. Outcomes of 2443, states of 328, transitions of 221.
+
+a) invariants on, no settle:
+
+| seed | outcomes | states | transitions | idempotency | other invariants | time |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1390 | 169 | 97 | 639 | 0 | 181 s |
+| 2 | 1379 | 168 | 98 | 643 | 0 | 176 s |
+| 3 | 1387 | 167 | 94 | 639 | 0 | 180 s |
+| 4 | 1382 | 168 | 96 | 650 | 0 | 190 s |
+| 5 | 1385 | 169 | 97 | 632 | 0 | 181 s |
+| 6 | 1377 | 168 | 98 | 642 | 0 | 184 s |
+| 7 | 1375 | 168 | 97 | 636 | 0 | 183 s |
+| 8 | 1379 | 167 | 95 | 636 | 0 | 191 s |
+| min / median / max | 1375 / 1380.5 / 1390 | 167 / 168 / 169 | 94 / 97 / 98 | 632 / 639 / 650 | 0 | 176 / 182 / 191 s |
+
+b) the same with `--settle 12` (the missing pass-4 "after" row; the setup settles at tick 1, 155
+requests):
+
+| seed | outcomes | states | transitions | idempotency | no-convergence | other invariants | time |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 1563 | 197 | 115 | 577 | 0 | 0 | 569 s |
+| 2 | 1554 | 196 | 113 | 554 | 0 | 0 | 571 s |
+| 3 | 1560 | 195 | 114 | 612 | 0 | 0 | 570 s |
+| 4 | 1557 | 195 | 113 | 562 | 0 | 0 | 578 s |
+| 5 | 1554 | 195 | 114 | 627 | 0 | 0 | 578 s |
+| 6 | 1554 | 195 | 113 | 632 | 0 | 0 | 422 s |
+| 7 | 1550 | 196 | 114 | 594 | 0 | 0 | 501 s |
+| 8 | 1558 | 193 | 113 | 583 | 0 | 0 | 573 s |
+| min / median / max | 1550 / 1555.5 / 1563 | 193 / 195 / 197 | 113 / 113.5 / 115 | 554 / 588.5 / 632 | 0 | 0 | 422 / 570.5 / 578 s |
+
+The settle raises outcomes by 175 (median), well outside the 8-seed band of either row (15 and 13).
+With it `PlaceInstance` and `ScheduleInstance` are accepted 2,679-2,999 times a seed and
+`IssueIdentityDocument` 719-771 (0 in row a); most come from the settle and the convergence ticks.
+`DeliverSecret` stays 0.
+
+Violations and their class:
+
+- idempotency, `weft.infrastructure.CreateNodePool`, every one of the 9,858 (all seeds, both
+  rows): spec defect. The binding `cluster-create-node-pool` (`ess/components.yaml:1911`)
+  delivers it `at_least_once`, and its outcomes (`ess/1-infrastructure/infrastructure.yaml:703`-`716`)
+  have no refusal for a request already served: a second delivery with the same `requested_for`
+  creates a second NodePool (`NodePools`, `TenantNodePools` one row more). The duplicate in every
+  kept trace carried a `requested_for`. The spec would need a refusal before `created` when a
+  NodePool with `requested_for == input.requested_for` exists (only for a set `requested_for`; an
+  operator's own pool has none), dropped at the binding. Replay: `weft-sim replay --spec ess
+  --trace sim/out/inv-settle/s1/result.json --walk 0` (violation at step 92).
+- Fixed in weft-sim before the runs above (sim defects): the duplicate was first sent 1 s after
+  its step, so `weft.nodes.SilentNodeSessions` (it reads `now`) changed between the fingerprints:
+  18 of 3,225 idempotency violations in the first run (SetWorkloadReplicas, StartWaking,
+  WakeService); the tenant-isolation rule (9, above); the two full-setup controllers (above).
+- No-double-placement, quota-conservation, tenant-isolation and no-convergence: 0 in every seed.
+
+Spec finding beside the invariants (in `errors`, not a violation): `weft.nodes.ReleaseAssignment`
+answers `unsupported` about 3,100 times a seed in row b, `RecordInstanceFailed` 495-822,
+`RecordInstanceExited` and `EvictInstance` about 150 each. The cause is the binding into
+`weft.observability.RetireInstanceMetricSeries`: its `instances: where: instance_id ==
+input.instance_id` (`ess/5-runtime/observability.yaml:1943`) is Unknown over a node's series,
+whose `instance_id` is Optional and absent (`:273`). The spec would need `defined(instance_id)`
+before the compare (the form pass 4 used for `wrong-node`).
+
+Rerun: build with `slot --fetch tools/sim/target/debug/weft-sim task sim-build`, then the command
+above per seed as a slot job (`slot --tokens 4 --timeout 30m --fetch sim/out/<dir>/s<n> ...`).
