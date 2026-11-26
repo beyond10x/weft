@@ -111,6 +111,8 @@ pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[
         }
         let by = step["by"].as_str().unwrap_or("");
         let before = (by == "duplicate").then(|| fingerprint(&sess));
+        // A duplicate was sent at the instant of the step it repeats (explore's check_step).
+        sess.step_seconds = if by == "duplicate" { 0 } else { 1 };
         let answer = sess.send(&req);
         let recorded = step["answer"].as_str().unwrap_or("");
         let same = recorded == answer.label;
@@ -397,12 +399,14 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
                     let (tenant, isolation) = decision.get(&d).cloned().unwrap_or_else(|| ("?".into(), String::new()));
                     per_node.entry(id_of(r, "node_id")).or_default().push((tenant, isolation));
                 }
+                // Two tenants share a kernel when each has an instance below MicroVm on the node;
+                // a MicroVm has its own (scheduling.yaml `shared-kernel`, hardening pass 6: a
+                // MicroVm beside another tenant's container is no breach).
                 let mut bad = Vec::new();
                 for (node_id, list) in &per_node {
-                    let tenants: BTreeSet<&String> = list.iter().map(|(t, _)| t).filter(|t| *t != "?").collect();
-                    let below = list.iter().any(|(_, iso)| iso != "MicroVm");
-                    if tenants.len() > 1 && below {
-                        bad.push(format!("node {node_id}: {} tenants below MicroVm", tenants.len()));
+                    let sharing: BTreeSet<&String> = list.iter().filter(|(t, iso)| t != "?" && iso != "MicroVm").map(|(t, _)| t).collect();
+                    if sharing.len() > 1 {
+                        bad.push(format!("node {node_id}: {} tenants share its kernel (instances below MicroVm)", sharing.len()));
                     }
                 }
                 (Check { name: "tenant-isolation".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())

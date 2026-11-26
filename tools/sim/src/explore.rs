@@ -461,8 +461,12 @@ fn check_step(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, req: &
     if duplicate {
         let started = Instant::now();
         let before = fingerprint(sess);
+        // The second delivery arrives at the same instant: a view that reads `now` (silent
+        // sessions, expired leases) must not count as the duplicate's effect.
         let at = sess.clock.0.load(Ordering::Relaxed);
+        let step_seconds = std::mem::replace(&mut sess.step_seconds, 0);
         let again = sess.send(req);
+        sess.step_seconds = step_seconds;
         sent[req.cmd] += 1;
         let check = idempotency_check(&before, &fingerprint(sess), &again);
         *pre = record_step(sess, req, &again, live, at, Some("duplicate"), *pre, feed);
