@@ -1,0 +1,27 @@
+components:
+  - component: control
+    owns:
+      domains:
+        - weft.nodes
+    accepts:
+      commands:
+        - weft.nodes.CreateInstance
+        - weft.nodes.Assign
+        - weft.nodes.Release
+    publishes:
+      events:
+        - weft.nodes.InstanceCreated
+        - weft.nodes.Assigned
+        - weft.nodes.Released
+
+bindings:
+  - id: assign-created
+    when:
+      event: weft.nodes.InstanceCreated
+    invoke:
+      command: weft.nodes.Assign
+    mapping:
+      instance_id: event.instance_id
+      node_id: event.node_id
+    delivery: at_least_once
+    on_failure: drop

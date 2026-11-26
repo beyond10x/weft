@@ -1,0 +1,141 @@
+domain: weft.nodes
+
+summary: >-
+  An instance is created for a node; a binding (at least once) assigns it. Assign refuses an
+  instance that has an assignment; the test removes that guard (between the guard comments) to
+  get a model that places an instance twice and is not idempotent.
+
+naming:
+  wire: nodes
+  display: Nodes
+
+types:
+  - name: weft.nodes.InstanceId
+    kind: newtype
+    of: Uuid
+  - name: weft.nodes.AssignmentId
+    kind: newtype
+    of: Uuid
+  - name: weft.nodes.NodeId
+    kind: newtype
+    of: Uuid
+
+entities:
+  - name: weft.nodes.Instance
+    identity:
+      name: instance_id
+      type: weft.nodes.InstanceId
+    fields:
+      - name: node_id
+        type: weft.nodes.NodeId
+    lifecycle:
+      initial: Created
+      states:
+        - Created
+      terminal: [Created]
+      transitions: []
+  - name: weft.nodes.Assignment
+    identity:
+      name: assignment_id
+      type: weft.nodes.AssignmentId
+    fields:
+      - name: instance_id
+        type: weft.nodes.InstanceId
+      - name: node_id
+        type: weft.nodes.NodeId
+    lifecycle:
+      initial: Active
+      states:
+        - Active
+        - Released
+      terminal: [Released]
+      transitions:
+        - name: release
+          from: [Active]
+          to: Released
+
+commands:
+  - name: weft.nodes.CreateInstance
+    input:
+      - {name: node_id, type: weft.nodes.NodeId}
+    outcomes:
+      - name: created
+        creates: weft.nodes.Instance
+        instance: instance_id
+        sets:
+          node_id: input.node_id
+        emits: [weft.nodes.InstanceCreated]
+        payload:
+          weft.nodes.InstanceCreated:
+            instance_id: {generated: true}
+            node_id: input.node_id
+
+  - name: weft.nodes.Assign
+    input:
+      - {name: instance_id, type: weft.nodes.InstanceId}
+      - {name: node_id, type: weft.nodes.NodeId}
+    outcomes:
+      # guard begin
+      - name: instance-assigned
+        when_related:
+          entity: weft.nodes.Assignment
+          where: instance_id == input.instance_id
+          exists: true
+        error: weft.nodes.Refused
+      # guard end
+      - name: assigned
+        creates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          instance_id: input.instance_id
+          node_id: input.node_id
+        emits: [weft.nodes.Assigned]
+        payload:
+          weft.nodes.Assigned:
+            assignment_id: {generated: true}
+            instance_id: input.instance_id
+
+  - name: weft.nodes.Release
+    input:
+      - {name: assignment_id, type: weft.nodes.AssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.Refused
+      - name: released
+        moves: weft.nodes.Assignment.release
+        instance: assignment_id
+        emits: [weft.nodes.Released]
+        payload:
+          weft.nodes.Released:
+            assignment_id: input.assignment_id
+      - name: not-active
+        wrong_state: true
+        error: weft.nodes.Refused
+
+events:
+  - name: weft.nodes.InstanceCreated
+    fields:
+      - {name: instance_id, type: weft.nodes.InstanceId}
+      - {name: node_id, type: weft.nodes.NodeId}
+  - name: weft.nodes.Assigned
+    fields:
+      - {name: assignment_id, type: weft.nodes.AssignmentId}
+      - {name: instance_id, type: weft.nodes.InstanceId}
+  - name: weft.nodes.Released
+    fields:
+      - {name: assignment_id, type: weft.nodes.AssignmentId}
+
+errors:
+  - name: weft.nodes.Refused
+    summary: The assignment refuses.
+
+views:
+  - name: weft.nodes.Assignments
+    source: weft.nodes.Assignment
+    consistency: read_your_writes
+    fields:
+      - {name: assignment_id, type: weft.nodes.AssignmentId}
+      - {name: instance_id, type: weft.nodes.InstanceId}
+      - {name: node_id, type: weft.nodes.NodeId}
+      - {name: state, type: weft.nodes.Assignment.State}

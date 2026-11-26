@@ -94,6 +94,8 @@ pub struct Inner {
     pub notes: Vec<String>,
     pub info: BTreeMap<String, Value>,
     pub attempts: HashMap<(usize, String), [u64; 2]>,
+    /// Traces kept per violation kind and command.
+    pub violation_traces: HashMap<String, usize>,
 }
 
 pub struct Coverage {
@@ -219,13 +221,28 @@ impl Coverage {
             inner.first.entry(gid).or_insert((walk, seed, step));
         }
         let interesting = found.interesting || !found.violations.is_empty();
+        // The trace of a walk with a violation is kept while its kind (for a violation of one
+        // command, its kind and command) has fewer than three kept, beside the walks that reached
+        // something first: every violation found can be replayed.
+        let mut keep_violation = false;
+        for v in &found.violations {
+            let key = match v.kind.as_str() {
+                "idempotency" | "entity-invariant" => format!("{} {}", v.kind, v.command),
+                _ => v.kind.clone(),
+            };
+            let n = inner.violation_traces.entry(key).or_insert(0);
+            if *n < 3 {
+                *n += 1;
+                keep_violation = true;
+            }
+        }
         inner.violations.extend(found.violations);
         for (key, [all, live]) in found.attempts {
             let entry = inner.attempts.entry(key).or_default();
             entry[0] += all;
             entry[1] += live;
         }
-        if interesting && inner.traces.len() < MAX_TRACES && !found.trace.is_empty() {
+        if (keep_violation || interesting && inner.traces.len() < MAX_TRACES) && !found.trace.is_empty() {
             inner
                 .traces
                 .insert(walk, json!({"walk": walk, "seed": seed, "steps": found.trace}));
@@ -370,6 +387,10 @@ impl Coverage {
             "abstract_states": inner.abstract_states.len(),
             "branch_points": inner.branch_points,
             "violation_count": inner.violations.len(),
+            "violations_by_kind": inner.violations.iter().fold(BTreeMap::<String, usize>::new(), |mut m, v| {
+                *m.entry(v.kind.clone()).or_default() += 1;
+                m
+            }),
             "violations": inner.violations.iter().take(if full { 1000 } else { 50 }).collect::<Vec<_>>(),
             "outcome_hits": outcome_hits,
             "state_hits": state_hits,

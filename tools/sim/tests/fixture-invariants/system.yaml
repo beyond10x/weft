@@ -1,0 +1,11 @@
+format: ess/37
+system: weft
+version: v1
+
+summary: >-
+  Instances assigned to nodes under weft's own names (weft.nodes.Assignments is the view the
+  no-double-placement check reads), for the test of the system invariants inside explore.
+
+domains:
+  - weft.nodes
+  - weft.actors

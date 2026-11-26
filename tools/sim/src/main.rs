@@ -18,9 +18,13 @@ const USAGE: &str = "usage:
   weft-sim explore  --spec DIR --seed N --walks W --steps S --threads T --out DIR
                     [--serve [ADDR]] [--exit-when-done] [--max-seconds N] [--patterns FILE]
                     [--from EXPERIMENT]   every walk starts from the experiment's setup
-                    [--settle N]          after the setup, up to N ticks of its controllers (until no work)
+                    [--settle N]          after the setup, up to N ticks of its controllers (until no work);
+                                          after each walk the same: still working is `no-convergence`
                     [--controller-share P] a share P (0-1) of walk steps is a tick of its controllers
                     [--retry-bound N]     unbounded binding retries stop after N attempts (default 16; 0: as the spec)
+                    [--invariants LIST]   system invariants checked in walks, comma-separated, or none
+                                          (default: idempotency,no-double-placement,quota-conservation,tenant-isolation)
+                    [--check-every N]     check them after every N-th step of a walk (default 1; 0: never)
   weft-sim simulate --spec DIR --experiment FILE --out DIR
                     [--threads T] [--serve [ADDR]] [--exit-when-done] [--no-search]
   weft-sim replay   --spec DIR --trace DIR/result.json --walk K
@@ -161,13 +165,22 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
         max_seconds: args.num("max-seconds", 280)?,
         setup: None,
         controllers: None,
+        checks: explore::Checks::default(),
     };
     let settle = args.num("settle", 0)? as usize;
+    let mut config = config;
+    config.checks.every = args.num("check-every", 1)? as usize;
+    config.checks.converge = settle;
+    if let Some(list) = args.flags.get("invariants").filter(|v| !v.is_empty()) {
+        config.checks.invariants = list.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "none").map(ToOwned::to_owned).collect();
+        if let Some(bad) = config.checks.invariants.iter().find(|i| !simulate::ALL_INVARIANTS.contains(&i.as_str())) {
+            return Err(format!("--invariants: no invariant `{bad}` (known: {})", simulate::ALL_INVARIANTS.join(", ")));
+        }
+    }
     let share: f64 = match args.flags.get("controller-share") {
         Some(v) if !v.is_empty() => v.parse().ok().filter(|p| (0.0..=1.0).contains(p)).ok_or(format!("--controller-share {v}: a number from 0 to 1"))?,
         _ => 0.0,
     };
-    let mut config = config;
     let patterns: Vec<experiment::Pattern> = match args.flags.get("patterns") {
         Some(p) if !p.is_empty() => {
             let text = std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?;
@@ -217,8 +230,16 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
             "settle": settle, "settle_ticks": setup.settle_ticks, "settled_at": setup.settled_at,
             "controller_share": share, "seconds": setup.seconds,
             "outcomes_reached": cov.outcomes_reached.load(Ordering::Relaxed),
+            "violations": setup.violations.len(),
         });
-        if share > 0.0 {
+        if !setup.violations.is_empty() {
+            let mut inner = cov.inner.lock().expect("coverage");
+            for mut v in setup.violations {
+                v.detail = format!("in the setup: {}", v.detail);
+                inner.violations.push(v);
+            }
+        }
+        if share > 0.0 || settle > 0 {
             config.controllers = Some(explore::WalkControllers { exp: exp.clone(), vars: setup.vars.clone(), share });
         }
         config.setup = Some(setup.steps);
@@ -252,6 +273,9 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
         "threads": config.threads,
         "seed": config.seed,
         "walks": config.walks,
+        "invariants": config.checks.invariants.iter().collect::<Vec<_>>(),
+        "check_every": config.checks.every,
+        "converge": config.checks.converge,
         "steps": config.steps,
         "candidate_sets": cands.len(),
         "from": setup_info,
@@ -276,6 +300,29 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
             f("walk_seconds"), 1000.0 * f("walk_seconds") / walks,
             r["controller_ticks"], r["controller_sends"], f("controller_seconds"), 1000.0 * f("controller_seconds") / walks
         );
+    }
+    if let Some(c) = snap["info"].get("checks") {
+        let f = |k: &str| c[k].as_f64().unwrap_or(0.0);
+        eprintln!(
+            "weft-sim: system checks ({}, every {} steps) {:.1} s summed, {} duplicates sent; convergence: {} walks, {} ticks, {} requests, {:.1} s summed",
+            config.checks.invariants.iter().cloned().collect::<Vec<_>>().join(","), config.checks.every, f("seconds"), f("duplicates"),
+            f("converge_walks"), f("converge_ticks"), f("converge_sends"), f("converge_seconds")
+        );
+    }
+    if violations > 0 {
+        eprintln!("weft-sim: violations by kind: {}", snap["violations_by_kind"]);
+        // The first violation of each kind, with the command that replays its walk.
+        let mut shown = std::collections::BTreeSet::new();
+        for v in snap["violations"].as_array().into_iter().flatten() {
+            let kind = v["kind"].as_str().unwrap_or("");
+            if shown.insert(kind.to_owned()) {
+                eprintln!(
+                    "  {kind}: walk {} seed {} step {} after {}: {}\n    replay: weft-sim replay --spec {} --trace {}/result.json --walk {}",
+                    v["walk"], v["seed"], v["step"], v["command"], v["detail"].as_str().unwrap_or("").chars().take(200).collect::<String>(),
+                    spec_dir.display(), out.display(), v["walk"]
+                );
+            }
+        }
     }
     eprintln!("weft-sim: wrote {}/result.json and {}/index.html", out.display(), out.display());
     Ok(finish(args, live, snap, violations))
@@ -363,7 +410,7 @@ fn replay_cmd(args: &Args) -> Result<ExitCode, String> {
         }
         None => Vec::new(),
     };
-    let differ = simulate::replay(&cat, &cov, walk, &steps, &setup)?;
+    let (differ, _) = simulate::replay(&cat, &cov, walk, &steps, &setup)?;
     Ok(if differ == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) })
 }
 
