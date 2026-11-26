@@ -611,11 +611,11 @@ on the inputs, context, state, some actions will be taken by the system to reach
 - System actors stay ordinary actors (no `system: true`): ESS rejects a binding that invokes the
   command of a system actor.
 - Components: ESS lets only the component that owns a domain accept its commands, and refuses a
-  component that owns no domain. So `ess/components.yaml` has `weft-api` and `weft-control`;
-  `weft-node` and `weft-edge` are the peers of `protocols/node-channel.yaml` and
-  `protocols/exec-channel.yaml` until a domain of their own exists (# OPEN: an `edge` domain for
-  routes, held wake requests and certificates). The HTTP binding has one surface per component;
-  the CLI reaches both through one URL.
+  component that owns no domain. `ess/components.yaml` has four: `weft-api`, `weft-control`,
+  `weft-node` (domain `weft.node`: local processes, R9 restart, the local endpoint) and `weft-edge`
+  (domain `weft.edge`: route backends, held wake requests, certificates), design:components
+  (2026-11-26). `weft-api` forwards the user commands of control-owned domains to `weft-control`
+  (D1, the owner 2026-11-26); the CLI reaches both through one URL.
 - Convergence is a checked property: from any reachable state with no new input, every loop ends
   with observed equal to desired or with a named refusal (conformance and protocol exploration).
 
