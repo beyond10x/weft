@@ -59,9 +59,22 @@ jobs:
         with:
           tool: cargo-nextest
 
-      - name: Install the ESS CLI this repository validates with (ess 0.99.2)
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: ess-cache
         if: steps.paths.outputs.skip != 'true'
-        run: cargo install --git https://github.com/beyond10x/ess --tag 0.99.2 --locked ess-cli
+        with:
+          path: ${{ runner.temp }}/ess-tool
+          key: ess-cli-0.99.2-rustc-1.98.1-${{ runner.os }}
+
+      - name: Install the ESS CLI this repository validates with (ess 0.99.2)
+        if: steps.paths.outputs.skip != 'true' && steps.ess-cache.outputs.cache-hit != 'true'
+        run: cargo install --git https://github.com/beyond10x/ess --tag 0.99.2 --locked --root "$RUNNER_TEMP/ess-tool" ess-cli
+
+      - name: Put the ESS CLI on the path
+        if: steps.paths.outputs.skip != 'true'
+        run: |
+          echo "$RUNNER_TEMP/ess-tool/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/ess-tool/bin/ess" --version
 
       - name: Run the gate
         if: steps.paths.outputs.skip != 'true'
