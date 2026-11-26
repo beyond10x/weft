@@ -1,0 +1,411 @@
+domain: weft.artifacts
+
+summary: >-
+  Content-addressed, signed blobs every other domain refers to by digest: code bundles, images,
+  formation documents, model weights.
+
+naming:
+  wire: weft
+  display: Artifacts
+
+types:
+  # Sketch lines 213-239: the package kinds an artifact holds. A copy of the variants of
+  # weft.workloads.PackageKind, which this layer may not name, plus two kinds that are no package.
+  # OPEN: whether one kind enum moves to weft.shared for both domains (integrator).
+  - name: weft.artifacts.ArtifactKind
+    kind: enum
+    variants:
+      - Snippet
+      - Bundle
+      - Wasm
+      - Image
+      - Process
+      - Machine
+      - Model
+      - Browser
+      - Build
+      - EssSystem
+      - Agent
+      # Sketch line 237: "training (later)".
+      - Training
+      - Graph
+      # Sketch line 162: "FormationRevision: immutable snapshot of the formation's document"
+      # (FormationRevision.document_digest). Decided in integration 2.
+      - FormationDocument
+      # Sketch lines 314-315: "A user deploys a `DeploymentSource`": a Compose file, Helm chart,
+      # Kubernetes manifests, ESS system or Loom agent document, as uploaded. Decided in
+      # integration 2.
+      - DeploymentSource
+
+entities:
+  # Sketch lines 215-216: "Every package is an Artifact: content-addressed, signed, verified by the
+  # node before start."
+  - name: weft.artifacts.Artifact
+    naming:
+      summary: Content-addressed, signed bytes of a package; the node verifies the signature before start.
+    identity:
+      name: artifact_digest
+      type: weft.shared.ArtifactDigest
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: kind
+        type: weft.artifacts.ArtifactKind
+      - name: size_bytes
+        type: Integer
+      # OPEN: the signature format and which signing keys an account trusts (section 8 or a new
+      # trust record). Smallest safe answer: a detached signature and its key id, checked on
+      # register and again by the node before start.
+      - name: signature
+        type: String
+      - name: signer_key_id
+        type: String
+      # Sketch line 226: `build` is "a recipe whose output is another Artifact".
+      - name: built_from
+        type: Optional<weft.shared.ArtifactDigest>
+    relations:
+      # Decided in integration 2: references. An artifact is registered by an account; what a
+      # close of the account does to its artifacts is a command outcome, not this relation.
+      - name: account_id
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      # The build recipe outlives the artifact it produced, and the reverse.
+      - name: recipe
+        kind: references
+        target: weft.artifacts.Artifact
+        cardinality: one
+        via: built_from
+    invariants:
+      - size_bytes >= 0
+    lifecycle:
+      initial: Registered
+      states: [Registered, Revoked]
+      terminal: [Revoked]
+      transitions:
+        - name: revoke
+          from: [Registered]
+          to: Revoked
+
+  # Design ci-cd-support § Stage 2 "Provenance": "an artifact built in a `RunnerJob` gets an
+  # attestation (builder = pool, source = repository and commit, run = forge run id), in SLSA
+  # provenance form (to be checked). The `provenance` gate reads it." § Where the nouns live:
+  # artifacts (layer 3) holds it, referenced by the gate.
+  # This layer may not name weft.pipelines (layer 6), so the builder is the builder's identifier
+  # as text (SLSA `builder.id`, to be checked against the SLSA text), not a RunnerPoolId.
+  # UNMAPPED: the design says "builder = pool"; no source says how a pool is spelled as a builder
+  # identifier (a URI naming cluster and pool?). The provenance gate compares the text exactly.
+  # UNMAPPED: the run is the forge's run id (text). Whether the attestation also names the
+  # weft RunnerJob is a link from layer 3 to layer 6 and cannot be stored here; the reverse link
+  # (the job naming its attestations) is weft.pipelines' to decide.
+  # OPEN: the signature of the attestation itself (SLSA envelopes are signed). Taken: a detached
+  # signature and key id like Artifact's, checked on record (external).
+  # OPEN: may an attestation be withdrawn (a compromised builder)? Taken: no; append-only. A
+  # revoked artifact keeps its attestations; the gate also reads the artifact's state.
+  - name: weft.artifacts.Attestation
+    naming:
+      summary: Provenance of one artifact, who built it from which repository, commit and run.
+    identity:
+      name: attestation_id
+      type: weft.shared.AttestationId
+    fields:
+      - name: artifact_digest
+        type: weft.shared.ArtifactDigest
+      # SLSA `builder.id` (to be checked): which builder produced the artifact.
+      - name: builder
+        type: String
+      # The forge repository, exactly as the forge names it (`owner/name`, a GitLab path).
+      - name: source_repository
+        type: String
+      - name: source_commit
+        type: String
+      # The forge's run id, stored for audit.
+      - name: run_id
+        type: String
+      # The provenance predicate type (SLSA provenance, version to be checked).
+      - name: predicate_type
+        type: String
+      - name: signature
+        type: String
+      - name: signer_key_id
+        type: String
+      - name: recorded_at
+        type: Timestamp
+    relations:
+      # Many attestations may name one artifact (one per builder run); an attestation names one.
+      # The artifact stands on its own and outlives the link.
+      - name: artifact
+        kind: references
+        target: weft.artifacts.Artifact
+        cardinality: one
+        via: artifact_digest
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+errors:
+  - name: weft.artifacts.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.artifacts.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.artifacts.InvalidAmount
+    summary: A count, size or bound is out of range (not positive, or a minimum above its maximum).
+  - name: weft.artifacts.ArtifactExists
+    summary: An artifact with this digest is already registered.
+  - name: weft.artifacts.ArtifactUnsigned
+    summary: The artifact carries no signature; weft runs no unsigned bytes.
+  - name: weft.artifacts.ArtifactSignatureInvalid
+    summary: The signature does not verify against a key the account trusts.
+  - name: weft.artifacts.ArtifactUnavailable
+    summary: The artifact is not registered, or it is revoked; nothing was attested.
+  - name: weft.artifacts.AttestationIncomplete
+    summary: The attestation names no builder, source repository, commit or run.
+  - name: weft.artifacts.AttestationExists
+    summary: This builder already attested this artifact for this run.
+  - name: weft.artifacts.AttestationUnsigned
+    summary: The attestation carries no signature.
+  - name: weft.artifacts.AttestationSignatureInvalid
+    summary: The attestation's signature does not verify against a key the cluster trusts for the builder.
+
+events:
+  - name: weft.artifacts.ArtifactRegistered
+    fields:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: kind, type: weft.artifacts.ArtifactKind}
+      - {name: signer_key_id, type: String}
+
+  - name: weft.artifacts.ArtifactRevoked
+    fields:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: reason, type: String}
+
+  - name: weft.artifacts.AttestationRecorded
+    fields:
+      - {name: attestation_id, type: weft.shared.AttestationId}
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: builder, type: String}
+      - {name: source_repository, type: String}
+      - {name: source_commit, type: String}
+      - {name: run_id, type: String}
+
+commands:
+  # Sketch lines 215-216: an artifact is content-addressed and signed; unsigned bytes are refused.
+  - name: weft.artifacts.RegisterArtifact
+    naming:
+      display: Register an artifact
+    input:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: kind, type: weft.artifacts.ArtifactKind}
+      - {name: size_bytes, type: Integer}
+      - {name: signature, type: String}
+      - {name: signer_key_id, type: String}
+      - {name: built_from, type: Optional<weft.shared.ArtifactDigest>}
+    outcomes:
+      # hardening pass 1 D3: the account the artifact is registered in is the caller's account;
+      # another account answers like a missing one.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.artifacts.NotFound
+      - name: unsigned
+        when: signature == ""
+        error: weft.artifacts.ArtifactUnsigned
+      - name: negative-size
+        when: size_bytes < 0
+        error: weft.artifacts.InvalidAmount
+      # hardening pass 1 disclosure (RegisterArtifact artifact_digest): the signature is checked
+      # from the request, before any row is read, so a caller learns whether a digest is
+      # registered only with a signature by a key its account trusts. The digest stays one row
+      # for the whole cluster until D8 keys the artifact by (account_id, artifact_digest).
+      # OPEN (D8, design change): ArtifactExists still answers for another account's digest, and a
+      # first registration squats the digest for every other account.
+      - name: bad-signature
+        external: the signature does not verify against a signing key the account trusts
+        before_row: true
+        error: weft.artifacts.ArtifactSignatureInvalid
+      # hardening pass 1 W7: an artifact is built only from a registered artifact of its own
+      # account; a recipe of another account answers like a missing one. An absent built_from
+      # reads no row.
+      - name: built-from-missing
+        when_related: {via: input.built_from, exists: false}
+        error: weft.artifacts.NotFound
+      - name: built-from-foreign
+        when_related: {via: input.built_from, predicate: account_id != input.account_id}
+        error: weft.artifacts.NotFound
+      - name: exists
+        when_related:
+          entity: weft.artifacts.Artifact
+          where: artifact_digest == input.artifact_digest
+          exists: true
+        error: weft.artifacts.ArtifactExists
+      - name: registered
+        creates: weft.artifacts.Artifact
+        instance: artifact_digest
+        sets:
+          account_id: input.account_id
+          kind: input.kind
+          size_bytes: input.size_bytes
+          signature: input.signature
+          signer_key_id: input.signer_key_id
+          built_from: input.built_from
+        emits: [weft.artifacts.ArtifactRegistered]
+        payload:
+          weft.artifacts.ArtifactRegistered:
+            artifact_digest: input.artifact_digest
+            account_id: input.account_id
+            kind: input.kind
+            signer_key_id: input.signer_key_id
+
+  # Sketch lines 215-216. OPEN: the sketch has no revocation; a key compromise needs one. Smallest
+  # safe answer: a revoked artifact starts nothing new; running instances are not stopped by it.
+  - name: weft.artifacts.RevokeArtifact
+    naming:
+      display: Revoke an artifact
+    input:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-artifact
+        unknown_instance: true
+        error: weft.artifacts.NotFound
+      # hardening pass 1 D3: only the artifact's own account revokes it; another account's
+      # artifact answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.artifacts.NotFound
+      - name: revoked
+        moves: weft.artifacts.Artifact.revoke
+        instance: artifact_digest
+        emits: [weft.artifacts.ArtifactRevoked]
+        payload:
+          weft.artifacts.ArtifactRevoked:
+            artifact_digest: input.artifact_digest
+            reason: input.reason
+      - name: wrong-state
+        wrong_state: true
+        error: weft.artifacts.StateConflict
+
+  # Design ci-cd-support § Stage 2 "Provenance": an artifact built in a runner job gets an
+  # attestation. Recorded once per builder run; never changed (append-only).
+  # OPEN: which actor records it; the design says only that the job's artifact gets one. Taken:
+  # the control plane, when a runner job registers an artifact (actors.yaml, integrator).
+  - name: weft.artifacts.RecordAttestation
+    naming:
+      display: Record the provenance of an artifact
+    input:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: builder, type: String}
+      - {name: source_repository, type: String}
+      - {name: source_commit, type: String}
+      - {name: run_id, type: String}
+      - {name: predicate_type, type: String}
+      - {name: signature, type: String}
+      - {name: signer_key_id, type: String}
+    response:
+      - {name: attestation_id, type: weft.shared.AttestationId}
+    outcomes:
+      - name: incomplete
+        when:
+          any:
+            - builder == ""
+            - source_repository == ""
+            - source_commit == ""
+            - run_id == ""
+        error: weft.artifacts.AttestationIncomplete
+      - name: unsigned
+        when: signature == ""
+        error: weft.artifacts.AttestationUnsigned
+      - name: no-such-artifact
+        when_related: {via: input.artifact_digest, exists: false}
+        error: weft.artifacts.ArtifactUnavailable
+      - name: artifact-revoked
+        when_related: {via: input.artifact_digest, predicate: state == Revoked}
+        error: weft.artifacts.ArtifactUnavailable
+      - name: exists
+        when_related:
+          entity: weft.artifacts.Attestation
+          where:
+            all:
+              - artifact_digest == input.artifact_digest
+              - builder == input.builder
+              - run_id == input.run_id
+          exists: true
+        error: weft.artifacts.AttestationExists
+      - name: bad-signature
+        external: the attestation's signature does not verify against a key the cluster trusts for the builder
+        error: weft.artifacts.AttestationSignatureInvalid
+      - name: recorded
+        creates: weft.artifacts.Attestation
+        instance: attestation_id
+        returns: true
+        sets:
+          artifact_digest: input.artifact_digest
+          builder: input.builder
+          source_repository: input.source_repository
+          source_commit: input.source_commit
+          run_id: input.run_id
+          predicate_type: input.predicate_type
+          signature: input.signature
+          signer_key_id: input.signer_key_id
+          recorded_at: {generated: true}
+        emits: [weft.artifacts.AttestationRecorded]
+        payload:
+          weft.artifacts.AttestationRecorded:
+            attestation_id: {response: attestation_id}
+            artifact_digest: input.artifact_digest
+            builder: input.builder
+            source_repository: input.source_repository
+            source_commit: input.source_commit
+            run_id: input.run_id
+
+views:
+  # Design ci-cd-support § Stage 2 "Provenance": "The `provenance` gate reads it." The
+  # attestations of one artifact, with the artifact's state beside them.
+  - name: weft.artifacts.AttestationsOfArtifact
+    source: weft.artifacts.Attestation
+    consistency: read_your_writes
+    params:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+    filter: artifact_digest == param.artifact_digest
+    fields:
+      - {name: attestation_id, type: weft.shared.AttestationId}
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: builder, type: String}
+      - {name: source_repository, type: String}
+      - {name: source_commit, type: String}
+      - {name: run_id, type: String}
+      - {name: predicate_type, type: String}
+      - {name: signer_key_id, type: String}
+      - {name: recorded_at, type: Timestamp}
+      - name: artifact_state
+        type: Optional<weft.artifacts.Artifact.State>
+        field: {related: {via: artifact_digest, field: state}}
+      - {name: state, type: weft.artifacts.Attestation.State}
+
+  # Sketch lines 215-216.
+  - name: weft.artifacts.ArtifactList
+    source: weft.artifacts.Artifact
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: kind, type: weft.artifacts.ArtifactKind}
+      - {name: size_bytes, type: Integer}
+      - {name: signer_key_id, type: String}
+      - {name: built_from, type: Optional<weft.shared.ArtifactDigest>}
+      - {name: state, type: weft.artifacts.Artifact.State}
+
+  # An invariant reads size_bytes: this view holds every artifact in every state.
+  - name: weft.artifacts.Artifacts
+    source: weft.artifacts.Artifact
+    consistency: read_your_writes
+    fields:
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: size_bytes, type: Integer}
+      - {name: state, type: weft.artifacts.Artifact.State}

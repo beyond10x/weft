@@ -1,0 +1,1025 @@
+domain: weft.actors
+
+summary: >-
+  Every actor of weft and the commands it may run. docs/domain-sketch.md § Structure, Actors.
+
+naming:
+  wire: actors
+  display: Actors
+
+# Source: docs/domain-sketch.md § Structure "Actors" (lines 103-127) for the actor list, and
+# docs/actors-draft.md (2026-11-26) for each actor's commands, per domain.
+#
+# Not expressible in `may:`, so written as comments only: role and scope limits ("own node only",
+# "own login", "Logs kind only", "admin role", the one role an Automation token holds). The
+# implementation's authorization check enforces them.
+#
+# OPEN: read access to views. `may:` takes a view as well as a command (ESS-ACTOR-001: "may invoke
+# or read ... a command or a view"), but this pass grants commands only: the draft's "Views:"
+# lines cover 4 of 16 domains (accounts, secrets, catalog, metering). Grant views here, for every
+# domain, in a later pass?
+#
+# OPEN: whether the system actors (NodeAgent, Scheduler, Translator, Instance, ManagementApi,
+# ReleaseController, ControlPlane) are `system: true` (ess/27): conformance then awaits their
+# commands instead of driving them. Not set: the draft does not decide it, and NodeAgent and
+# Instance are separate processes with credentials of their own.
+#
+# Caller attributes (hardening pass 1, D2 and D3; integrator, 2026-11-26). The tenant actors and
+# the control-plane actors that act for an account (ControlPlane, ReleaseController, Translator) declare `principal_id`, `tenant_id` and
+# `account_id`. `account_id` is the account the request acts in: weft-api sets it after it checks
+# that the principal holds a role on that account or on an ancestor (sketch line 140, "on an
+# account and below"); weft-control sets it to the account of the row it acts on. A guard compares
+# it with `==`/`!=` only (ESS caller values, `caller-values.md`). Commands that read none of them
+# are unchanged.
+# OPEN: the owner may prefer the caller to carry the account tree; ESS compares a caller value only by
+# equality, so "the account the request acts in" is the form that can be checked.
+
+actors:
+  # ----- Humans and clients -----
+
+  # Sketch line 107: runs the cloud itself; never reads tenant secrets or workload data.
+  - name: weft.actors.ClusterOperator
+    naming:
+      wire: cluster_operator
+      display: Cluster operator
+    may:
+      - weft.cluster.CreateDefaultCluster # integrator, 2026-11-26
+      # cluster: every command except JoinNode and RecordNodeObservation.
+      - weft.infrastructure.CreateCloud
+      - weft.infrastructure.SetCloudPolicy
+      - weft.infrastructure.ScaleControlPlane
+      - weft.infrastructure.DeclareZone
+      - weft.infrastructure.RetireZone
+      - weft.infrastructure.CreateNodePool
+      - weft.infrastructure.UpdateNodePool
+      - weft.infrastructure.DeleteNodePool
+      - weft.infrastructure.RequestNodePoolScaleUp
+      - weft.infrastructure.RequestNodePoolScaleDown
+      - weft.infrastructure.ProvisionNode
+      - weft.infrastructure.ProvisionPoolNode
+      - weft.infrastructure.IssueJoinToken
+      - weft.infrastructure.CordonNode
+      - weft.infrastructure.UncordonNode
+      - weft.infrastructure.DrainNode
+      - weft.infrastructure.RemoveNode
+      # Priority classes (§10, moved from weft.scheduling to weft.cluster, integration 2026-11-26).
+      - weft.infrastructure.DefinePriorityClass
+      - weft.infrastructure.RetirePriorityClass
+      # inventory
+      - weft.inventory.DefineResourceClass
+      - weft.inventory.RetireResourceClass
+      - weft.inventory.ResetDevice
+      # accounts
+      - weft.accounts.CreateTenant
+      - weft.accounts.CloseTenant
+      - weft.accounts.GrantTopQuota
+      - weft.accounts.RaiseTopQuota
+      - weft.accounts.LowerTopQuota
+      - weft.accounts.BindTenantOwner
+      # access: Approve, Deny and Revoke of its own login only.
+      - weft.access.ConfigureAccess
+      - weft.access.ApproveLogin
+      - weft.access.DenyLogin
+      - weft.access.RevokeLogin
+      # workloads
+      - weft.workloads.RegisterRuntime
+      - weft.workloads.RetireRuntime
+      # nodes
+      - weft.nodes.Drain
+      - weft.nodes.CancelDrain
+      # identity
+      - weft.identity.CreateTrustDomain
+      - weft.identity.RotateSigningKey
+      - weft.identity.FinishKeyRotation
+      - weft.identity.RetireTrustDomain
+      - weft.identity.RevokeIdentityDocument
+      # secrets: registers backends only; reads no secret value.
+      - weft.secrets.RegisterSecretBackend
+      # deployments
+      - weft.deployments.RegisterTranslator
+      - weft.deployments.RetireTranslator
+      # catalog: engines, offerings, plans, publishers, products and versions.
+      - weft.catalog.RegisterEngine
+      - weft.catalog.RetireEngine
+      - weft.catalog.PublishOffering
+      - weft.catalog.RetireOffering
+      - weft.catalog.SwapOfferingEngine
+      - weft.catalog.AddOfferingPlan
+      - weft.catalog.RetireOfferingPlan
+      - weft.catalog.RegisterPublisher
+      - weft.catalog.RetirePublisher
+      - weft.catalog.PublishProduct
+      - weft.catalog.WithdrawProduct
+      - weft.catalog.PublishProductVersion
+      - weft.catalog.WithdrawProductVersion
+      - weft.catalog.MoveServiceInstanceEngine
+      # metering
+      - weft.metering.CreatePriceList
+      - weft.metering.SetPrice
+      - weft.metering.RemovePrice
+      - weft.metering.PublishPriceList
+      - weft.metering.DefinePricingModel
+      - weft.metering.RetirePricingModel
+      - weft.metering.AssignPricing
+      - weft.metering.EndPricingAssignment
+
+  # Sketch line 109: creates accounts, grants roles, sets quotas in a tenant (role `owner`).
+  - name: weft.actors.TenantOwner
+    naming:
+      wire: tenant_owner
+      display: Tenant owner
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      - weft.cluster.CreateCluster # integrator, 2026-11-26
+      - weft.cluster.SetClusterPolicy # integrator, 2026-11-26
+      - weft.cluster.DeleteCluster # integrator, 2026-11-26
+      - weft.cluster.AddClusterNodePool # integrator, 2026-11-26
+      - weft.cluster.RemoveClusterNodePool # integrator, 2026-11-26
+      - weft.cluster.CreateClusterTopology # integrator, 2026-11-26
+      - weft.cluster.RemoveClusterTopology # integrator, 2026-11-26
+      - weft.cluster.AddTopologyGroup # integrator, 2026-11-26
+      - weft.cluster.RemoveTopologyGroup # integrator, 2026-11-26
+      - weft.cluster.DeclareTopologyLink # integrator, 2026-11-26
+      - weft.cluster.RemoveTopologyLink # integrator, 2026-11-26
+      - weft.access.RegisterTrustedIssuer # integrator, 2026-11-26
+      - weft.access.WithdrawTrustedIssuer # integrator, 2026-11-26
+      - weft.access.CreateFederationRule # integrator, 2026-11-26
+      - weft.access.WithdrawFederationRule # integrator, 2026-11-26
+      - weft.pipelines.ConnectForge # integrator, 2026-11-26
+      - weft.pipelines.DisconnectForge # integrator, 2026-11-26
+      - weft.pipelines.CreateRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.RetireRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.CreateBuildCache # integrator, 2026-11-26
+      - weft.pipelines.EvictBuildCache # integrator, 2026-11-26
+      - weft.pipelines.AddDeployGate # integrator, 2026-11-26
+      - weft.pipelines.RemoveDeployGate # integrator, 2026-11-26
+      - weft.pipelines.ApproveGateCheck # integrator, 2026-11-26
+      - weft.pipelines.RejectGateCheck # integrator, 2026-11-26
+      - weft.pipelines.CancelRunnerJob # integrator, 2026-11-26
+      - weft.observability.ConfigureTelemetrySink # integrator, 2026-11-26
+      - weft.observability.ConfigureBucketSink # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetrySink # integrator, 2026-11-26
+      - weft.observability.AddNotificationTarget # integrator, 2026-11-26
+      - weft.observability.RemoveNotificationTarget # integrator, 2026-11-26
+      - weft.observability.CreateAlertRule # integrator, 2026-11-26
+      - weft.observability.DeleteAlertRule # integrator, 2026-11-26
+      - weft.observability.SetTelemetryPolicy # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetryPolicy # integrator, 2026-11-26
+      # accounts
+      - weft.accounts.BindTenantOwner
+      - weft.accounts.RevokeTenantOwner
+      - weft.accounts.CreateAccount
+      - weft.accounts.AddUser
+      - weft.accounts.AddServiceAccount
+      - weft.accounts.AddWorkloadPrincipal
+      - weft.accounts.DisablePrincipal
+      - weft.accounts.CreateSubAccount
+      - weft.accounts.CloseAccount
+      - weft.accounts.BindRole
+      - weft.accounts.RevokeRole
+      - weft.accounts.AllocateQuota
+      - weft.accounts.DrawQuota
+      - weft.accounts.ReleaseQuota
+      # access: Approve, Deny and Revoke of its own login only.
+      - weft.access.ApproveLogin
+      - weft.access.DenyLogin
+      - weft.access.RevokeLogin
+      - weft.access.CreateApiToken
+      - weft.access.RevokeApiToken
+      # artifacts (integrator default)
+      - weft.artifacts.RevokeArtifact
+      # formations
+      - weft.formations.SetFormationQuota
+      - weft.formations.SetEnvironmentQuota
+      - weft.formations.CreateExport
+      - weft.formations.RevokeExport
+      # identity
+      - weft.identity.CreateExchangePolicy
+      - weft.identity.WithdrawExchangePolicy
+      # secrets
+      # OPEN: the draft reads "Deployer, AccountAdmin, Automation -> CreateSecret,
+      # AddSecretVersion, GrantSecret; plus TenantOwner -> DisableSecretVersion,
+      # RevokeSecretGrant". Taken (deny by default): only TenantOwner disables a version or revokes
+      # a grant, and TenantOwner creates no secret. Does "plus" also give the first three actors
+      # Disable and Revoke?
+      - weft.secrets.DisableSecretVersion
+      - weft.secrets.RevokeSecretGrant
+      # metering
+      - weft.metering.SetDeadline
+      - weft.metering.ChangeDeadline
+      - weft.metering.RemoveDeadline
+      - weft.metering.SetConcurrency
+      - weft.metering.ChangeConcurrency
+      - weft.metering.RemoveConcurrency
+      - weft.metering.SetRate
+      - weft.metering.ChangeRate
+      - weft.metering.RemoveRate
+      - weft.metering.SetBudget
+      - weft.metering.ChangeBudget
+      - weft.metering.RemoveBudget
+
+  # Sketch line 110: manages one account and its sub-accounts (role `admin`).
+  - name: weft.actors.AccountAdmin
+    naming:
+      wire: account_admin
+      display: Account admin
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      - weft.cluster.CreateCluster # integrator, 2026-11-26
+      - weft.cluster.SetClusterPolicy # integrator, 2026-11-26
+      - weft.cluster.DeleteCluster # integrator, 2026-11-26
+      - weft.cluster.AddClusterNodePool # integrator, 2026-11-26
+      - weft.cluster.RemoveClusterNodePool # integrator, 2026-11-26
+      - weft.cluster.CreateClusterTopology # integrator, 2026-11-26
+      - weft.cluster.RemoveClusterTopology # integrator, 2026-11-26
+      - weft.cluster.AddTopologyGroup # integrator, 2026-11-26
+      - weft.cluster.RemoveTopologyGroup # integrator, 2026-11-26
+      - weft.cluster.DeclareTopologyLink # integrator, 2026-11-26
+      - weft.cluster.RemoveTopologyLink # integrator, 2026-11-26
+      - weft.formations.CreatePreviewEnvironment # integrator, 2026-11-26
+      - weft.access.CreateFederationRule # integrator, 2026-11-26
+      - weft.access.WithdrawFederationRule # integrator, 2026-11-26
+      - weft.pipelines.ConnectForge # integrator, 2026-11-26
+      - weft.pipelines.DisconnectForge # integrator, 2026-11-26
+      - weft.pipelines.CreateRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.RetireRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.CreateBuildCache # integrator, 2026-11-26
+      - weft.pipelines.EvictBuildCache # integrator, 2026-11-26
+      - weft.pipelines.AddDeployGate # integrator, 2026-11-26
+      - weft.pipelines.RemoveDeployGate # integrator, 2026-11-26
+      - weft.pipelines.ApproveGateCheck # integrator, 2026-11-26
+      - weft.pipelines.RejectGateCheck # integrator, 2026-11-26
+      - weft.pipelines.CancelRunnerJob # integrator, 2026-11-26
+      - weft.observability.ConfigureTelemetrySink # integrator, 2026-11-26
+      - weft.observability.ConfigureBucketSink # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetrySink # integrator, 2026-11-26
+      - weft.observability.AddNotificationTarget # integrator, 2026-11-26
+      - weft.observability.RemoveNotificationTarget # integrator, 2026-11-26
+      - weft.observability.CreateAlertRule # integrator, 2026-11-26
+      - weft.observability.DeleteAlertRule # integrator, 2026-11-26
+      - weft.observability.SetTelemetryPolicy # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetryPolicy # integrator, 2026-11-26
+      # accounts
+      - weft.accounts.CreateSubAccount
+      - weft.accounts.CloseAccount
+      - weft.accounts.BindRole
+      - weft.accounts.RevokeRole
+      - weft.accounts.AllocateQuota
+      - weft.accounts.DrawQuota
+      - weft.accounts.ReleaseQuota
+      # access: Approve, Deny and Revoke of its own login only.
+      - weft.access.ApproveLogin
+      - weft.access.DenyLogin
+      - weft.access.RevokeLogin
+      - weft.access.CreateApiToken
+      - weft.access.RevokeApiToken
+      # resources
+      - weft.resources.CreateVolume
+      - weft.resources.RestoreVolume
+      - weft.resources.DeleteVolume
+      - weft.resources.SnapshotVolume
+      - weft.resources.DeleteVolumeSnapshot
+      - weft.resources.CreateFilesystem
+      - weft.resources.DeleteFilesystem
+      - weft.resources.CreateBucket
+      - weft.resources.DeleteBucket
+      # artifacts (integrator default)
+      - weft.artifacts.RevokeArtifact
+      # formations
+      - weft.formations.CreateFormation
+      - weft.formations.RetireFormation
+      - weft.formations.SetFormationQuota
+      - weft.formations.CreateEnvironment
+      - weft.formations.RetireEnvironment
+      - weft.formations.SetEnvironmentQuota
+      - weft.formations.CreateExport
+      - weft.formations.RevokeExport
+      # identity
+      - weft.identity.CreateExchangePolicy
+      - weft.identity.WithdrawExchangePolicy
+      # secrets
+      - weft.secrets.CreateSecret
+      - weft.secrets.AddSecretVersion
+      - weft.secrets.GrantSecret
+      # catalog
+      - weft.catalog.ProvisionServiceInstance
+      - weft.catalog.ChangeServicePlan
+      - weft.catalog.SetServiceSleepPolicy
+      - weft.catalog.DeprovisionServiceInstance
+      - weft.catalog.BindService
+      - weft.catalog.UnbindService
+      - weft.catalog.BackupServiceInstance
+      - weft.catalog.RestoreServiceInstance
+      - weft.catalog.InstallProduct
+      - weft.catalog.UpgradeInstallation
+      - weft.catalog.UninstallProduct
+      - weft.catalog.SetInstallationSleepPolicy
+      # metering
+      - weft.metering.SetDeadline
+      - weft.metering.ChangeDeadline
+      - weft.metering.RemoveDeadline
+      - weft.metering.SetConcurrency
+      - weft.metering.ChangeConcurrency
+      - weft.metering.RemoveConcurrency
+      - weft.metering.SetRate
+      - weft.metering.ChangeRate
+      - weft.metering.RemoveRate
+      - weft.metering.SetBudget
+      - weft.metering.ChangeBudget
+      - weft.metering.RemoveBudget
+
+  # Sketch line 111: deploys formations, sets secrets, scales, execs (role `deployer`).
+  - name: weft.actors.Deployer
+    naming:
+      wire: deployer
+      display: Deployer
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      - weft.formations.CreatePreviewEnvironment # integrator, 2026-11-26
+      - weft.pipelines.CreateRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.RetireRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.CreateBuildCache # integrator, 2026-11-26
+      - weft.pipelines.EvictBuildCache # integrator, 2026-11-26
+      - weft.pipelines.ApproveGateCheck # integrator, 2026-11-26
+      - weft.pipelines.RejectGateCheck # integrator, 2026-11-26
+      - weft.pipelines.CancelRunnerJob # integrator, 2026-11-26
+      - weft.observability.ConfigureTelemetrySink # integrator, 2026-11-26
+      - weft.observability.ConfigureBucketSink # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetrySink # integrator, 2026-11-26
+      - weft.observability.AddNotificationTarget # integrator, 2026-11-26
+      - weft.observability.RemoveNotificationTarget # integrator, 2026-11-26
+      - weft.observability.CreateAlertRule # integrator, 2026-11-26
+      - weft.observability.DeleteAlertRule # integrator, 2026-11-26
+      - weft.observability.SetTelemetryPolicy # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetryPolicy # integrator, 2026-11-26
+      # access: Approve, Deny and Revoke of its own login only.
+      - weft.access.ApproveLogin
+      - weft.access.DenyLogin
+      - weft.access.RevokeLogin
+      - weft.access.CreateApiToken
+      # resources
+      - weft.resources.CreateVolume
+      - weft.resources.RestoreVolume
+      - weft.resources.DeleteVolume
+      - weft.resources.SnapshotVolume
+      - weft.resources.DeleteVolumeSnapshot
+      - weft.resources.CreateFilesystem
+      - weft.resources.DeleteFilesystem
+      - weft.resources.CreateBucket
+      - weft.resources.DeleteBucket
+      # artifacts
+      - weft.artifacts.RegisterArtifact
+      # formations: CommitRevision and every add, remove and change of a revision's parts.
+      - weft.formations.CommitRevision
+      - weft.formations.AddComponent
+      - weft.formations.RemoveComponent
+      - weft.formations.AddLink
+      - weft.formations.RemoveLink
+      - weft.formations.AddToBorder
+      - weft.formations.RemoveFromBorder
+      - weft.formations.AddEndpoint
+      - weft.formations.RemoveEndpoint
+      - weft.formations.AddRoute
+      - weft.formations.RemoveRoute
+      - weft.formations.CreateConfig
+      - weft.formations.ChangeConfig
+      - weft.formations.RemoveConfig
+      - weft.formations.MountConfig
+      - weft.formations.UnmountConfig
+      - weft.formations.SetConfigOverride
+      - weft.formations.ChangeConfigOverride
+      - weft.formations.RemoveConfigOverride
+      - weft.formations.SetScale
+      - weft.formations.ChangeScale
+      - weft.formations.RemoveScale
+      # workloads: every user command. Invoke, SubmitJob and CancelJob are counted as user
+      # commands (CLI `weft invoke`, workloads.yaml); the draft's list names no invocation or job.
+      - weft.workloads.DefineWorkload
+      - weft.workloads.RetireWorkload
+      - weft.workloads.DefineService
+      - weft.workloads.ScaleService
+      - weft.workloads.SetScaleRule
+      - weft.workloads.SetDisruptionBudget
+      - weft.workloads.SetSleepPolicy
+      - weft.workloads.WakeService # source `explicit` only
+      - weft.workloads.Invoke
+      - weft.workloads.SubmitJob
+      - weft.workloads.CancelJob
+      - weft.workloads.CreateBox
+      - weft.workloads.StartBox
+      - weft.workloads.StopBox
+      - weft.workloads.SuspendBox
+      - weft.workloads.ResizeBox
+      - weft.workloads.DestroyBox
+      - weft.workloads.AcquireBoxLease
+      - weft.workloads.ReleaseBoxLease
+      - weft.workloads.CordonBox
+      - weft.workloads.UncordonBox
+      - weft.workloads.OpenSession
+      - weft.workloads.AttachSession
+      - weft.workloads.DetachSession
+      - weft.workloads.CloseSession
+      - weft.workloads.CreateSchedule
+      - weft.workloads.PauseSchedule
+      - weft.workloads.ResumeSchedule
+      - weft.workloads.DeleteSchedule
+      - weft.workloads.CreateTrigger
+      - weft.workloads.EnableTrigger
+      - weft.workloads.DisableTrigger
+      - weft.workloads.DeleteTrigger
+      - weft.workloads.TakeSnapshot
+      - weft.workloads.RestoreSnapshot
+      - weft.workloads.DeleteSnapshot
+      - weft.workloads.CreateWarmPool
+      - weft.workloads.ResizeWarmPool
+      - weft.workloads.DeleteWarmPool
+      - weft.workloads.StopInstance
+      - weft.workloads.PauseInstance
+      - weft.workloads.ResumeInstance
+      - weft.workloads.OpenExec
+      # claims
+      - weft.claims.DeclareClaim
+      - weft.claims.ReleaseClaim
+      # nodes
+      - weft.nodes.OpenExecSession
+      - weft.nodes.CloseExecSession
+      # secrets
+      - weft.secrets.CreateSecret
+      - weft.secrets.AddSecretVersion
+      - weft.secrets.GrantSecret
+      # deployments
+      - weft.deployments.SubmitDeploymentSource
+      - weft.deployments.WithdrawDeploymentSource
+      - weft.deployments.TranslateSource
+      - weft.deployments.CreatePlan
+      - weft.deployments.PlanRollback
+      - weft.deployments.DiscardPlan
+      - weft.deployments.ApplyPlan
+      # catalog
+      - weft.catalog.ProvisionServiceInstance
+      - weft.catalog.ChangeServicePlan
+      - weft.catalog.SetServiceSleepPolicy
+      - weft.catalog.DeprovisionServiceInstance
+      - weft.catalog.BindService
+      - weft.catalog.UnbindService
+      - weft.catalog.BackupServiceInstance
+      - weft.catalog.RestoreServiceInstance
+      - weft.catalog.InstallProduct
+      - weft.catalog.UpgradeInstallation
+      - weft.catalog.UninstallProduct
+      - weft.catalog.SetInstallationSleepPolicy
+      # metering
+      - weft.metering.SetDeadline
+      - weft.metering.SetConcurrency
+      - weft.metering.SetRate
+
+  # Sketch line 112: reads state, logs and usage (role `viewer`). Views: see the OPEN at the top.
+  - name: weft.actors.Viewer
+    naming:
+      wire: viewer
+      display: Viewer
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      # access: Approve, Deny and Revoke of its own login only.
+      - weft.access.ApproveLogin
+      - weft.access.DenyLogin
+      - weft.access.RevokeLogin
+      - weft.access.CreateApiToken
+      # nodes
+      - weft.nodes.OpenExecSession # session kind `logs` only
+      - weft.nodes.CloseExecSession # its own logs session only (integrator, 2026-11-26)
+      # weft.workloads.OpenExec is not granted: the exec record of a Logs session is
+      # nodes.OpenExecSession; OpenExec is Deployer only (workloads.yaml OPEN).
+
+  # docs/actors-draft.md "Human and client actors": role `billing` (sketch § 1 line 141). Reads
+  # usage, quotas, prices and statements of its account. Views: see the OPEN at the top.
+  - name: weft.actors.Billing
+    naming:
+      wire: billing
+      display: Billing
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      # access: Approve, Deny and Revoke of its own login only. No API token: the draft's
+      # CreateApiToken line names TenantOwner, AccountAdmin, Deployer and Viewer.
+      - weft.access.ApproveLogin
+      - weft.access.DenyLogin
+      - weft.access.RevokeLogin
+
+  # Sketch line 113: an API token acting with one role in one account (CI). Never creates API
+  # tokens, never opens exec or attaches sessions. The role the token holds narrows these grants
+  # further (a token with role `viewer` runs none of them); the authorization check enforces it.
+  - name: weft.actors.Automation
+    naming:
+      wire: automation
+      display: Automation
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      - weft.formations.CreatePreviewEnvironment # integrator, 2026-11-26
+      - weft.pipelines.CreateRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.RetireRunnerPool # integrator, 2026-11-26
+      - weft.pipelines.CreateBuildCache # integrator, 2026-11-26
+      - weft.pipelines.EvictBuildCache # integrator, 2026-11-26
+      - weft.pipelines.CancelRunnerJob # integrator, 2026-11-26
+      - weft.observability.ConfigureTelemetrySink # integrator, 2026-11-26
+      - weft.observability.ConfigureBucketSink # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetrySink # integrator, 2026-11-26
+      - weft.observability.AddNotificationTarget # integrator, 2026-11-26
+      - weft.observability.RemoveNotificationTarget # integrator, 2026-11-26
+      - weft.observability.CreateAlertRule # integrator, 2026-11-26
+      - weft.observability.DeleteAlertRule # integrator, 2026-11-26
+      - weft.observability.SetTelemetryPolicy # integrator, 2026-11-26
+      - weft.observability.RemoveTelemetryPolicy # integrator, 2026-11-26
+      # resources
+      - weft.resources.CreateVolume
+      - weft.resources.RestoreVolume
+      - weft.resources.DeleteVolume
+      - weft.resources.SnapshotVolume
+      - weft.resources.DeleteVolumeSnapshot
+      - weft.resources.CreateFilesystem
+      - weft.resources.DeleteFilesystem
+      - weft.resources.CreateBucket
+      - weft.resources.DeleteBucket
+      # artifacts
+      - weft.artifacts.RegisterArtifact
+      # formations: as Deployer.
+      - weft.formations.CommitRevision
+      - weft.formations.AddComponent
+      - weft.formations.RemoveComponent
+      - weft.formations.AddLink
+      - weft.formations.RemoveLink
+      - weft.formations.AddToBorder
+      - weft.formations.RemoveFromBorder
+      - weft.formations.AddEndpoint
+      - weft.formations.RemoveEndpoint
+      - weft.formations.AddRoute
+      - weft.formations.RemoveRoute
+      - weft.formations.CreateConfig
+      - weft.formations.ChangeConfig
+      - weft.formations.RemoveConfig
+      - weft.formations.MountConfig
+      - weft.formations.UnmountConfig
+      - weft.formations.SetConfigOverride
+      - weft.formations.ChangeConfigOverride
+      - weft.formations.RemoveConfigOverride
+      - weft.formations.SetScale
+      - weft.formations.ChangeScale
+      - weft.formations.RemoveScale
+      # workloads: as Deployer, without OpenExec and AttachSession.
+      - weft.workloads.DefineWorkload
+      - weft.workloads.RetireWorkload
+      - weft.workloads.DefineService
+      - weft.workloads.ScaleService
+      - weft.workloads.SetScaleRule
+      - weft.workloads.SetDisruptionBudget
+      - weft.workloads.SetSleepPolicy
+      - weft.workloads.WakeService # source `explicit` only
+      - weft.workloads.Invoke
+      - weft.workloads.SubmitJob
+      - weft.workloads.CancelJob
+      - weft.workloads.CreateBox
+      - weft.workloads.StartBox
+      - weft.workloads.StopBox
+      - weft.workloads.SuspendBox
+      - weft.workloads.ResizeBox
+      - weft.workloads.DestroyBox
+      - weft.workloads.AcquireBoxLease
+      - weft.workloads.ReleaseBoxLease
+      - weft.workloads.CordonBox
+      - weft.workloads.UncordonBox
+      - weft.workloads.OpenSession
+      - weft.workloads.DetachSession
+      - weft.workloads.CloseSession
+      - weft.workloads.CreateSchedule
+      - weft.workloads.PauseSchedule
+      - weft.workloads.ResumeSchedule
+      - weft.workloads.DeleteSchedule
+      - weft.workloads.CreateTrigger
+      - weft.workloads.EnableTrigger
+      - weft.workloads.DisableTrigger
+      - weft.workloads.DeleteTrigger
+      - weft.workloads.TakeSnapshot
+      - weft.workloads.RestoreSnapshot
+      - weft.workloads.DeleteSnapshot
+      - weft.workloads.CreateWarmPool
+      - weft.workloads.ResizeWarmPool
+      - weft.workloads.DeleteWarmPool
+      - weft.workloads.StopInstance
+      - weft.workloads.PauseInstance
+      - weft.workloads.ResumeInstance
+      # claims
+      - weft.claims.DeclareClaim
+      - weft.claims.ReleaseClaim
+      # identity
+      - weft.identity.CreateExchangePolicy # token with role `admin` only
+      - weft.identity.WithdrawExchangePolicy # token with role `admin` only
+      # secrets
+      - weft.secrets.CreateSecret
+      - weft.secrets.AddSecretVersion
+      - weft.secrets.GrantSecret
+      # deployments
+      - weft.deployments.SubmitDeploymentSource
+      - weft.deployments.WithdrawDeploymentSource
+      - weft.deployments.TranslateSource
+      - weft.deployments.CreatePlan
+      - weft.deployments.PlanRollback
+      - weft.deployments.DiscardPlan
+      - weft.deployments.ApplyPlan
+      # catalog
+      - weft.catalog.ProvisionServiceInstance
+      - weft.catalog.ChangeServicePlan
+      - weft.catalog.SetServiceSleepPolicy
+      - weft.catalog.DeprovisionServiceInstance
+      - weft.catalog.BindService
+      - weft.catalog.UnbindService
+      - weft.catalog.BackupServiceInstance
+      - weft.catalog.RestoreServiceInstance
+      - weft.catalog.InstallProduct
+      - weft.catalog.UpgradeInstallation
+      - weft.catalog.UninstallProduct
+      - weft.catalog.SetInstallationSleepPolicy
+      # metering
+      - weft.metering.SetDeadline
+      - weft.metering.SetConcurrency
+      - weft.metering.SetRate
+
+  # Sketch line 121: a CLI before login; starts and collects a device login only.
+  - name: weft.actors.Anonymous
+    naming:
+      wire: anonymous
+      display: Anonymous
+    may:
+      - weft.access.ExchangeFederatedToken # integrator, 2026-11-26
+      - weft.access.StartLogin
+      - weft.access.CollectLoginToken
+
+  # ----- System actors -----
+
+  # Sketch line 117: a joined node; reports observations about its own node only, receives
+  # assignments. Every grant below is limited to its own node and the instances assigned to it.
+  - name: weft.actors.NodeAgent
+    naming:
+      wire: node_agent
+      display: Node agent
+    may:
+      - weft.pipelines.StartRunnerJob # integrator, 2026-11-26
+      - weft.pipelines.FinishRunnerJob # integrator, 2026-11-26
+      - weft.workloads.RecordProcessStarted # integrator, 2026-11-26
+      - weft.observability.OpenLogStream # integrator, 2026-11-26
+      - weft.observability.CloseLogStream # integrator, 2026-11-26
+      - weft.observability.RegisterNodeSeries # integrator, 2026-11-26
+      - weft.observability.RegisterInstanceSeries # integrator, 2026-11-26
+      # cluster
+      - weft.infrastructure.JoinNode # a node not yet joined, with a join token
+      - weft.infrastructure.RecordNodeObservation # own node only
+      # inventory
+      - weft.inventory.ReportDevice
+      - weft.inventory.ReportDeviceWiped
+      - weft.inventory.ReportDeviceSliced
+      - weft.inventory.ReportDeviceFault
+      - weft.inventory.ReportDeviceRemoved
+      # resources
+      - weft.resources.ReportVolumeProvisioned
+      - weft.resources.ReportVolumeSnapshotTaken
+      - weft.resources.ReportFilesystemProvisioned
+      - weft.resources.ReportBucketProvisioned
+      # workloads: every Record* observation except RecordScheduleFired (Scheduler, a calendar
+      # and no node fact).
+      # OPEN: RecordServiceAsleep and RecordServiceAwake are facts of a service, not of one node;
+      # workloads.yaml takes Scheduler for RecordServiceAwake. Granted to NodeAgent as the draft's
+      # "every Record*" says.
+      - weft.workloads.RecordArtifactVerified
+      - weft.workloads.RecordArtifactRejected
+      - weft.workloads.RecordInstanceRunning
+      - weft.workloads.RecordCheckResult
+      - weft.workloads.RecordProcessRestarted
+      - weft.workloads.RecordInstancePaused
+      - weft.workloads.RecordInstanceResumed
+      - weft.workloads.RecordInstanceExited
+      - weft.workloads.RecordInstanceFailed
+      - weft.workloads.RecordServiceAsleep
+      - weft.workloads.RecordServiceAwake
+      - weft.workloads.RecordInvocationStarted
+      - weft.workloads.RecordTaskSucceeded
+      - weft.workloads.RecordBoxStarted
+      - weft.workloads.RecordBoxStopped
+      - weft.workloads.RecordSnapshotTaken
+      - weft.workloads.RecordSnapshotFailed
+      - weft.workloads.CompleteInvocation
+      - weft.workloads.FailInvocation
+      - weft.workloads.RetryTask
+      # nodes
+      - weft.nodes.OpenNodeSession
+      - weft.nodes.SupersedeNodeSession
+      - weft.nodes.Heartbeat
+      - weft.nodes.CloseNodeSession
+      - weft.nodes.RenewLease
+      - weft.nodes.InstanceObserved
+      - weft.nodes.NodeObserved
+      - weft.nodes.UsageReported
+      - weft.nodes.ExecEnded
+      # identity
+      # OPEN: the draft's identity line gives IssueIdentityDocument to NodeAgent (identity.yaml
+      # takes the same), while sketch lines 126-127 and § 11 line 472 (`IssueIdentity`, control
+      # plane to agent) and the draft's own ControlPlane line give issuing to ControlPlane. Taken:
+      # ControlPlane issues; NodeAgent renews and revokes.
+      - weft.identity.RenewIdentityDocument
+      - weft.identity.RevokeIdentityDocument # an instance of its node ended
+
+  # Sketch line 118: places instances, preempts; scales pools and drains idle nodes (draft,
+  # decided: the operator sets pool bounds).
+  - name: weft.actors.Scheduler
+    naming:
+      wire: scheduler
+      display: Scheduler
+    may:
+      - weft.pipelines.AssignRunnerJob # integrator, 2026-11-26
+      - weft.claims.BindingIndex # integrator, 2026-11-26
+      - weft.accounts.QuotaIndex # integrator, 2026-11-26
+      # Section 14 loops R1, R2, R4, R6 (docs/open-questions.md "workloads loops", wave 4,
+      # decided: the Scheduler runs RequestReplica, EndReplicaBackoff and the stops of
+      # PendingStopsToWithdraw; scale-in stops on ServicesAboveScale too). RecordReplicaEnded and
+      # RecordPlacementAssigned are bound in ess/components.yaml; the grant lets the Scheduler run
+      # them from a gap view as well. Bindings pass, 2026-11-26.
+      - weft.workloads.RequestReplica
+      - weft.workloads.EndReplicaBackoff
+      - weft.workloads.RecordReplicaEnded
+      - weft.workloads.StopInstance
+      - weft.scheduling.RecordPlacementAssigned
+      # The gap views the Scheduler reads for its level and time steps (section 14, the comment
+      # block at the top of `bindings:` in ess/components.yaml). Naming a view here makes it
+      # read-granted: only the actors that name it may read it. Bindings pass, 2026-11-26.
+      - weft.workloads.ServicesBelowScale
+      - weft.workloads.ServicesAboveScale
+      - weft.workloads.ServiceBackoffsDue
+      - weft.workloads.PendingStopsToWithdraw
+      - weft.workloads.WakesOverdue
+      - weft.scheduling.UnassignedPlacements
+      - weft.scheduling.OverdueUnassignedPlacements # integrator, 2026-11-26
+      - weft.nodes.StoppedActiveAssignments
+      # cluster (decided)
+      - weft.infrastructure.RequestNodePoolScaleUp
+      - weft.infrastructure.RequestNodePoolScaleDown
+      - weft.infrastructure.DrainNode
+      # workloads
+      - weft.workloads.CreateInstance
+      - weft.workloads.ScheduleInstance
+      - weft.workloads.EvictInstance
+      - weft.workloads.StartJob
+      - weft.workloads.CompleteJob
+      - weft.workloads.FailJob
+      - weft.workloads.ExpireInvocation
+      - weft.workloads.AutoscaleService
+      - weft.workloads.BeginSleep
+      - weft.workloads.StartWaking
+      - weft.workloads.MissWake
+      - weft.workloads.RecordScheduleFired
+      - weft.workloads.WakeService # sources other than `explicit` and `link_request`
+      # claims
+      - weft.claims.BindClaim
+      - weft.claims.CommitBinding
+      - weft.claims.CommitVolumeWriter
+      - weft.claims.ReleaseBinding
+      # scheduling
+      - weft.scheduling.DeclareUnschedulable
+      - weft.scheduling.RetrySchedulingRequest
+      - weft.scheduling.WithdrawSchedulingRequest
+      - weft.scheduling.PlaceInstance
+      - weft.scheduling.BindPlacement
+      - weft.scheduling.ReleasePlacement
+      - weft.scheduling.BindGang
+      - weft.scheduling.AbandonGang
+      - weft.scheduling.PreemptPlacement
+      - weft.scheduling.RequestScaleUp
+      - weft.scheduling.RequestScaleDown
+      - weft.scheduling.RecordScaleFulfilled
+      - weft.scheduling.RecordScaleRefused
+      # nodes
+      - weft.nodes.Assign
+      - weft.nodes.Stop
+      - weft.nodes.Pause
+      - weft.nodes.Resume
+      - weft.nodes.Snapshot
+      - weft.nodes.ReleaseAssignment
+      - weft.nodes.EndAssignment
+      - weft.nodes.Attach
+      - weft.nodes.Detach
+      - weft.nodes.Drain
+      - weft.nodes.CompleteDrain
+      # metering
+      - weft.metering.AdmitWork
+      - weft.metering.AcquireConcurrency
+      - weft.metering.ReleaseConcurrency
+
+  # Sketch line 119: writes translations of deployment sources, their coverage entries and the
+  # translated formation rows.
+  - name: weft.actors.Translator
+    naming:
+      wire: translator
+      display: Translator
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      # formations
+      - weft.formations.CommitRevision
+      - weft.formations.AddComponent
+      - weft.formations.AddLink
+      - weft.formations.AddToBorder
+      - weft.formations.AddEndpoint
+      - weft.formations.AddRoute
+      - weft.formations.CreateConfig
+      - weft.formations.MountConfig
+      - weft.formations.SetConfigOverride
+      # deployments
+      - weft.deployments.RecordCoverageEntry
+      - weft.deployments.CompleteTranslation
+      - weft.deployments.RefuseTranslation
+      - weft.deployments.FailTranslation
+
+  # Sketch line 120: a running workload, acting through its workload identity.
+  - name: weft.actors.Instance
+    naming:
+      wire: instance
+      display: Instance
+    may:
+      - weft.observability.RegisterInstanceSeries # integrator, 2026-11-26
+      - weft.workloads.Invoke
+      - weft.workloads.WakeService # source `link_request` only
+      - weft.identity.ExchangeToken
+      - weft.catalog.CheckServiceAccess
+
+  # Sketch line 122: weft-api acting on its own: expiry of logins and tokens, audit records.
+  - name: weft.actors.ManagementApi
+    naming:
+      wire: management_api
+      display: Management API
+    may:
+      - weft.accounts.RoleBindingIndex # integrator, 2026-11-26
+      - weft.access.ExpireLogin
+      - weft.access.ExpireApiToken
+      - weft.access.RecordAuthorization
+
+  # Sketch line 124: weft-control running releases: steps, marking live, recording drift.
+  - name: weft.actors.ReleaseController
+    naming:
+      wire: release_controller
+      display: Release controller
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      - weft.pipelines.OpenGateCheck # integrator, 2026-11-26
+      - weft.deployments.ReapplyDrift # integrator, 2026-11-26
+      - weft.deployments.EscalateDrift # integrator, 2026-11-26
+      - weft.deployments.CompleteRolloutStep # integrator, 2026-11-26
+      # The gap views of R1 (rollout readiness) and R7 (open drifts), section 14. Read-granted
+      # once named here. Bindings pass, 2026-11-26.
+      - weft.deployments.RunningRolloutSteps
+      - weft.deployments.OpenDrifts
+      # claims
+      - weft.claims.DeclareClaim
+      - weft.claims.ReleaseClaim
+      # scheduling (integrator default)
+      - weft.scheduling.SubmitSchedulingRequest
+      # workloads: R1's first edge, the rollout step's replica count (section 14 line 585;
+      # integrator, 2026-11-26).
+      - weft.workloads.SetWorkloadReplicas
+      # deployments
+      - weft.deployments.RecordPlanResult
+      - weft.deployments.StartRelease
+      - weft.deployments.AddReleaseStep
+      - weft.deployments.StartReleaseStep
+      - weft.deployments.CompleteReleaseStep
+      - weft.deployments.FailReleaseStep
+      - weft.deployments.MarkReleaseLive
+      - weft.deployments.MarkRollbackLive
+      - weft.deployments.RecordDrift
+      - weft.deployments.ResolveDrift
+
+  # Sketch lines 126-127: weft-control acting on its own: issues and expires identity documents,
+  # decides secret delivery, expires leases and sessions, records usage, issues statements,
+  # reports catalog state.
+  - name: weft.actors.ControlPlane
+    naming:
+      wire: control_plane
+      display: Control plane
+    attributes:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+    may:
+      - weft.cluster.RecordClusterNodePoolReady # integrator, 2026-11-26
+      - weft.formations.ExpirePreviewEnvironment # integrator, 2026-11-26
+      - weft.artifacts.RecordAttestation # integrator, 2026-11-26
+      - weft.pipelines.QueueRunnerJob # integrator, 2026-11-26
+      - weft.pipelines.TimeOutRunnerJob # integrator, 2026-11-26
+      - weft.pipelines.EvictBuildCache # integrator, 2026-11-26
+      - weft.pipelines.AttachCacheForRead # integrator, 2026-11-26
+      - weft.pipelines.AttachCacheForWrite # integrator, 2026-11-26
+      - weft.pipelines.ReleaseCacheWrite # integrator, 2026-11-26
+      - weft.pipelines.OpenGateCheck # integrator, 2026-11-26
+      - weft.pipelines.PassGateCheck # integrator, 2026-11-26
+      - weft.pipelines.FailGateCheck # integrator, 2026-11-26
+      - weft.claims.BindingIndex # integrator, 2026-11-26
+      - weft.observability.LogStreamIndex # integrator, 2026-11-26
+      - weft.observability.TelemetrySinkIndex # integrator, 2026-11-26
+      - weft.observability.TelemetryPolicyIndex # integrator, 2026-11-26
+      - weft.observability.MetricSeriesIndex # integrator, 2026-11-26
+      - weft.observability.AlertRuleIndex # integrator, 2026-11-26
+      - weft.observability.AlertIndex # integrator, 2026-11-26
+      - weft.observability.NotificationTargetIndex # integrator, 2026-11-26
+      - weft.accounts.QuotaIndex # integrator, 2026-11-26
+      - weft.nodes.ReleaseAssignment # integrator, 2026-11-26
+      - weft.observability.CloseLogStream # integrator, 2026-11-26
+      - weft.observability.ExpireLogStream # integrator, 2026-11-26
+      - weft.observability.RecordSinkDelivered # integrator, 2026-11-26
+      - weft.observability.RecordSinkFailing # integrator, 2026-11-26
+      - weft.observability.RetireMetricSeries # integrator, 2026-11-26
+      - weft.observability.FireAlert # integrator, 2026-11-26
+      - weft.observability.ResolveAlert # integrator, 2026-11-26
+      - weft.observability.RecordAlertNotification # integrator, 2026-11-26
+      # Section 14 R5 and R6, many-rows commands, each invoked by a binding in
+      # ess/components.yaml (docs/open-questions.md "account close" and "scheduling and claims",
+      # wave 4). Bindings pass, 2026-11-26.
+      - weft.access.RevokeAccountApiTokens
+      - weft.formations.RevokeAccountExports
+      - weft.workloads.StopAccountInstances
+      - weft.workloads.RetireAccountServices
+      - weft.observability.DeleteAccountAlertRules
+      - weft.observability.RemoveAccountTelemetryPolicies
+      - weft.observability.RemoveAccountTelemetrySinks
+      - weft.observability.RemoveAccountNotificationTargets
+      - weft.observability.ResolveDeletedRuleAlerts
+      - weft.observability.CloseInstanceLogStreams
+      - weft.observability.RetireInstanceMetricSeries
+      - weft.claims.ReleaseClaimBindings
+      # The gap views of its time steps: R3 (silent sessions, expired leases) and log retention.
+      # Read-granted once named here. Bindings pass, 2026-11-26.
+      - weft.nodes.SilentNodeSessions
+      - weft.nodes.ExpiredLeases
+      - weft.observability.LogStreamsPastRetention
+      # Tenant cluster pools (hardening pass 4, ess/components.yaml "Tenant clusters"): the gap
+      # views of the ready, drain, nodes and delete level steps, and the infrastructure commands
+      # of the drain.
+      - weft.cluster.UnlinkedClusterNodePools
+      - weft.cluster.RemovedClusterNodePools
+      - weft.cluster.RecordRemovedClusterNodePool
+      - weft.infrastructure.TenantNodePools
+      - weft.infrastructure.DrainingPoolNodes
+      - weft.infrastructure.DrainingNodePools
+      - weft.infrastructure.DrainNodePool
+      - weft.infrastructure.DrainNode
+      - weft.infrastructure.RemoveNode
+      - weft.infrastructure.DeleteNodePool
+      # claims
+      - weft.claims.ReleaseBinding
+      # scheduling
+      - weft.scheduling.SubmitSchedulingRequest
+      - weft.scheduling.RegisterGang
+      - weft.scheduling.WithdrawSchedulingRequest
+      - weft.scheduling.ReleasePlacement
+      # nodes
+      - weft.nodes.LoseNodeSession
+      # identity: see the OPEN on NodeAgent.
+      - weft.identity.IssueIdentityDocument
+      - weft.identity.ExpireIdentityDocument
+      # secrets
+      # OPEN: the draft's secrets line gives DeliverSecret to NodeAgent; sketch line 127, the
+      # draft's own ControlPlane line and secrets.yaml ("this command is the control plane's
+      # decision") give it to ControlPlane. Taken: ControlPlane only (deny by default).
+      - weft.secrets.DeliverSecret
+      # catalog: every Report*.
+      - weft.catalog.ReportServiceInstanceReady
+      - weft.catalog.ReportServiceInstanceDegraded
+      - weft.catalog.ReportServiceInstanceGone
+      - weft.catalog.ReportBackupCompleted
+      - weft.catalog.ReportBackupFailed
+      - weft.catalog.ReportRestoreCompleted
+      - weft.catalog.ReportRestoreFailed
+      - weft.catalog.ReportInstallationInstalled
+      - weft.catalog.ReportInstallationUninstalled
+      - weft.catalog.ReportInstallationFailed
+      # metering
+      - weft.metering.RecordUsage
+      - weft.metering.ChargeBudget
+      - weft.metering.IssueStatement

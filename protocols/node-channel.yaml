@@ -1,0 +1,582 @@
+# Session between weft-control and weft-node, docs/domain-sketch.md "Channels" (line 91) and
+# "11. Node control" (lines 430-438). One node, one instance, one assignment.
+# Times: heartbeat every 1000 ms, lease 2500 ms (two missed heartbeats), redial after 3000 ms.
+# OPEN: UNMAPPED: the sketch gives no heartbeat interval, lease length or redial delay; the values
+# above only keep the model finite. Open question for the owner.
+# OPEN: UNMAPPED: the sketch names Pause, Snapshot, Drain, Attach, Detach, IssueIdentity,
+# DeliverSecret, NodeObserved and UsageReported; this model covers Assign, Stop, Heartbeat and
+# InstanceObserved only.
+format: ess-protospec/1
+name: weft-node-channel
+bounds: {max_steps: 28, max_states: 12000, max_time_ms: 4000}
+participants:
+  - name: node
+    initial: idle
+    states: [idle, dialing, online, disconnected, refused, stopped]
+    fields:
+      - {name: node_id, type: String, initial: node-1}
+      # Session epoch, alternating 1/2: the subset has no session epochs, so each message carries
+      # it as a payload field and both sides compare it (examples/protocols/README.md).
+      - {name: session, type: Integer, initial: 0}
+      - {name: instance, type: String, initial: ""}
+      - {name: held, type: Boolean, initial: false}
+      # Observed phase of the instance: absent, started, exited.
+      # OPEN: UNMAPPED: the sketch names InstanceObserved but not its phases. Open question.
+      - {name: phase, type: String, initial: absent}
+    inputs:
+      - {name: dial, fields: []}
+      - {name: transport_lost, fields: []}
+      - {name: instance_started, fields: []}
+      - {name: instance_exited, fields: []}
+      # OPEN: UNMAPPED: the sketch names no node-side end of a session; `shutdown` (the agent process
+      # stops) exists so a trace can end with no timer armed. Open question.
+      - {name: shutdown, fields: []}
+    timers: [beat, redial]
+    transitions:
+      # Sketch line 430: the agent dials out; workers need no inbound port.
+      - name: dial-control
+        from: idle
+        to: dialing
+        trigger: {kind: input, name: dial}
+        effects:
+          - {kind: set, field: session, value: {kind: literal, value: 1}}
+          - kind: send
+            channel: uplink
+            message: hello
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: hello}
+            payload:
+              node_id: {kind: local, field: node_id}
+              session: {kind: local, field: session}
+      # Reconnect after loss resumes with the observed state first (sketch line 436: the agent
+      # reports what it observed, never what it was told).
+      - name: session-welcomed
+        from: dialing
+        to: online
+        trigger: {kind: receive, channel: downlink, message: welcome}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+        effects:
+          - kind: send
+            channel: uplink
+            message: instance_observed
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: resume-report}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+              phase: {kind: local, field: phase}
+          - {kind: arm, timer: beat, after: {kind: fixed, millis: 1000}}
+      - name: session-refused
+        from: dialing
+        to: refused
+        trigger: {kind: receive, channel: downlink, message: refused}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+        effects:
+          - {kind: emit, name: node-refused}
+          - {kind: close}
+      - name: heartbeat
+        from: online
+        to: online
+        trigger: {kind: timer, name: beat}
+        effects:
+          - kind: send
+            channel: uplink
+            message: heartbeat
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: heartbeat}
+            payload:
+              session: {kind: local, field: session}
+          - {kind: arm, timer: beat, after: {kind: fixed, millis: 1000}}
+      # Sketch line 432: Assign. The node acknowledges; it reports started only once observed.
+      - name: accept-assign
+        from: online
+        to: online
+        trigger: {kind: receive, channel: downlink, message: assign}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+        effects:
+          - {kind: set, field: instance, value: {kind: input, field: instance}}
+          - {kind: set, field: held, value: {kind: literal, value: true}}
+          - kind: send
+            channel: uplink
+            message: ack
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: ack-assign}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: input, field: instance}
+              command: {kind: literal, value: assign}
+      # Sketch line 432: Stop.
+      - name: accept-stop
+        from: online
+        to: online
+        trigger: {kind: receive, channel: downlink, message: stop}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+        effects:
+          - {kind: set, field: held, value: {kind: literal, value: false}}
+          - kind: send
+            channel: uplink
+            message: ack
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: ack-stop}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: input, field: instance}
+              command: {kind: literal, value: stop}
+      # Sketch line 434: InstanceObserved.
+      - name: observe-started
+        from: online
+        to: online
+        trigger: {kind: input, name: instance_started}
+        guards:
+          - {left: {kind: local, field: held}, right: {kind: literal, value: true}}
+          - {left: {kind: local, field: phase}, right: {kind: literal, value: absent}}
+        effects:
+          - {kind: set, field: phase, value: {kind: literal, value: started}}
+          - {kind: emit, name: instance-started}
+          - kind: send
+            channel: uplink
+            message: instance_observed
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: observed-started}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+              phase: {kind: literal, value: started}
+      # An instance exits after Stop or on its own; either way the node reports what it saw.
+      - name: observe-exited
+        from: online
+        to: online
+        trigger: {kind: input, name: instance_exited}
+        guards:
+          - {left: {kind: local, field: phase}, right: {kind: literal, value: started}}
+        effects:
+          - {kind: set, field: phase, value: {kind: literal, value: exited}}
+          - kind: send
+            channel: uplink
+            message: instance_observed
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: observed-exited}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+              phase: {kind: literal, value: exited}
+      # Exit seen while disconnected is kept and sent in the resume report.
+      - name: observe-exited-offline
+        from: disconnected
+        to: disconnected
+        trigger: {kind: input, name: instance_exited}
+        guards:
+          - {left: {kind: local, field: phase}, right: {kind: literal, value: started}}
+        effects:
+          - {kind: set, field: phase, value: {kind: literal, value: exited}}
+      - name: lose-transport-dialing
+        from: dialing
+        to: disconnected
+        trigger: {kind: input, name: transport_lost}
+        effects:
+          - {kind: arm, timer: redial, after: {kind: fixed, millis: 3000}}
+      - name: lose-transport-online
+        from: online
+        to: disconnected
+        trigger: {kind: input, name: transport_lost}
+        effects:
+          - {kind: cancel, timer: beat}
+          - {kind: arm, timer: redial, after: {kind: fixed, millis: 3000}}
+      - name: redial-session-2
+        from: disconnected
+        to: dialing
+        trigger: {kind: timer, name: redial}
+        guards:
+          - {left: {kind: local, field: session}, right: {kind: literal, value: 1}}
+        effects:
+          - {kind: set, field: session, value: {kind: literal, value: 2}}
+          - kind: send
+            channel: uplink
+            message: hello
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: hello}
+            payload:
+              node_id: {kind: local, field: node_id}
+              session: {kind: local, field: session}
+      - name: redial-session-1
+        from: disconnected
+        to: dialing
+        trigger: {kind: timer, name: redial}
+        guards:
+          - {left: {kind: local, field: session}, right: {kind: literal, value: 2}}
+        effects:
+          - {kind: set, field: session, value: {kind: literal, value: 1}}
+          - kind: send
+            channel: uplink
+            message: hello
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: hello}
+            payload:
+              node_id: {kind: local, field: node_id}
+              session: {kind: local, field: session}
+      - name: shut-down
+        from: online
+        to: stopped
+        trigger: {kind: input, name: shutdown}
+        effects:
+          - {kind: cancel, timer: beat}
+          - {kind: close}
+
+  - name: control
+    initial: listening
+    states: [listening, vetting, syncing, open]
+    fields:
+      - {name: node_id, type: String, initial: ""}
+      - {name: session, type: Integer, initial: 0}
+      - {name: instance, type: String, initial: inst-1}
+      # Assignment of the one instance to this node: none, held, stopping, released, done.
+      - {name: assignment, type: String, initial: none}
+      # Whether the lease timer belongs to a held assignment (heartbeats renew it).
+      - {name: leased, type: Boolean, initial: false}
+    inputs:
+      # Outcome of the node registry lookup for the hello's node identity.
+      # OPEN: UNMAPPED: the sketch does not say how control knows a node (join token, Node lifecycle
+      # provisioning/joining, sketch line 409). Open question.
+      - {name: admit, fields: []}
+      - {name: refuse, fields: []}
+      # The scheduler places the instance on this node / a user stops it (sketch section 10).
+      - {name: schedule, fields: []}
+      - {name: unschedule, fields: []}
+    timers: [lease]
+    transitions:
+      - name: receive-hello
+        from: listening
+        to: vetting
+        trigger: {kind: receive, channel: uplink, message: hello}
+        effects:
+          - {kind: set, field: node_id, value: {kind: input, field: node_id}}
+          - {kind: set, field: session, value: {kind: input, field: session}}
+      # A new hello on an open or syncing session replaces that session.
+      # OPEN: UNMAPPED: the sketch does not say what control does with a second session of a node
+      # whose first one it still holds. Open question.
+      - name: replace-open-session
+        from: open
+        to: vetting
+        trigger: {kind: receive, channel: uplink, message: hello}
+        effects:
+          - {kind: set, field: node_id, value: {kind: input, field: node_id}}
+          - {kind: set, field: session, value: {kind: input, field: session}}
+      - name: replace-syncing-session
+        from: syncing
+        to: vetting
+        trigger: {kind: receive, channel: uplink, message: hello}
+        effects:
+          - {kind: set, field: node_id, value: {kind: input, field: node_id}}
+          - {kind: set, field: session, value: {kind: input, field: session}}
+      - name: admit-node
+        from: vetting
+        to: syncing
+        trigger: {kind: input, name: admit}
+        effects:
+          - kind: send
+            channel: downlink
+            message: welcome
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: welcome}
+            payload:
+              session: {kind: local, field: session}
+      - name: refuse-node
+        from: vetting
+        to: listening
+        trigger: {kind: input, name: refuse}
+        effects:
+          - kind: send
+            channel: downlink
+            message: refused
+            exchange: {kind: literal, value: session}
+            logical: {kind: literal, value: refused}
+            payload:
+              session: {kind: local, field: session}
+
+      # Resume: the first report of a session reconciles the assignment with what the node saw.
+      - name: sync-none
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: none}}
+      - name: sync-done
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: done}}
+      - name: sync-held-started
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: held}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: started}}
+        effects:
+          - {kind: arm, timer: lease, after: {kind: fixed, millis: 2500}}
+      # The assign of the lost session never reached the node: send it again.
+      # OPEN: UNMAPPED: re-sending Assign on resume is this model's choice; the sketch is silent.
+      - name: sync-held-absent
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: held}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: absent}}
+        effects:
+          - {kind: arm, timer: lease, after: {kind: fixed, millis: 2500}}
+          - kind: send
+            channel: downlink
+            message: assign
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: assign}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+      - name: sync-held-exited
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: held}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: exited}}
+        effects:
+          - {kind: cancel, timer: lease}
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: done}}
+      - name: sync-stopping-started
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: stopping}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: started}}
+        effects:
+          - kind: send
+            channel: downlink
+            message: stop
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: stop}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+      - name: sync-stopping-absent
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: stopping}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: absent}}
+        effects:
+          - {kind: cancel, timer: lease}
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: done}}
+      - name: sync-stopping-exited
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: stopping}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: exited}}
+        effects:
+          - {kind: cancel, timer: lease}
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: done}}
+      # The lease ended while the node was gone and the instance was rescheduled (sketch line
+      # 437); the node still runs it, so control stops it.
+      # OPEN: UNMAPPED: stopping the copy on the returning node is this model's reading; the sketch
+      # says only that the instances are rescheduled. Open question.
+      - name: sync-released-started
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: released}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: started}}
+        effects:
+          - {kind: set, field: assignment, value: {kind: literal, value: stopping}}
+          - kind: send
+            channel: downlink
+            message: stop
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: stop}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+      - name: sync-released-absent
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: released}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: absent}}
+        effects:
+          - {kind: set, field: assignment, value: {kind: literal, value: done}}
+      - name: sync-released-exited
+        from: syncing
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: released}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: exited}}
+        effects:
+          - {kind: set, field: assignment, value: {kind: literal, value: done}}
+
+      # Sketch line 432: Assign, with a lease (line 437).
+      - name: assign-instance
+        from: open
+        to: open
+        trigger: {kind: input, name: schedule}
+        guards:
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: none}}
+        effects:
+          - {kind: set, field: assignment, value: {kind: literal, value: held}}
+          - {kind: set, field: leased, value: {kind: literal, value: true}}
+          - {kind: arm, timer: lease, after: {kind: fixed, millis: 2500}}
+          - kind: send
+            channel: downlink
+            message: assign
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: assign}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+      - name: stop-instance
+        from: open
+        to: open
+        trigger: {kind: input, name: unschedule}
+        guards:
+          - {left: {kind: local, field: assignment}, right: {kind: literal, value: held}}
+        effects:
+          - {kind: set, field: assignment, value: {kind: literal, value: stopping}}
+          - kind: send
+            channel: downlink
+            message: stop
+            exchange: {kind: literal, value: assignment}
+            logical: {kind: literal, value: stop}
+            payload:
+              session: {kind: local, field: session}
+              instance: {kind: local, field: instance}
+      - name: renew-lease
+        from: open
+        to: open
+        trigger: {kind: receive, channel: uplink, message: heartbeat}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: leased}, right: {kind: literal, value: true}}
+        effects:
+          - {kind: arm, timer: lease, after: {kind: fixed, millis: 2500}}
+      - name: heartbeat-unleased
+        from: open
+        to: open
+        trigger: {kind: receive, channel: uplink, message: heartbeat}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: local, field: leased}, right: {kind: literal, value: false}}
+      - name: receive-ack
+        from: open
+        to: open
+        trigger: {kind: receive, channel: uplink, message: ack}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+      - name: observed-started
+        from: open
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: started}}
+        effects:
+          - {kind: emit, name: instance-running}
+      - name: observed-exited
+        from: open
+        to: open
+        trigger: {kind: receive, channel: uplink, message: instance_observed}
+        guards:
+          - {left: {kind: input, field: session}, right: {kind: local, field: session}}
+          - {left: {kind: input, field: phase}, right: {kind: literal, value: exited}}
+        effects:
+          - {kind: cancel, timer: lease}
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: done}}
+
+      # Sketch line 437: the lease ends when heartbeats stop; control releases the assignment.
+      # An open session whose lease ends is lost; a session being set up stays where it is.
+      - name: lease-expired-open
+        from: open
+        to: listening
+        trigger: {kind: timer, name: lease}
+        effects:
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: released}}
+          - {kind: emit, name: assignment-released}
+      - name: lease-expired-listening
+        from: listening
+        to: listening
+        trigger: {kind: timer, name: lease}
+        effects:
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: released}}
+          - {kind: emit, name: assignment-released}
+      - name: lease-expired-vetting
+        from: vetting
+        to: vetting
+        trigger: {kind: timer, name: lease}
+        effects:
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: released}}
+          - {kind: emit, name: assignment-released}
+      - name: lease-expired-syncing
+        from: syncing
+        to: syncing
+        trigger: {kind: timer, name: lease}
+        effects:
+          - {kind: set, field: leased, value: {kind: literal, value: false}}
+          - {kind: set, field: assignment, value: {kind: literal, value: released}}
+          - {kind: emit, name: assignment-released}
+messages:
+  - name: hello
+    fields: [{name: node_id, type: String}, {name: session, type: Integer}]
+  - {name: welcome, fields: [{name: session, type: Integer}]}
+  - {name: refused, fields: [{name: session, type: Integer}]}
+  - {name: heartbeat, fields: [{name: session, type: Integer}]}
+  - name: assign
+    fields: [{name: session, type: Integer}, {name: instance, type: String}]
+  - name: stop
+    fields: [{name: session, type: Integer}, {name: instance, type: String}]
+  - name: ack
+    fields:
+      - {name: session, type: Integer}
+      - {name: instance, type: String}
+      - {name: command, type: String}
+  - name: instance_observed
+    fields:
+      - {name: session, type: Integer}
+      - {name: instance, type: String}
+      - {name: phase, type: String}
+# One mutual-TLS session per node (sketch line 91): ordered, never duplicated. Loss stands for
+# messages in flight when the session breaks; stale messages of an old session can only be
+# dropped, because no transition accepts a foreign session number.
+channels:
+  - {name: uplink, from: node, to: control, ordering: fifo, capacity: 4, loss: true, duplication: false}
+  - {name: downlink, from: control, to: node, ordering: fifo, capacity: 4, loss: true, duplication: false}
+properties:
+  - {kind: event_count, name: release-once, participant: control, event: assignment-released, max: 1}
+  - {kind: event_count, name: start-reported-once, participant: node, event: instance-started, max: 1}
+  - {kind: state_implication, name: refused-node-has-no-session, participant: node, state: refused, other: control, other_state: listening}

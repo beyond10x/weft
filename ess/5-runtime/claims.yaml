@@ -1,0 +1,882 @@
+# Claims: what a running instance or a component holds, and the bindings that tie a claim to
+# concrete units. Source: docs/domain-sketch.md section 6 "Resources" (lines 382-405, `Claim` and
+# `Binding` at line 395), the GPU wipe of section 10 (line 459) and the claims of section 4
+# "Claims" (lines 302-305). Moved here from weft.resources (layer 3) because a claim's holder names
+# an instance or a component of a formation (layer 4): weft.resources.Claim.holder pointed up to
+# weft.workloads and weft.formations (tools/check-layers.sh, 2026-11-26).
+#
+# This domain names only lower layers: weft.inventory (ResourceClass, Device; layer 1),
+# weft.cluster (Node, Zone; layer 1), weft.accounts (Account; layer 2) and weft.resources (Volume,
+# Filesystem, Bucket; layer 3). CommitBinding and ReleaseBinding move weft.inventory.Device rows
+# (Free -> Bound, Bound -> Wiping) themselves, all or nothing; CommitVolumeWriter and
+# ReleaseBinding move weft.resources.Volume rows (Available <-> Attached).
+#
+# Decisions this file takes (taken over from weft.resources):
+# - Network classes (`endpoint`, `domain`, `private-network`, `public-address`, `egress`,
+#   `bandwidth`) are weft.inventory.ResourceClass rows only, not entities. A claim of one carries
+#   its detail (`domain_name`, `egress_allow`); a binding carries the concrete unit it got
+#   (`address`). The Endpoint record is the formations domain's (weft.shared.EndpointId); the
+#   private network belongs to the formation (section 3, line 161).
+# - Security classes (`secret`, `workload-identity`, `key`) are ResourceClass rows; their units
+#   live in the secrets and identity domains.
+# - Limit classes (`deadline`, `budget`, `concurrency`, `rate`) belong to metering and are not
+#   modelled here.
+# UNMAPPED: the sketch says nothing about ownership between these records. Every relation in this
+# file is `references` (no record is deleted; each ends in a terminal state). Owner to confirm,
+# in particular Binding -> Claim, which could be `owns`.
+domain: weft.claims
+
+summary: >-
+  What a running instance or a component holds: claims on resource classes, volumes and network,
+  and the bindings that tie a claim to concrete devices and volumes on one node.
+
+naming:
+  wire: weft
+  display: Claims
+
+types:
+  # Section 6 line 395 (brief): a claim is made by an instance or by a component.
+  - name: weft.claims.InstanceHolder
+    kind: struct
+    fields:
+      - {name: instance_id, type: weft.shared.InstanceId}
+
+  # Section 4 "Claims" line 304: a component lists claims, per environment of its formation.
+  - name: weft.claims.ComponentHolder
+    kind: struct
+    fields:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_name, type: weft.shared.ComponentName}
+
+  - name: weft.claims.ClaimHolder
+    kind: union
+    tag: kind
+    variants:
+      instance: weft.claims.InstanceHolder
+      component: weft.claims.ComponentHolder
+
+  # Section 6 line 402: `egress`. Security default deny (line 12): no egress unless declared and
+  # allowed, so an egress claim names each destination.
+  # OPEN: may a destination be a CIDR or a wildcard host? Taken: one host name and one port each.
+  - name: weft.claims.EgressRule
+    kind: struct
+    fields:
+      - {name: host, type: String}
+      - {name: port, type: Integer}
+
+entities:
+  # Section 6 line 395: `Claim` (class + amount + sharing), made by an instance or a component.
+  # Section 4 line 304: the formation adds implicit claims (private network, workload identity).
+  # OPEN: which domain declares a component's claims when a release is applied (deployments or
+  # workloads)? Taken: DeclareClaim is one command any of them calls through its actor.
+  - name: weft.claims.Claim
+    naming:
+      summary: A request by an instance or a component for an amount of one resource class with one sharing mode.
+    identity:
+      name: claim_id
+      type: weft.shared.ClaimId
+    fields:
+      # The account the claim is charged to and isolated in (section 1, line 139).
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: holder
+        type: weft.claims.ClaimHolder
+      - name: class_name
+        type: weft.shared.ResourceClassName
+      # In the class's base unit; see the OPEN on weft.inventory.ResourceClass.
+      - name: amount
+        type: Integer
+      - name: sharing
+        type: weft.shared.Sharing
+      # Section 3 line 196 example `gpu: { model: nvidia-h100, count: 1 }`: a device model the
+      # bound devices must have.
+      - name: device_model
+        type: Optional<String>
+      # An existing independent unit the claim asks for, by kind.
+      - name: volume_id
+        type: Optional<weft.shared.VolumeId>
+      - name: filesystem_id
+        type: Optional<weft.shared.FilesystemId>
+      - name: bucket_id
+        type: Optional<weft.shared.BucketId>
+      # Section 6 line 402 `domain`: the host name asked for.
+      - name: domain_name
+        type: Optional<String>
+      # Section 6 line 402 `egress`: the allow list.
+      - name: egress_allow
+        type: List<weft.claims.EgressRule>
+      # The binding that holds the claim while it is Bound.
+      - name: binding_id
+        type: Optional<weft.shared.BindingId>
+    invariants:
+      - amount > 0
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: class
+        kind: references
+        target: weft.inventory.ResourceClass
+        cardinality: one
+        via: class_name
+      - name: volume
+        kind: references
+        target: weft.resources.Volume
+        cardinality: one
+        via: volume_id
+      - name: filesystem
+        kind: references
+        target: weft.resources.Filesystem
+        cardinality: one
+        via: filesystem_id
+      - name: bucket
+        kind: references
+        target: weft.resources.Bucket
+        cardinality: one
+        via: bucket_id
+      - name: binding
+        kind: references
+        target: weft.claims.Binding
+        cardinality: one
+        via: binding_id
+    lifecycle:
+      initial: Pending
+      states:
+        - {name: Pending, summary: Declared and not bound to concrete units.}
+        - {name: Bound, summary: Held by one Active binding.}
+        - {name: Released, summary: Given up; it is bound to nothing and binds nothing again.}
+      terminal: [Released]
+      transitions:
+        - {name: bind, from: [Pending], to: Bound}
+        - {name: unbind, from: [Bound], to: Pending}
+        - {name: release, from: [Pending], to: Released}
+
+  # Section 6 line 395: `Binding` (concrete units on a node). Brief: claim -> concrete units; an
+  # exclusive unit has at most one binding (a volume is Attached while its one writer binding is
+  # Active, and only an Available volume binds; a device is Free or Bound in weft.inventory).
+  # The volume does not name its writer: weft.resources is layer 3 and this binding layer 5, so
+  # the binding names the volume (`volume_id`) and the volume only says it is Attached.
+  # A binding of a zone- or cluster-scoped unit (a domain, a public address, a bucket) has no
+  # node; `address` names the concrete network unit it got.
+  # OPEN: the binding does not check that its devices match the claim's class, model and amount;
+  # the scheduler's PlacementDecision (section 10) is trusted for that. Should BindClaim check it?
+  - name: weft.claims.Binding
+    naming:
+      summary: The concrete units one claim holds; exclusive units are held by at most one Active binding.
+    identity:
+      name: binding_id
+      type: weft.shared.BindingId
+    fields:
+      # The account, class, amount and sharing are the claim's, read through `claim`.
+      - name: claim_id
+        type: weft.shared.ClaimId
+      - name: node_id
+        type: Optional<weft.shared.NodeId>
+      - name: zone
+        type: Optional<weft.shared.ZoneName>
+      - name: device_ids
+        type: List<weft.shared.DeviceId>
+      - name: volume_id
+        type: Optional<weft.shared.VolumeId>
+      # A public address, or the domain name a `domain` claim is served under.
+      - name: address
+        type: Optional<String>
+    relations:
+      - name: claim
+        kind: references
+        target: weft.claims.Claim
+        cardinality: one
+        via: claim_id
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: zone
+        kind: references
+        target: weft.infrastructure.Zone
+        cardinality: one
+        via: zone
+      - name: devices
+        kind: references
+        target: weft.inventory.Device
+        cardinality: many
+        via: device_ids
+      - name: volume
+        kind: references
+        target: weft.resources.Volume
+        cardinality: one
+        via: volume_id
+    # Two steps, because a created record cannot move other records in the same outcome: the
+    # scheduler reserves (BindClaim), then commits (CommitBinding), which takes every unit at once
+    # or refuses and takes none.
+    lifecycle:
+      initial: Reserved
+      states:
+        - {name: Reserved, summary: Placed by the scheduler; no unit is taken yet.}
+        - {name: Active, summary: The claim holds these units.}
+        - {name: Released, summary: The units are given back; exclusive devices go to Wiping.}
+      terminal: [Released]
+      transitions:
+        - {name: commit, from: [Reserved], to: Active}
+        - {name: release, from: [Reserved, Active], to: Released}
+
+errors:
+  - name: weft.claims.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.claims.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.claims.UnknownClass
+    summary: No resource class of this name is defined.
+  - name: weft.claims.ClassRetired
+    summary: The resource class is retired and takes no new claim.
+  - name: weft.claims.InvalidAmount
+    summary: The amount is not a positive number.
+  - name: weft.claims.SharingNotAdmitted
+    summary: The class does not admit the sharing mode the claim asks for; isolation is not weakened.
+  - name: weft.claims.QuotaExceeded
+    summary: The claim would exceed the quota of the account or of an account above it.
+  - name: weft.claims.EgressDenied
+    summary: The cluster's policy does not allow a destination of the egress allow list.
+  - name: weft.claims.DomainNotVerified
+    summary: The account has not proved that it controls the domain it claims.
+  - name: weft.claims.UnitNotFound
+    summary: The device, volume, filesystem or bucket the request names does not exist.
+  - name: weft.claims.ForeignResource
+    summary: The unit the request names belongs to another account; nothing crosses accounts.
+  - name: weft.claims.UnitNotAvailable
+    summary: The unit the request names is not in a usable state.
+  - name: weft.claims.DeviceUnavailable
+    summary: A device is not Free (bound, wiping, sliced, faulted or removed), so it is not bound again.
+  - name: weft.claims.WrongPlacement
+    summary: A unit is on another node or in another zone than the binding.
+  - name: weft.claims.VolumeClaim
+    summary: The claim names a volume as its writer; a writer is committed with CommitVolumeWriter, which enforces one writer.
+  - name: weft.claims.ClaimMismatch
+    summary: The request does not match the claim it binds (another volume or another sharing mode).
+  - name: weft.claims.VolumeBusy
+    summary: The volume has a writer, or a writer was asked for while readers are attached.
+
+events:
+  - name: weft.claims.ClaimDeclared
+    fields:
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: holder, type: weft.claims.ClaimHolder}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: amount, type: Integer}
+      - {name: sharing, type: weft.shared.Sharing}
+
+  - name: weft.claims.ClaimReleased
+    fields:
+      - {name: claim_id, type: weft.shared.ClaimId}
+
+  - name: weft.claims.BindingReserved
+    fields:
+      - {name: binding_id, type: weft.shared.BindingId}
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: zone, type: Optional<weft.shared.ZoneName>}
+      - {name: device_ids, type: List<weft.shared.DeviceId>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: address, type: Optional<String>}
+
+  - name: weft.claims.ClaimBound
+    fields:
+      - {name: binding_id, type: weft.shared.BindingId}
+      - {name: claim_id, type: weft.shared.ClaimId}
+
+  - name: weft.claims.BindingReleased
+    fields:
+      - {name: binding_id, type: weft.shared.BindingId}
+
+  - name: weft.claims.ClaimBindingsReleased
+    fields:
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: released, type: Integer}
+
+
+commands:
+  # Section 6 line 395: `Claim` (class + amount + sharing). Security default deny (line 12): a
+  # sharing mode the class does not admit, an egress destination the policy does not allow, a
+  # domain the account does not control and an amount over quota are each refused by name.
+  # OPEN: quotas are the accounts domain's (section 1 line 137) and usage is metering's; how this
+  # command reads the remaining quota is not decided. Taken: an external refusal, QuotaExceeded.
+  # OPEN: how an account proves it controls a domain, and who issues and renews its certificate
+  # (section 6 line 402). Taken: an external refusal, DomainNotVerified; the certificate is not
+  # modelled.
+  - name: weft.claims.DeclareClaim
+    naming:
+      display: Declare a claim
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: holder, type: weft.claims.ClaimHolder}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: amount, type: Integer}
+      - {name: sharing, type: weft.shared.Sharing}
+      - {name: device_model, type: Optional<String>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: filesystem_id, type: Optional<weft.shared.FilesystemId>}
+      - {name: bucket_id, type: Optional<weft.shared.BucketId>}
+      - {name: domain_name, type: Optional<String>}
+      - {name: egress_allow, type: List<weft.claims.EgressRule>}
+    outcomes:
+      # hardening pass 1 D3: the claim's account is the account the caller acts in; a claim in
+      # another account answers as if that account had nothing to claim in.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.claims.NotFound
+      - name: invalid-amount
+        when: amount <= 0
+        error: weft.claims.InvalidAmount
+      # Section 6 lines 384-393: the class is weft.inventory.ResourceClass (layer 1, below this
+      # one), read through the claim's `class` relation. A missing row answers before any related
+      # refusal (ess/37).
+      # hardening pass 1 disclosure (DeclareClaim, claims.yaml:346): the class is checked before
+      # the units, so an unknown class answers the same for a missing and a foreign unit.
+      - name: unknown-class
+        when_related: {via: input.class_name, exists: false}
+        error: weft.claims.UnknownClass
+      - name: volume-missing
+        when_related: {via: input.volume_id, exists: false}
+        error: weft.claims.UnitNotFound
+      - name: filesystem-missing
+        when_related: {via: input.filesystem_id, exists: false}
+        error: weft.claims.UnitNotFound
+      - name: bucket-missing
+        when_related: {via: input.bucket_id, exists: false}
+        error: weft.claims.UnitNotFound
+      # Section 1 line 139: nothing crosses accounts. A named unit must be the claiming account's.
+      # hardening pass 1 disclosure (DeclareClaim, claims.yaml:346): a foreign unit answers
+      # UnitNotFound, as a missing one does, and before any state refusal of that unit, so another
+      # account's volume, filesystem or bucket cannot be told from a missing one. ESS answers every
+      # existence check before any predicate, so the ownership refusals follow all three.
+      - name: volume-foreign
+        when_related: {via: input.volume_id, predicate: account_id != input.account_id}
+        error: weft.claims.UnitNotFound
+      - name: filesystem-foreign
+        when_related: {via: input.filesystem_id, predicate: account_id != input.account_id}
+        error: weft.claims.UnitNotFound
+      - name: bucket-foreign
+        when_related: {via: input.bucket_id, predicate: account_id != input.account_id}
+        error: weft.claims.UnitNotFound
+      - name: volume-unavailable
+        when_related: {via: input.volume_id, predicate: state == Deleted}
+        error: weft.claims.UnitNotAvailable
+      - name: filesystem-unavailable
+        when_related: {via: input.filesystem_id, predicate: state == Deleted}
+        error: weft.claims.UnitNotAvailable
+      - name: bucket-unavailable
+        when_related: {via: input.bucket_id, predicate: state == Deleted}
+        error: weft.claims.UnitNotAvailable
+      # Section 6 line 391: the class lists the sharing modes a claim may ask for; isolation is
+      # not weakened, so a mode the class does not list is refused.
+      - name: class-retired
+        when_related: {via: input.class_name, predicate: state == Retired}
+        error: weft.claims.ClassRetired
+      - name: sharing-not-admitted
+        when_related:
+          via: input.class_name
+          predicate: {not: {exists: {in: sharing, as: s, that: s == input.sharing}}}
+        error: weft.claims.SharingNotAdmitted
+      # The three refusals below stay external, each for a fact no weft record holds:
+      # weft.cluster stores no egress policy; domain control is proved outside weft (DNS); usage
+      # against a quota is weft.metering's (layer 8, above this one; weft.accounts stores limits
+      # only).
+      - name: egress-denied
+        external: the cluster's egress policy does not allow a destination of the allow list
+        error: weft.claims.EgressDenied
+      - name: domain-not-verified
+        external: the account has not proved that it controls the domain it claims
+        error: weft.claims.DomainNotVerified
+      - name: quota-exceeded
+        external: the amount would exceed the quota of the account or of an account above it
+        error: weft.claims.QuotaExceeded
+      - name: declared
+        creates: weft.claims.Claim
+        instance: claim_id
+        sets:
+          account_id: input.account_id
+          holder: input.holder
+          class_name: input.class_name
+          amount: input.amount
+          sharing: input.sharing
+          device_model: input.device_model
+          volume_id: input.volume_id
+          filesystem_id: input.filesystem_id
+          bucket_id: input.bucket_id
+          domain_name: input.domain_name
+          egress_allow: input.egress_allow
+        emits: [weft.claims.ClaimDeclared]
+        payload:
+          weft.claims.ClaimDeclared:
+            claim_id: {generated: true}
+            account_id: input.account_id
+            holder: input.holder
+            class_name: input.class_name
+            amount: input.amount
+            sharing: input.sharing
+
+  # Section 6 line 395. A bound claim is unbound first (ReleaseBinding), so no unit stays bound
+  # to a released claim.
+  - name: weft.claims.ReleaseClaim
+    naming:
+      display: Release a claim
+    input:
+      - {name: claim_id, type: weft.shared.ClaimId}
+    outcomes:
+      - name: no-such-claim
+        unknown_instance: true
+        error: weft.claims.NotFound
+      # hardening pass 1 D3: only a claim of the account the caller acts in is released; another
+      # account's claim answers as a missing one, before its state is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.claims.NotFound
+      - name: released
+        moves: weft.claims.Claim.release
+        instance: claim_id
+        emits: [weft.claims.ClaimReleased]
+        payload:
+          weft.claims.ClaimReleased:
+            claim_id: input.claim_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.claims.StateConflict
+
+  # Section 6 line 395 (`Claim` -> `Binding`) and section 10 line 452 (the scheduler's
+  # PlacementDecision): reserve concrete units for a pending claim. Nothing is taken yet;
+  # CommitBinding or CommitVolumeWriter takes them and checks the claim and every unit then.
+  # This step checks only that the claim exists (relation `claim`); no command deletes a claim, so
+  # the commits find it. The claim's state, the volume and each device's node and state are
+  # checked at commit, when they are taken.
+  - name: weft.claims.BindClaim
+    naming:
+      display: Bind a claim
+    input:
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: zone, type: Optional<weft.shared.ZoneName>}
+      - {name: device_ids, type: List<weft.shared.DeviceId>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: address, type: Optional<String>}
+    outcomes:
+      - name: claim-missing
+        when_related: {via: input.claim_id, exists: false}
+        error: weft.claims.NotFound
+      # hardening pass 1 (BindClaim, claims.yaml:448): a binding holds the claim's own volume and no
+      # other, so a wrong or compromised scheduler cannot reserve another account's volume for this
+      # claim. The commits check it again when they take the volume.
+      - name: claim-mismatch
+        when_related:
+          via: input.claim_id
+          predicate:
+            any:
+              - volume_id != input.volume_id
+              - all: [defined(volume_id), not defined(input.volume_id)]
+        error: weft.claims.ClaimMismatch
+      # The devices are weft.inventory.Device rows, a fact in weft, but this stays external: ESS
+      # 0.99.2 tests a list of references only with `when_related: {via: input.device_ids, exists:
+      # false}`, and a command holding that guard reads no other related row, so it cannot sit
+      # beside `claim-missing`. With it in place of `claim-missing`, no binding was arranged
+      # (ESS-SYNTH-008 on `reserved`, 2026-11-26). Replace when ESS admits both.
+      - name: device-missing
+        external: a device of the list is not a device of weft.inventory
+        error: weft.claims.UnitNotFound
+      - name: reserved
+        creates: weft.claims.Binding
+        instance: binding_id
+        sets:
+          claim_id: input.claim_id
+          node_id: input.node_id
+          zone: input.zone
+          device_ids: input.device_ids
+          volume_id: input.volume_id
+          address: input.address
+        emits: [weft.claims.BindingReserved]
+        payload:
+          weft.claims.BindingReserved:
+            binding_id: {generated: true}
+            claim_id: input.claim_id
+            node_id: input.node_id
+            zone: input.zone
+            device_ids: input.device_ids
+            volume_id: input.volume_id
+            address: input.address
+
+  # Section 6 line 395 and the brief: an exclusive unit has at most one binding. The commit takes
+  # the binding's units at once: the claim goes Bound and each device Free -> Bound. A device that
+  # is not free refuses the whole commit, so two bindings never hold one exclusive device.
+  # A volume here is attached read-only; a volume writer commits through CommitVolumeWriter.
+  # Integration pass (2026-11-26, caller's decision): this domain (layer 5) moves
+  # weft.inventory.Device (layer 1) rows itself, so the commit stays all-or-nothing. weft.inventory
+  # has no command of its own that binds a device; ClaimBound names the binding, whose device_ids
+  # are the devices moved.
+  - name: weft.claims.CommitBinding
+    naming:
+      display: Commit a binding
+    input:
+      - {name: binding_id, type: weft.shared.BindingId}
+    outcomes:
+      - name: no-such-binding
+        unknown_instance: true
+        error: weft.claims.NotFound
+      # The claim is the row the binding's `claim_id` names. BindClaim refuses an unknown claim and
+      # no command deletes one, so it is always there: no missing-claim branch (it was unreachable).
+      - name: claim-not-pending
+        when_related:
+          entity: weft.claims.Claim
+          where:
+            all:
+              - claim_id == subject.claim_id
+              - state != Pending
+          exists: true
+        error: weft.claims.StateConflict
+      - name: writer-claim
+        when_related:
+          entity: weft.claims.Claim
+          where:
+            all:
+              - claim_id == subject.claim_id
+              - sharing == Exclusive
+              - defined(volume_id)
+          exists: true
+        error: weft.claims.VolumeClaim
+      - name: claim-mismatch
+        when_related:
+          entity: weft.claims.Claim
+          where:
+            all:
+              - claim_id == subject.claim_id
+              - any:
+                  - volume_id != subject.volume_id
+                  - all: [defined(volume_id), not defined(subject.volume_id)]
+          exists: true
+        error: weft.claims.ClaimMismatch
+      # OPEN: no step checks that a named volume exists (BindClaim reads one related row, the
+      # claim, ess 0.99.2); a binding naming no Volume row commits and attaches nothing. Should
+      # the reserve refuse it, at the cost of a second reserve step?
+      - name: volume-has-writer
+        when_related:
+          entity: weft.resources.Volume
+          where:
+            all:
+              - volume_id == subject.volume_id
+              - state != Available
+          exists: true
+        error: weft.claims.VolumeBusy
+      - name: volume-elsewhere
+        when_related:
+          entity: weft.resources.Volume
+          where:
+            all:
+              - volume_id == subject.volume_id
+              - any:
+                  - zone != subject.zone
+                  - all: [defined(node_id), node_id != subject.node_id]
+          exists: true
+        error: weft.claims.WrongPlacement
+      # Devices are weft.inventory.Device (layer 1, below this one): one device of the binding
+      # that is not Free, or not on the binding's node, refuses the whole commit.
+      - name: device-unavailable
+        when_related:
+          entity: weft.inventory.Device
+          where:
+            all:
+              - exists: {in: subject.device_ids, as: d, that: device_id == d}
+              - state != Free
+          exists: true
+        error: weft.claims.DeviceUnavailable
+      - name: device-elsewhere
+        when_related:
+          entity: weft.inventory.Device
+          where:
+            all:
+              - exists: {in: subject.device_ids, as: d, that: device_id == d}
+              - node_id != subject.node_id
+          exists: true
+        error: weft.claims.WrongPlacement
+      # Every device of the binding goes Free -> Bound in the same outcome as the claim.
+      - name: committed
+        moves: weft.claims.Binding.commit
+        instance: binding_id
+        emits: [weft.claims.ClaimBound]
+        payload:
+          weft.claims.ClaimBound:
+            binding_id: input.binding_id
+            claim_id: {subject: claim_id}
+        affects:
+          - entity: weft.claims.Claim
+            where: claim_id == subject.claim_id
+            moves: weft.claims.Claim.bind
+            sets:
+              binding_id: input.binding_id
+          - entity: weft.inventory.Device
+            where:
+              exists: {in: subject.device_ids, as: d, that: device_id == d}
+            moves: weft.inventory.Device.bind
+      - name: wrong-state
+        wrong_state: true
+        error: weft.claims.StateConflict
+
+  # Brief (Volume: one writer). The writer's commit: the claim goes Bound and the volume
+  # Available -> Attached. Refused while the volume has a writer or any Active reader.
+  - name: weft.claims.CommitVolumeWriter
+    naming:
+      display: Commit a volume writer binding
+    input:
+      - {name: binding_id, type: weft.shared.BindingId}
+    outcomes:
+      - name: no-such-binding
+        unknown_instance: true
+        error: weft.claims.NotFound
+      # As in CommitBinding: the claim is always there, so no missing-claim branch.
+      - name: claim-not-pending
+        when_related:
+          entity: weft.claims.Claim
+          where:
+            all:
+              - claim_id == subject.claim_id
+              - state != Pending
+          exists: true
+        error: weft.claims.StateConflict
+      - name: not-writer-claim
+        when_related:
+          entity: weft.claims.Claim
+          where:
+            all:
+              - claim_id == subject.claim_id
+              - any:
+                  - sharing != Exclusive
+                  - not defined(volume_id)
+                  - volume_id != subject.volume_id
+          exists: true
+        error: weft.claims.ClaimMismatch
+      - name: volume-has-writer
+        when_related:
+          entity: weft.resources.Volume
+          where:
+            all:
+              - volume_id == subject.volume_id
+              - state != Available
+          exists: true
+        error: weft.claims.VolumeBusy
+      - name: volume-has-readers
+        when_related:
+          entity: weft.claims.Binding
+          where:
+            all:
+              - volume_id == subject.volume_id
+              - state == Active
+          exists: true
+        error: weft.claims.VolumeBusy
+      - name: volume-elsewhere
+        when_related:
+          entity: weft.resources.Volume
+          where:
+            all:
+              - volume_id == subject.volume_id
+              - any:
+                  - zone != subject.zone
+                  - all: [defined(node_id), node_id != subject.node_id]
+          exists: true
+        error: weft.claims.WrongPlacement
+      - name: committed
+        moves: weft.claims.Binding.commit
+        instance: binding_id
+        emits: [weft.claims.ClaimBound]
+        payload:
+          weft.claims.ClaimBound:
+            binding_id: input.binding_id
+            claim_id: {subject: claim_id}
+        affects:
+          - entity: weft.claims.Claim
+            where: claim_id == subject.claim_id
+            moves: weft.claims.Claim.bind
+            sets:
+              binding_id: input.binding_id
+          - entity: weft.resources.Volume
+            where: volume_id == subject.volume_id
+            moves: weft.resources.Volume.attach
+      - name: wrong-state
+        wrong_state: true
+        error: weft.claims.StateConflict
+
+  # Section 6 line 395 and section 10 line 459: give the units back. The claim goes Pending again
+  # (ReleaseClaim ends it), each device goes Bound -> Wiping, and a written volume goes Attached ->
+  # Available.
+  # Integration pass (2026-11-26, caller's decision): this domain (layer 5) moves
+  # weft.inventory.Device (layer 1) rows itself, as CommitBinding does. Only an Active binding
+  # took its devices, so a Reserved binding is released without touching any device (another
+  # binding may hold them). A device of the binding that faulted or was removed while bound is
+  # not Bound any more and stays where it is. weft.inventory has no command of its own that
+  # releases a device.
+  # The written volume is found without a writer field on the volume: CommitBinding takes a
+  # volume only while it is Available and CommitVolumeWriter only while no reader is Active, so
+  # the binding's volume is Attached exactly when this binding is its writer.
+  - name: weft.claims.ReleaseBinding
+    naming:
+      display: Release a binding
+    input:
+      - {name: binding_id, type: weft.shared.BindingId}
+    outcomes:
+      - name: no-such-binding
+        unknown_instance: true
+        error: weft.claims.NotFound
+      - name: released-reserved
+        when_subject:
+          predicate: state == Reserved
+        moves: weft.claims.Binding.release
+        instance: binding_id
+        emits: [weft.claims.BindingReleased]
+        payload:
+          weft.claims.BindingReleased:
+            binding_id: input.binding_id
+      - name: released
+        moves: weft.claims.Binding.release
+        instance: binding_id
+        emits: [weft.claims.BindingReleased]
+        payload:
+          weft.claims.BindingReleased:
+            binding_id: input.binding_id
+        affects:
+          - entity: weft.claims.Claim
+            where: binding_id == input.binding_id
+            moves: weft.claims.Claim.unbind
+            sets:
+              binding_id: {cleared: true}
+          - entity: weft.resources.Volume
+            where:
+              all:
+                - volume_id == subject.volume_id
+                - state == Attached
+            moves: weft.resources.Volume.detach
+          - entity: weft.inventory.Device
+            where:
+              all:
+                - exists: {in: subject.device_ids, as: d, that: device_id == d}
+                - state == Bound
+            moves: weft.inventory.Device.release
+      - name: wrong-state
+        wrong_state: true
+        error: weft.claims.StateConflict
+
+  # Wave 4, section 14 line 589 (R5: "claim released -> its bindings released, devices wiped"),
+  # many-rows form (section 14 line 600): one binding on ClaimReleased invokes this command with
+  # `claim_id: event.claim_id`, and every binding of the claim that is still Reserved is released
+  # in one outcome. Chosen over a `binding_id` field on ClaimReleased: ReleaseClaim moves only a
+  # Pending claim, and a claim is Pending only while it holds no Active binding (CommitBinding and
+  # CommitVolumeWriter bind it, ReleaseBinding unbinds it and clears `binding_id`), so that field
+  # would always be absent. What a released claim can still have is Reserved bindings
+  # (BindClaim does not name them on the claim), which no commit takes any more (claim-not-pending)
+  # and which hold no device, so no device is wiped here: an Active binding's devices go to Wiping
+  # in ReleaseBinding, before the claim can be released.
+  # OPEN: should ReleaseClaim admit a Bound claim and release its Active binding (devices to
+  # Wiping, a written volume detached) in the same outcome, so R5 covers "devices wiped" itself
+  # instead of relying on ReleaseBinding having run first?
+  - name: weft.claims.ReleaseClaimBindings
+    naming:
+      display: Release the remaining bindings of a released claim
+    input:
+      - {name: claim_id, type: weft.shared.ClaimId}
+    outcomes:
+      # A Pending claim's Reserved binding may still be committed; only a released claim's
+      # reservations are given up here.
+      - name: no-such-claim
+        when_related: {via: input.claim_id, exists: false}
+        error: weft.claims.NotFound
+      - name: claim-not-released
+        when_related: {via: input.claim_id, predicate: state != Released}
+        error: weft.claims.StateConflict
+      - name: released
+        moves: weft.claims.Binding.release
+        instances:
+          where: {all: [claim_id == input.claim_id, state == Reserved]}
+        emits: [weft.claims.ClaimBindingsReleased]
+        payload:
+          weft.claims.ClaimBindingsReleased:
+            claim_id: input.claim_id
+            released: {count: changed}
+
+views:
+  # Every binding of every account, read back by ReleaseClaimBindings (a set effect) and by the
+  # control-plane loops (sketch § 14, R5). Granted to ControlPlane and Scheduler only, so no tenant
+  # reads another tenant's bindings (integrator, 2026-11-26, from the claims soundness pass).
+  - name: weft.claims.BindingIndex
+    source: weft.claims.Binding
+    consistency: read_your_writes
+    fields:
+      - {name: binding_id, type: weft.shared.BindingId}
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: state, type: weft.claims.Binding.State}
+
+  # Section 6 line 395: the claims of an account.
+  - name: weft.claims.Claims
+    source: weft.claims.Claim
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: holder, type: weft.claims.ClaimHolder}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: amount, type: Integer}
+      - {name: sharing, type: weft.shared.Sharing}
+      - {name: device_model, type: Optional<String>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: filesystem_id, type: Optional<weft.shared.FilesystemId>}
+      - {name: bucket_id, type: Optional<weft.shared.BucketId>}
+      - {name: domain_name, type: Optional<String>}
+      - {name: egress_allow, type: List<weft.claims.EgressRule>}
+      - {name: state, type: weft.claims.Claim.State}
+
+  # Section 6 line 395 (`Binding`: concrete units on a node) and section 11 line 467 (the node
+  # agent attaches what is bound on its node): the bindings of one node.
+  - name: weft.claims.NodeBindings
+    source: weft.claims.Binding
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: binding_id, type: weft.shared.BindingId}
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - name: account_id
+        type: Optional<weft.shared.AccountId>
+        field: {related: {via: claim_id, field: account_id}}
+      - name: class_name
+        type: Optional<weft.shared.ResourceClassName>
+        field: {related: {via: claim_id, field: class_name}}
+      - name: sharing
+        type: Optional<weft.shared.Sharing>
+        field: {related: {via: claim_id, field: sharing}}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: zone, type: Optional<weft.shared.ZoneName>}
+      - {name: device_ids, type: List<weft.shared.DeviceId>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: address, type: Optional<String>}
+      - {name: state, type: weft.claims.Binding.State}
+
+  # Section 6 line 395: the bindings of one claim, for its holder's owner.
+  - name: weft.claims.ClaimBindings
+    source: weft.claims.Binding
+    consistency: read_your_writes
+    params:
+      - {name: claim_id, type: weft.shared.ClaimId}
+    filter: claim_id == param.claim_id
+    fields:
+      - {name: binding_id, type: weft.shared.BindingId}
+      - {name: claim_id, type: weft.shared.ClaimId}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: zone, type: Optional<weft.shared.ZoneName>}
+      - {name: device_ids, type: List<weft.shared.DeviceId>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: address, type: Optional<String>}
+      - {name: state, type: weft.claims.Binding.State}

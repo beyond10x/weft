@@ -1,0 +1,110 @@
+format: weft-sim-experiment/1
+name: duplicate-delivery
+summary: >-
+  One zone, one pool, two joined nodes with open sessions; one tenant with an account, a
+  sub-account and a quota tree. Fault: a delivered command arrives a second time (at-least-once
+  delivery). Idempotency: no second row, no second transition, the same or a declared refusal.
+seed: 11
+
+vars:
+  zone: z1
+  top_limit: 10
+  draw: 4
+
+setup:
+  - label: create-cloud
+    command: weft.infrastructure.CreateCloud
+    actor: weft.actors.ClusterOperator
+    input: {name: sim}
+    expect: created
+    bind: {cloud_id: cloud_id}
+  - label: declare-zone
+    command: weft.infrastructure.DeclareZone
+    actor: weft.actors.ClusterOperator
+    input: {zone: "${zone}", cloud_id: "${cloud_id}"}
+    expect: declared
+  - label: create-pool
+    command: weft.infrastructure.CreateNodePool
+    actor: weft.actors.ClusterOperator
+    input: {name: pool-a, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 0, max_size: 4}
+    expect: created
+    bind: {node_pool_id: node_pool_id}
+  - label: provision-node
+    repeat: 2
+    command: weft.infrastructure.ProvisionPoolNode
+    actor: weft.actors.ClusterOperator
+    input: {node_pool_id: "${node_pool_id}", join_token_expires_at: "2026-01-01T06:00:00Z"}
+    expect: provisioned
+    bind: {"node_${i}": node_id, "token_${i}": join_token}
+  - label: join-node-0
+    command: weft.infrastructure.JoinNode
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_0}", join_token: "${token_0}"}
+    expect: joined
+  - label: join-node-1
+    command: weft.infrastructure.JoinNode
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_1}", join_token: "${token_1}"}
+    expect: joined
+  - label: open-session-0
+    command: weft.nodes.OpenNodeSession
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_0}", agent_version: "1.0", received_at: "${now}"}
+    expect: opened
+    bind: {session_0: session_id}
+  - label: create-tenant
+    command: weft.accounts.CreateTenant
+    actor: weft.actors.ClusterOperator
+    input: {name: acme}
+    expect: created
+    bind: {tenant_id: tenant_id}
+  - label: create-account
+    command: weft.accounts.CreateAccount
+    actor: weft.actors.TenantOwner
+    input: {tenant_id: "${tenant_id}", name: prod}
+    expect: created
+    bind: {account_id: account_id}
+  - label: grant-top-quota
+    command: weft.accounts.GrantTopQuota
+    actor: weft.actors.ClusterOperator
+    input: {account_id: "${account_id}", resource_class: gpu, limit: "${top_limit}"}
+    expect: granted
+    bind: {top_quota_id: quota_id}
+  - label: create-sub-account
+    command: weft.accounts.CreateSubAccount
+    actor: weft.actors.TenantOwner
+    input: {parent_account_id: "${account_id}", name: team}
+    expect: created
+    bind: {sub_account_id: account_id}
+  - label: allocate-quota
+    command: weft.accounts.AllocateQuota
+    actor: weft.actors.TenantOwner
+    input: {account_id: "${sub_account_id}", parent_account_id: "${account_id}", parent_quota_id: "${top_quota_id}", resource_class: gpu}
+    expect: allocated
+    bind: {sub_quota_id: quota_id}
+  - label: draw-quota
+    command: weft.accounts.DrawQuota
+    actor: weft.actors.TenantOwner
+    input: {parent_quota_id: "${top_quota_id}", quota_id: "${sub_quota_id}", limit: "${draw}"}
+    expect: drawn
+
+ticks: 3
+faults:
+  - at: 1
+    kind: duplicate
+    target: draw-quota
+
+invariants: [idempotency, no-double-placement, quota-conservation, tenant-isolation]
+
+mutations:
+  - {name: duplicated-step, kind: fault, point: faults.0.target, values: [create-tenant, join-node-0, grant-top-quota, draw-quota, open-session-0]}
+  - {name: draw, kind: var, point: draw, values: [1, 4, 10, 11]}
+
+search:
+  mode: fit
+  weights: {duplicate-effects: 10, quota-breaches: 10, violations: 1, outcomes-reached: 0.1}
+  gates: [setup-failures]
+  budget: 12
+
+find:
+  gaps: true

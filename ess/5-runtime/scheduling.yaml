@@ -1,0 +1,1862 @@
+# Scheduling: placing instances on nodes, gangs, priority and preemption, and asking node pools
+# for more or fewer nodes. Source: docs/domain-sketch.md "10. Scheduling", with
+# "Structure" (Actors), "6. Resources" (the scheduler reads only class attributes)
+# and "9. Cluster" (nodes, node pools, zones, priority classes).
+#
+# Rule of this file: a request ends placed or unschedulable with a named reason; it never waits
+# silently. Isolation is never weakened, and instances of different tenants never share a kernel.
+domain: weft.scheduling
+
+summary: >-
+  Placing instances on nodes: a scheduling request becomes a placement decision on one node with
+  its bindings, or is unschedulable with a named reason. Gangs bind all members or none. Priority
+  classes decide preemption, with a grace period and a reason. Scale requests ask a node pool for
+  a node or give an idle one back.
+
+naming:
+  wire: weft
+  display: Scheduling
+
+types:
+  # Entity identifiers of this domain (SchedulingRequestId, PlacementDecisionId, GangId,
+  # ScaleRequestId) are in shared.yaml (weft/AGENTS.md). Priority classes are weft.cluster's
+  # (PriorityClassName, layer 1; moved there in integration 2026-11-26): this domain reads them.
+
+  # §10: "Input: instance, claims, ...". Wave 4 (§14 line 596, edge form R1/R3): a request's
+  # claims are the instance's claims as its workload declares them, weft.workloads.ClaimRequest
+  # (class, amount, sharing, selector; layer 4), so the event that creates or evicts an instance
+  # fills the request without a translation. The former weft.scheduling.ClaimDemand named a
+  # weft.claims.Claim id that does not exist when an instance is created; the claim records are
+  # reached through the bindings PlaceInstance names.
+  # OPEN: the unit of `amount` for a divisible class (gpu-slice): taken as a whole number of the
+  # class's smallest unit.
+
+  # §10: "`Unschedulable` with the reason". No capacity, isolation too weak, zone mismatch,
+  # quota exceeded, gang incomplete; and the tenant rule of §10 ("never share a kernel") by its
+  # own name: only nodes holding another tenant's kernel-sharing instances had room.
+  - name: weft.scheduling.UnschedulableReason
+    kind: enum
+    variants: [NoCapacity, IsolationTooWeak, ZoneMismatch, QuotaExceeded, GangIncomplete, TenantSeparation]
+
+  # §10: "`Preemption` with a grace period and a reason".
+  - name: weft.scheduling.PreemptionReason
+    kind: enum
+    variants: [HigherPriority, GangPlacement]
+
+  # §10: "Scale up by asking a NodePool for a node; drain idle nodes".
+  - name: weft.scheduling.ScaleDirection
+    kind: enum
+    variants: [Up, Down]
+
+entities:
+  # §10: "Input: instance, claims, minimum isolation, formation's zone rules".
+  # OPEN: how long a request may stay Pending before the scheduler must declare it
+  # Unschedulable; the sketch says only that it gets a reason. A Pending request is visible in
+  # PendingRequests with its age.
+  - name: weft.scheduling.SchedulingRequest
+    naming:
+      summary: One instance to place, with its claims, minimum isolation, zones and priority.
+    identity:
+      name: request_id
+      type: weft.shared.SchedulingRequestId
+    fields:
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: formation_id
+        type: weft.shared.FormationId
+      # design:tenant-clusters step 3: "a request carries the formation's cluster". Read from the
+      # formation when the request is made (weft.formations.Formation.cluster_id, fixed at its
+      # creation), so it is the formation's by construction and never an input of its own.
+      - name: cluster_id
+        type: weft.shared.ClusterId
+      - name: claims
+        type: List<weft.workloads.ClaimRequest>
+      # §10: never weakened. §10: spec kinds and untrusted code default to
+      # MicroVm; the workloads domain sets that default before it asks.
+      - name: min_isolation
+        type: weft.shared.IsolationLevel
+      # The formation's zone rules, as the zones the instance may run in.
+      # OPEN: the sketch names "zone rules" without saying what they are. Taken: a list of
+      # allowed zones, empty meaning any zone. Spread across zones and affinity are left out.
+      - name: zones
+        type: List<weft.shared.ZoneName>
+      - name: priority
+        type: weft.shared.PriorityClassName
+      # The next four are copied from the priority class when the request is made, so a later
+      # change of the class does not change a request already made.
+      - name: priority_value
+        type: Integer
+      - name: preempts
+        type: Boolean
+      - name: preemptible
+        type: Boolean
+      - name: grace_seconds
+        type: Integer
+      # §10: the gang this instance belongs to (a `gang` Job, §4 Shape).
+      - name: gang_id
+        type: Optional<weft.shared.GangId>
+      - name: requested_at
+        type: Timestamp
+      # The placed answer is the PlacementDecision whose request_id names this request; the
+      # unschedulable answer is these two fields.
+      - name: unschedulable_reason
+        type: Optional<weft.scheduling.UnschedulableReason>
+      - name: unschedulable_detail
+        type: Optional<String>
+    relations:
+      - name: priority_class
+        kind: references
+        target: weft.infrastructure.PriorityClass
+        cardinality: one
+        via: priority
+      - name: gang
+        kind: references
+        target: weft.scheduling.Gang
+        cardinality: one
+        via: gang_id
+      # The instance outlives its request (a preempted instance gets a new one): references.
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: tenant
+        kind: references
+        target: weft.accounts.Tenant
+        cardinality: one
+        via: tenant_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: formation
+        kind: references
+        target: weft.formations.Formation
+        cardinality: one
+        via: formation_id
+      - name: cluster
+        kind: references
+        target: weft.cluster.Cluster
+        cardinality: one
+        via: cluster_id
+      - name: allowed_zones
+        kind: references
+        target: weft.infrastructure.Zone
+        cardinality: many
+        via: zones
+    lifecycle:
+      initial: Pending
+      states: [Pending, Placed, Unschedulable, Withdrawn]
+      terminal: [Placed, Withdrawn]
+      transitions:
+        - name: place
+          from: [Pending]
+          to: Placed
+          summary: The instance's placement decision is bound; the request is answered.
+        - name: declare_unschedulable
+          from: [Pending]
+          to: Unschedulable
+          summary: No node can take the instance now; the reason is named.
+        - name: retry
+          from: [Unschedulable]
+          to: Pending
+          summary: Something changed (capacity, quota, a scale-up); the scheduler tries again.
+        - name: withdraw
+          from: [Pending, Unschedulable]
+          to: Withdrawn
+          summary: The instance is no longer wanted.
+    # A request whose decision is still Reserved stays Pending: PlaceInstance creates the decision
+    # and cannot move the request in the same step (ESS admits no `affects:` beside `creates:`).
+    # BindPlacement and BindGang move it to Placed. While a live decision exists,
+    # DeclareUnschedulable, WithdrawSchedulingRequest and a second PlaceInstance refuse
+    # (RequestReserved).
+
+  # §10: "Output: `PlacementDecision`": the instance on one node with its bindings.
+  # §6: a `Binding` is concrete units on a node; the resources domain holds it.
+  # OPEN: does the scheduler create the bindings, or does the resources domain create them from
+  # the decision? Taken: the scheduler names binding ids the resources domain reserved for it.
+  - name: weft.scheduling.PlacementDecision
+    naming:
+      summary: One instance placed on one node at one isolation level, with its bindings.
+    identity:
+      name: decision_id
+      type: weft.shared.PlacementDecisionId
+    fields:
+      - name: request_id
+        type: weft.shared.SchedulingRequestId
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: zone
+        type: weft.shared.ZoneName
+      # The level the node runs the instance at; at least the request's minimum (§10).
+      - name: isolation
+        type: weft.shared.IsolationLevel
+      # The request's minimum, copied when the decision is made (§10: "A workload's minimum is
+      # never weakened"), so PlacementBound and the node's assignment carry it (R4, §14 line 588).
+      - name: min_isolation
+        type: weft.shared.IsolationLevel
+      # Wave 4 (§14 line 598, level form of R4): the observed side of "placement bound ->
+      # assignment sent to the node". False when the decision is made; RecordPlacementAssigned
+      # sets it once weft.nodes created the assignment. UnassignedPlacements lists the Bound
+      # decisions where it is still false: the gang members (BindGang emits one GangBound, not one
+      # PlacementBound per member) and any PlacementBound whose delivery was lost.
+      - name: assigned
+        type: Boolean
+      - name: bindings
+        type: List<weft.shared.BindingId>
+      - name: gang_id
+        type: Optional<weft.shared.GangId>
+      - name: priority_value
+        type: Integer
+      - name: preemptible
+        type: Boolean
+      - name: grace_seconds
+        type: Integer
+      - name: decided_at
+        type: Timestamp
+      # §10: `Preemption` with a grace period and a reason, recorded on its victim. Set
+      # when the decision moves to Evicting.
+      - name: preempted_by
+        type: Optional<weft.shared.SchedulingRequestId>
+      - name: preemption_reason
+        type: Optional<weft.scheduling.PreemptionReason>
+      - name: evicting_since
+        type: Optional<Timestamp>
+      - name: released_at
+        type: Optional<Timestamp>
+    relations:
+      - name: request
+        kind: references
+        target: weft.scheduling.SchedulingRequest
+        cardinality: one
+        via: request_id
+      - name: preemptor
+        kind: references
+        target: weft.scheduling.SchedulingRequest
+        cardinality: one
+        via: preempted_by
+      - name: gang
+        kind: references
+        target: weft.scheduling.Gang
+        cardinality: one
+        via: gang_id
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: tenant
+        kind: references
+        target: weft.accounts.Tenant
+        cardinality: one
+        via: tenant_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: placed_zone
+        kind: references
+        target: weft.infrastructure.Zone
+        cardinality: one
+        via: zone
+      # §6: the resources domain holds the bindings and their lifecycle.
+      - name: resource_bindings
+        kind: references
+        target: weft.claims.Binding
+        cardinality: many
+        via: bindings
+    # Reserved: the node's units are held; Bound: committed, the nodes domain may assign it
+    # (§11 `Assignment`). A gang's members stay Reserved until all are bound (§10).
+    lifecycle:
+      initial: Reserved
+      states: [Reserved, Bound, Evicting, Released]
+      terminal: [Released]
+      transitions:
+        - name: bind
+          from: [Reserved]
+          to: Bound
+          summary: The reservation is committed; the instance may be assigned to its node.
+        - name: evict
+          from: [Bound]
+          to: Evicting
+          summary: A preemption started; the instance has its grace period to stop.
+        - name: release
+          from: [Reserved, Bound, Evicting]
+          to: Released
+          summary: The units are free again; the instance stopped, was evicted, or its node is lost.
+
+  # §10: "Gang: all tasks of a gang bound, or none." §4 Shape: a `gang` Job (all N start
+  # together or none).
+  - name: weft.scheduling.Gang
+    naming:
+      summary: A set of instances that are bound all together or not at all.
+    identity:
+      name: gang_id
+      type: weft.shared.GangId
+    fields:
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: job_id
+        type: weft.shared.JobId
+      - name: size
+        type: Integer
+      - name: registered_at
+        type: Timestamp
+      - name: ended_at
+        type: Optional<Timestamp>
+    relations:
+      - name: tenant
+        kind: references
+        target: weft.accounts.Tenant
+        cardinality: one
+        via: tenant_id
+      # §4 Shape: the gang Job is the workloads domain's; the Gang only groups its placements.
+      - name: job
+        kind: references
+        target: weft.workloads.Job
+        cardinality: one
+        via: job_id
+    invariants:
+      - size >= 2
+    lifecycle:
+      initial: Forming
+      states: [Forming, Bound, Abandoned]
+      terminal: [Bound, Abandoned]
+      transitions:
+        - name: bind
+          from: [Forming]
+          to: Bound
+          summary: Every member is reserved; all are bound in one step.
+        - name: abandon
+          from: [Forming]
+          to: Abandoned
+          summary: Not every member could be reserved; every reservation is released.
+
+  # §10: "Scale up by asking a NodePool for a node; drain idle nodes". The NodePool and
+  # its min/max size are the cluster domain's (§9); it answers the request.
+  - name: weft.scheduling.ScaleRequest
+    naming:
+      summary: The scheduler's ask to a node pool for more nodes, or to give an idle node back.
+    identity:
+      name: scale_id
+      type: weft.shared.ScaleRequestId
+    fields:
+      - name: node_pool_id
+        type: weft.shared.NodePoolId
+      - name: direction
+        type: weft.scheduling.ScaleDirection
+      # Up: the nodes asked for. Down: 1.
+      - name: count
+        type: Integer
+      # Up: the unschedulable request that needs the room.
+      - name: for_request
+        type: Optional<weft.shared.SchedulingRequestId>
+      # Down: the idle node to drain and give back.
+      - name: node_id
+        type: Optional<weft.shared.NodeId>
+      - name: requested_at
+        type: Timestamp
+      - name: answered_at
+        type: Optional<Timestamp>
+      - name: detail
+        type: Optional<String>
+    relations:
+      - name: request
+        kind: references
+        target: weft.scheduling.SchedulingRequest
+        cardinality: one
+        via: for_request
+      # §9: the pool, its bounds and its nodes are the cluster domain's.
+      - name: node_pool
+        kind: references
+        target: weft.infrastructure.NodePool
+        cardinality: one
+        via: node_pool_id
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    invariants:
+      - count >= 1
+    lifecycle:
+      initial: Requested
+      states: [Requested, Fulfilled, Refused]
+      terminal: [Fulfilled, Refused]
+      transitions:
+        - name: fulfil
+          from: [Requested]
+          to: Fulfilled
+          summary: The pool added the nodes, or drained and removed the node.
+        - name: refuse
+          from: [Requested]
+          to: Refused
+          summary: The pool could not; the detail says why.
+
+errors:
+  - name: weft.scheduling.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.scheduling.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.scheduling.UnknownPriorityClass
+    summary: The request names a priority class that does not exist.
+  - name: weft.scheduling.PriorityClassIsRetired
+    summary: The request names a retired priority class.
+  - name: weft.scheduling.NoClaims
+    summary: A scheduling request names no claim; every instance claims at least cpu and memory.
+  - name: weft.scheduling.InstanceAlreadyRequested
+    summary: The instance has a scheduling request that is pending or unschedulable already.
+  - name: weft.scheduling.RequestMismatch
+    summary: The command names a tenant or a request other than the one the record holds.
+  - name: weft.scheduling.RequestReserved
+    summary: The request holds a live placement decision; release it first.
+  - name: weft.scheduling.IsolationTooWeak
+    summary: The placement would run the instance below its minimum isolation; it is never weakened.
+  - name: weft.scheduling.ZoneMismatch
+    summary: The node's zone is not one the instance may run in.
+  - name: weft.scheduling.TenantKernelShared
+    summary: >-
+      The placement would make the instance share a kernel with an instance of another tenant on
+      the node; instances of different tenants never share a kernel.
+  - name: weft.scheduling.NodeNotSchedulable
+    summary: The node is not ready for new instances (provisioning, joining, cordoned, draining or gone).
+  - name: weft.scheduling.NodeNotConnected
+    summary: >-
+      The node has no open session with the control plane, so an instance placed on it could not
+      be assigned; nothing was reserved.
+  - name: weft.scheduling.DecidedInFuture
+    summary: >-
+      The decision instant lies after the control plane's own decision instant, so it is no
+      decision instant, and nothing changed.
+  - name: weft.scheduling.AssignmentPending
+    summary: >-
+      The placement is bound and its node does not hold it yet, and the time it has to be
+      assigned has not run out; releasing it now would leave its instance placed nowhere.
+  - name: weft.scheduling.NodeOutsideCluster
+    summary: >-
+      The node is not one the request's cluster runs on: it is in another cloud, in a dedicated
+      node pool of another cluster, or outside the dedicated node pools of a cluster that has some.
+  - name: weft.scheduling.NoCapacity
+    summary: The node's free capacity does not cover the instance's claims.
+  - name: weft.scheduling.IsolationNotOffered
+    summary: The node's observed isolation facts do not include the level of the placement.
+  - name: weft.scheduling.QuotaExceeded
+    summary: The claims exceed the remaining quota of the account or of an account above it.
+  - name: weft.scheduling.DeviceNotWiped
+    summary: A device in the bindings last served another tenant and has not been wiped since.
+  - name: weft.scheduling.GangMemberAlone
+    summary: The placement belongs to a gang; a gang member is bound only with its whole gang.
+  - name: weft.scheduling.UnknownGang
+    summary: The request names a gang that does not exist.
+  - name: weft.scheduling.GangClosed
+    summary: The gang is bound or abandoned already and takes no new member.
+  - name: weft.scheduling.InvalidGangSize
+    summary: A gang has at least two members.
+  - name: weft.scheduling.JobNotGang
+    summary: The job named is not a gang Job, so it has no gang.
+  - name: weft.scheduling.GangIncomplete
+    summary: >-
+      The members named are not the whole gang, each reserved for it once; no member is bound.
+  - name: weft.scheduling.NotPreemptible
+    summary: The victim's priority class says its placements are never preempted.
+  - name: weft.scheduling.PreemptionNotAllowed
+    summary: The preemptor's priority class does not preempt.
+  - name: weft.scheduling.PriorityNotHigher
+    summary: The victim's priority is not lower than the preemptor's.
+  - name: weft.scheduling.PreemptorNotWaiting
+    summary: The preemptor's request is not pending or unschedulable, so it needs no room.
+  - name: weft.scheduling.InvalidScaleCount
+    summary: A scale-up asks for at least one node.
+  - name: weft.scheduling.ScaleNotNeeded
+    summary: The request a scale-up names is not unschedulable, so no node is added for it.
+  - name: weft.scheduling.PoolAtLimit
+    summary: The node pool is at its maximum size (up) or its minimum size (down).
+  - name: weft.scheduling.NodeNotIdle
+    summary: The node holds a live placement; only an idle node is given back.
+  - name: weft.scheduling.ScaleAlreadyRequested
+    summary: A scale-down of this node is requested already and not yet answered.
+
+events:
+  - name: weft.scheduling.SchedulingRequested
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: priority, type: weft.shared.PriorityClassName}
+
+  - name: weft.scheduling.InstanceUnschedulable
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: reason, type: weft.scheduling.UnschedulableReason}
+      - {name: detail, type: String}
+
+  - name: weft.scheduling.SchedulingRetried
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+
+  - name: weft.scheduling.SchedulingWithdrawn
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+
+  - name: weft.scheduling.InstancePlaced
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: bindings, type: List<weft.shared.BindingId>}
+
+  # Wave 4 (§14 line 588, edge form of R4): carries every input of weft.nodes.Assign
+  # (instance_id, node_id, placement_decision_id <- decision_id, assigned_at <- decided_at) and of
+  # weft.workloads.ScheduleInstance (instance_id, node_id, isolation). `isolation` is the level the
+  # node runs the instance at; `min_isolation` the request's minimum.
+  - name: weft.scheduling.PlacementBound
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      # The decision's instant on the Scheduler's clock (PlaceInstance input), the lease start
+      # weft.nodes.Assign takes as `assigned_at` (weft-sim full setup, 2026-11-26).
+      - {name: decided_at, type: Timestamp}
+
+  - name: weft.scheduling.PlacementAssigned
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.scheduling.PlacementReleased
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  # §11 line 476 ("a lost node's instances are rescheduled after the lease ends"), for a placement
+  # no lease covers: it was bound, its node never took it, and it was released on time
+  # (ReleasePlacement `released-unassigned`). Carries what weft.workloads.EvictInstance needs
+  # (instance_id; the reason is NodeLost), so the replica is requested again (R1, R3 edge 3).
+  - name: weft.scheduling.UnassignedPlacementReleased
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.scheduling.GangRegistered
+    fields:
+      - {name: gang_id, type: weft.shared.GangId}
+      - {name: job_id, type: weft.shared.JobId}
+      - {name: size, type: Integer}
+
+  - name: weft.scheduling.GangBound
+    fields:
+      - {name: gang_id, type: weft.shared.GangId}
+
+  - name: weft.scheduling.GangAbandoned
+    fields:
+      - {name: gang_id, type: weft.shared.GangId}
+      - {name: detail, type: String}
+
+  - name: weft.scheduling.ScaleUpRequested
+    fields:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+      - {name: node_pool_id, type: weft.shared.NodePoolId}
+      - {name: count, type: Integer}
+      - {name: for_request, type: weft.shared.SchedulingRequestId}
+
+  - name: weft.scheduling.ScaleDownRequested
+    fields:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+      - {name: node_pool_id, type: weft.shared.NodePoolId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.scheduling.ScaleFulfilled
+    fields:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+
+  - name: weft.scheduling.ScaleRefused
+    fields:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+      - {name: detail, type: String}
+
+  # §10: the victim gets its grace period to stop; the reason is named.
+  - name: weft.scheduling.PreemptionStarted
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: preempted_by, type: weft.shared.SchedulingRequestId}
+      - {name: reason, type: weft.scheduling.PreemptionReason}
+      - {name: grace_seconds, type: Integer}
+
+commands:
+  # §10: the scheduler's input. Issued by the control plane when an instance must start
+  # (workloads domain), as the Scheduler system actor.
+  # Wave 4 (§14 line 596, edge form): R1 (weft.workloads.InstanceCreated) invokes this command
+  # with a binding, so every input is a field that event carries: instance_id, account_id,
+  # formation_id, claims, minimum_isolation (mapped to min_isolation), zones, priority. R3 reaches
+  # it through R1: an evicted replica leaves its service's count (weft.workloads.InstanceEvicted
+  # -> RecordReplicaEnded), the level loop creates a new instance, and that instance's
+  # InstanceCreated is submitted here (docs/open-questions.md "workloads loops", wave 4, decided);
+  # the evicted instance itself is never submitted again. The tenant is not an input: it is read
+  # from the account (§1: an account belongs to one tenant), so a request never pairs one tenant
+  # with another tenant's account.
+  # A gang member is not submitted by that binding: weft.workloads does not know the gang, which
+  # this domain registers (RegisterGang); the control plane submits it with gang_id.
+  # OPEN: should the R1/R3 binding skip a gang Job's instances (a `where:` on the event), or should
+  # the instance carry its gang (weft.shared.GangId on weft.workloads.Instance and its events)?
+  - name: weft.scheduling.SubmitSchedulingRequest
+    naming:
+      display: Ask to schedule an instance
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: claims, type: List<weft.workloads.ClaimRequest>}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: zones, type: List<weft.shared.ZoneName>}
+      - {name: priority, type: weft.shared.PriorityClassName}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+    outcomes:
+      - name: no-claims
+        when: claims.count == 0
+        error: weft.scheduling.NoClaims
+      - name: unknown-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.scheduling.NotFound
+      # hardening pass 1 scheduling:589, :591: the instance and the formation exist; their ties to
+      # the account follow every existence check (ESS answers existence first).
+      - name: unknown-instance
+        when_related: {via: input.instance_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: unknown-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: unknown-priority
+        when_related: {via: input.priority, exists: false}
+        error: weft.scheduling.UnknownPriorityClass
+      # §10: a member joins a gang of its own tenant that is still forming.
+      - name: unknown-gang
+        when_related: {via: input.gang_id, exists: false}
+        error: weft.scheduling.UnknownGang
+      # hardening pass 1 scheduling:589: the instance is tied to the request's account, so the
+      # request's tenant (read from the account) is the instance's and `shared-kernel` compares the
+      # right tenant. Another account's instance answers as a missing one.
+      - name: instance-of-other-account
+        when_related: {via: input.instance_id, predicate: account_id != input.account_id}
+        error: weft.scheduling.NotFound
+      # hardening pass 1 scheduling:591: the formation is tied to the request's account; another
+      # account's formation answers as a missing one.
+      - name: formation-of-other-account
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
+        error: weft.scheduling.NotFound
+      # hardening pass 1 scheduling:591: the formation is the one the instance's workload runs in.
+      - name: formation-not-instances
+        when_related:
+          entity: weft.workloads.Instance
+          where:
+            all:
+              - instance_id == input.instance_id
+              - not:
+                  exists:
+                    in: {entity: weft.workloads.Workload}
+                    as: w
+                    that: {all: ["w.workload_id == workload_id", "w.formation_id == input.formation_id"]}
+          exists: true
+        error: weft.scheduling.RequestMismatch
+      # design:tenant-clusters step 3: the request's cluster is the formation's. It is not an input
+      # (the R1 binding and weft.workloads.InstanceCreated stay as they are): `requested` reads it
+      # from the formation the guards above tied to the instance and the account, so a request
+      # never names a cluster other than its formation's. A deleted cluster needs no guard here:
+      # weft.cluster.DeleteCluster refuses while a formation runs in it (design open question 4).
+      - name: retired-priority
+        when_related: {via: input.priority, predicate: state == Retired}
+        error: weft.scheduling.PriorityClassIsRetired
+      - name: already-requested
+        when_related:
+          entity: weft.scheduling.SchedulingRequest
+          where: {all: ["instance_id == input.instance_id", {any: ["state == Pending", "state == Unschedulable"]}]}
+          exists: true
+        error: weft.scheduling.InstanceAlreadyRequested
+      - name: gang-closed
+        when_related: {via: input.gang_id, predicate: state != Forming}
+        error: weft.scheduling.GangClosed
+      # The gang's tenant against the tenant of the request's account.
+      - name: gang-of-other-tenant
+        when_related:
+          entity: weft.scheduling.Gang
+          where:
+            all:
+              - gang_id == input.gang_id
+              - not:
+                  exists:
+                    in: {entity: weft.accounts.Account}
+                    as: a
+                    that: {all: ["a.account_id == input.account_id", "a.tenant_id == tenant_id"]}
+          exists: true
+        error: weft.scheduling.RequestMismatch
+      - name: requested
+        creates: weft.scheduling.SchedulingRequest
+        instance: request_id
+        sets:
+          instance_id: input.instance_id
+          tenant_id: {related: {via: input.account_id, field: tenant_id}}
+          account_id: input.account_id
+          formation_id: input.formation_id
+          cluster_id: {related: {via: input.formation_id, field: cluster_id}}
+          claims: input.claims
+          min_isolation: input.min_isolation
+          zones: input.zones
+          priority: input.priority
+          priority_value: {related: {via: input.priority, field: value}}
+          preempts: {related: {via: input.priority, field: preempts}}
+          preemptible: {related: {via: input.priority, field: preemptible}}
+          grace_seconds: {related: {via: input.priority, field: grace_seconds}}
+          gang_id: input.gang_id
+          requested_at: {generated: true}
+        emits: [weft.scheduling.SchedulingRequested]
+        payload:
+          weft.scheduling.SchedulingRequested:
+            request_id: {generated: true}
+            instance_id: input.instance_id
+            tenant_id: {related: {via: input.account_id, field: tenant_id}}
+            cluster_id: {related: {via: input.formation_id, field: cluster_id}}
+            min_isolation: input.min_isolation
+            priority: input.priority
+
+  # §10: "`Unschedulable` with the reason". The scheduler says why; it never leaves a
+  # request waiting without one.
+  - name: weft.scheduling.DeclareUnschedulable
+    naming:
+      display: Declare an instance unschedulable
+    input:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: reason, type: weft.scheduling.UnschedulableReason}
+      - {name: detail, type: String}
+    outcomes:
+      - name: no-such-request
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: reserved
+        when_related:
+          entity: weft.scheduling.PlacementDecision
+          where: {all: ["request_id == input.request_id", {state: [Reserved, Bound, Evicting]}]}
+          exists: true
+        error: weft.scheduling.RequestReserved
+      - name: unschedulable
+        moves: weft.scheduling.SchedulingRequest.declare_unschedulable
+        instance: request_id
+        sets:
+          unschedulable_reason: input.reason
+          unschedulable_detail: input.detail
+        emits: [weft.scheduling.InstanceUnschedulable]
+        payload:
+          weft.scheduling.InstanceUnschedulable:
+            request_id: input.request_id
+            instance_id: {subject: instance_id}
+            reason: input.reason
+            detail: input.detail
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # §10: after a scale-up, a freed node or a raised quota the scheduler tries again.
+  - name: weft.scheduling.RetrySchedulingRequest
+    naming:
+      display: Retry an unschedulable instance
+    input:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+    outcomes:
+      - name: no-such-request
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: retried
+        moves: weft.scheduling.SchedulingRequest.retry
+        instance: request_id
+        sets:
+          unschedulable_reason: {cleared: true}
+          unschedulable_detail: {cleared: true}
+        emits: [weft.scheduling.SchedulingRetried]
+        payload:
+          weft.scheduling.SchedulingRetried:
+            request_id: input.request_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # §10: the instance is stopped or deleted before it was placed (workloads domain).
+  - name: weft.scheduling.WithdrawSchedulingRequest
+    naming:
+      display: Withdraw a scheduling request
+    input:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+    outcomes:
+      - name: no-such-request
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: reserved
+        when_related:
+          entity: weft.scheduling.PlacementDecision
+          where: {all: ["request_id == input.request_id", {state: [Reserved, Bound, Evicting]}]}
+          exists: true
+        error: weft.scheduling.RequestReserved
+      - name: withdrawn
+        moves: weft.scheduling.SchedulingRequest.withdraw
+        instance: request_id
+        emits: [weft.scheduling.SchedulingWithdrawn]
+        payload:
+          weft.scheduling.SchedulingWithdrawn:
+            request_id: input.request_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # §10: "Output: `PlacementDecision`". §10: isolation never weakened, tenants
+  # never share a kernel, a GPU is wiped between tenants. Facts of other domains (the node's
+  # state, capacity, isolation facts and zone: cluster; quota: accounts and metering; device
+  # wipe: resources) are named external refusals; each refuses, none falls back.
+  # OPEN: does UserKernel (a user-space kernel such as gVisor) count as an instance's own kernel
+  # for the tenant rule? Taken: no, only MicroVm does; UserKernel, Container and ProcessSandbox
+  # instances of different tenants never share a node.
+  # design:tenant-clusters step 3: a placement stays inside its request's cluster (cloud, node
+  # pools, zones, minimum isolation; guards below).
+  # OPEN: topology-aware placement (design:tenant-clusters step 2b: weft.cluster Topology,
+  # TopologyGroup and TopologyLink against a formation's TrafficPattern; refuse a placement that
+  # crosses a link traffic may not cross) is not specified in this step.
+  - name: weft.scheduling.PlaceInstance
+    naming:
+      display: Place an instance on a node
+    input:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      # hardening pass 1 scheduling:767: the request's account, as PendingRequests shows it, so
+      # the bindings' claims can be tied to it in one walk (a binding names its claim, the claim
+      # its account; the request's account is not reachable inside that walk otherwise).
+      - {name: account_id, type: weft.shared.AccountId}
+      # design:tenant-clusters step 3: the request's cluster, as PendingRequests shows it, for the
+      # same reason as account_id: the walks over node pools below compare with it.
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: node_id, type: weft.shared.NodeId}
+      # design:tenant-clusters step 3: the node's pool as weft.infrastructure.Node holds it (absent
+      # for a node in no pool); `node-pool-differs` ties it to the node.
+      - {name: node_pool_id, type: Optional<weft.shared.NodePoolId>}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: bindings, type: List<weft.shared.BindingId>}
+      # The decision instant on the Scheduler's clock, never minted: it starts the assignment's
+      # lease (PlacementBound -> weft.nodes.Assign `assigned_at`), and a minted Timestamp is a
+      # fixed day in 2020 (weft-sim full setup, 2026-11-26). ESS 0.99.2 refuses `now` as a value
+      # (ESS-COMMAND-009). An instant after `now` is refused, so no caller starts a lease late.
+      - {name: decided_at, type: Timestamp}
+    outcomes:
+      - name: decided-in-future
+        when: decided_at > now
+        error: weft.scheduling.DecidedInFuture
+      - name: no-such-request
+        when_related: {via: input.request_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: no-such-node
+        when_related: {via: input.node_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: no-such-cluster
+        when_related: {via: input.cluster_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: not-pending
+        when_related: {via: input.request_id, predicate: state != Pending}
+        error: weft.scheduling.StateConflict
+      - name: already-reserved
+        when_related:
+          entity: weft.scheduling.PlacementDecision
+          where: {all: ["request_id == input.request_id", {state: [Reserved, Bound, Evicting]}]}
+          exists: true
+        error: weft.scheduling.RequestReserved
+      - name: other-tenant
+        when_related: {via: input.request_id, predicate: tenant_id != input.tenant_id}
+        error: weft.scheduling.RequestMismatch
+      # hardening pass 1 scheduling:767: the account named is the request's.
+      - name: other-account
+        when_related: {via: input.request_id, predicate: account_id != input.account_id}
+        error: weft.scheduling.RequestMismatch
+      # design:tenant-clusters step 3: the cluster named is the request's.
+      - name: other-cluster
+        when_related: {via: input.request_id, predicate: cluster_id != input.cluster_id}
+        error: weft.scheduling.RequestMismatch
+      # hardening pass 1 scheduling:767: every binding placed holds a claim of the request's
+      # account, never another account's devices or volumes.
+      - name: binding-of-other-account
+        when_related:
+          entity: weft.claims.Binding
+          where:
+            all:
+              - exists: {in: input.bindings, as: b, that: binding_id == b}
+              - not:
+                  exists:
+                    in: {entity: weft.claims.Claim}
+                    as: c
+                    that: {all: ["c.claim_id == claim_id", "c.account_id == input.account_id"]}
+          exists: true
+        error: weft.scheduling.RequestMismatch
+      # hardening pass 1 scheduling:767: a binding with a node is a binding on the node placed on.
+      - name: binding-on-other-node
+        when_related:
+          entity: weft.claims.Binding
+          where:
+            all:
+              - exists: {in: input.bindings, as: b, that: binding_id == b}
+              - defined(node_id)
+              - node_id != input.node_id
+          exists: true
+        error: weft.scheduling.RequestMismatch
+      - name: below-microvm
+        when: {isolation: [UserKernel, Container, ProcessSandbox]}
+        when_related: {via: input.request_id, predicate: min_isolation == MicroVm}
+        error: weft.scheduling.IsolationTooWeak
+      - name: below-user-kernel
+        when: {isolation: [Container, ProcessSandbox]}
+        when_related: {via: input.request_id, predicate: min_isolation == UserKernel}
+        error: weft.scheduling.IsolationTooWeak
+      - name: below-container
+        when: {isolation: [ProcessSandbox]}
+        when_related: {via: input.request_id, predicate: min_isolation == Container}
+        error: weft.scheduling.IsolationTooWeak
+      # design:tenant-clusters step 3: "a cluster's minimum isolation raises a workload's minimum,
+      # never lowers it". The cluster's minimum is read when the instance is placed, beside the
+      # request's (the workload's), so the placement is at least the stronger of the two.
+      # OPEN: the decision's `min_isolation` (carried to PlacementBound and the node's assignment)
+      # stays the request's; should it carry the stronger of request and cluster? Taken: no, the
+      # placed `isolation` already satisfies both.
+      - name: below-cluster-microvm
+        when: {isolation: [UserKernel, Container, ProcessSandbox]}
+        when_related: {via: input.cluster_id, predicate: min_isolation == MicroVm}
+        error: weft.scheduling.IsolationTooWeak
+      - name: below-cluster-user-kernel
+        when: {isolation: [Container, ProcessSandbox]}
+        when_related: {via: input.cluster_id, predicate: min_isolation == UserKernel}
+        error: weft.scheduling.IsolationTooWeak
+      - name: below-cluster-container
+        when: {isolation: [ProcessSandbox]}
+        when_related: {via: input.cluster_id, predicate: min_isolation == Container}
+        error: weft.scheduling.IsolationTooWeak
+      # design:tenant-clusters step 2 "zones it may use": a placement outside the cluster's zones is
+      # refused, beside the formation's zones (`outside-zones`). A cluster has at least one zone
+      # (weft.cluster NoZones), so there is no "empty means any" here; `node-zone-differs` ties
+      # input.zone to the node's zone.
+      - name: outside-cluster-zones
+        when_related:
+          via: input.cluster_id
+          predicate: {not: {exists: {in: zones, as: z, that: "z == input.zone"}}}
+        error: weft.scheduling.ZoneMismatch
+      - name: outside-zones
+        when_related:
+          via: input.request_id
+          predicate: {all: ["zones.count > 0", {not: {exists: {in: zones, as: z, that: "z == input.zone"}}}]}
+        error: weft.scheduling.ZoneMismatch
+      - name: shared-kernel
+        when: {isolation: [UserKernel, Container, ProcessSandbox]}
+        when_related:
+          entity: weft.scheduling.PlacementDecision
+          where:
+            all:
+              - "node_id == input.node_id"
+              - "tenant_id != input.tenant_id"
+              - {isolation: [UserKernel, Container, ProcessSandbox]}
+              - {state: [Reserved, Bound, Evicting]}
+          exists: true
+        error: weft.scheduling.TenantKernelShared
+      # §9 (cluster, layer 1): the node's lifecycle state, zone and observed isolation facts are
+      # stored on weft.infrastructure.Node, so these are guards on its row, not external facts.
+      - name: node-not-schedulable
+        when_related: {via: input.node_id, predicate: state != Ready}
+        error: weft.scheduling.NodeNotSchedulable
+      # §11 (Channels: "one long-lived session per node"; Assign is sent over it): a Ready node
+      # whose session is lost or closed cannot take the assignment, and weft.nodes.Assign refuses
+      # `no-open-session`. Refused here, before units are reserved (weft-sim full setup,
+      # 2026-11-26: a placement on a silent node made r4-assign retry without bound, one
+      # PlaceInstance ran over 250 s). A session lost between this check and the assignment is
+      # dropped by r4-assign (ess/components.yaml).
+      - name: node-not-connected
+        when_related:
+          entity: weft.nodes.NodeSession
+          where:
+            all:
+              - node_id == input.node_id
+              - state == Open
+          exists: false
+        error: weft.scheduling.NodeNotConnected
+      - name: node-zone-differs
+        when_related: {via: input.node_id, predicate: zone != input.zone}
+        error: weft.scheduling.ZoneMismatch
+      # design:tenant-clusters step 3: "PlaceInstance refuses a node whose pool is not the
+      # cluster's (the default cluster: the cloud's shared pools)". Three guards, each on stored
+      # rows (weft.infrastructure.Node, weft.cluster.Cluster and ClusterNodePool, layers 1 and 3):
+      # - the node is in the cluster's cloud;
+      # - the node's pool is not the dedicated pool of another cluster. This one guard holds both
+      #   directions: an account cluster's dedicated pools take only its own instances, and the
+      #   default cluster, whose pools no ClusterNodePool claims, never lands on a dedicated pool;
+      # - a cluster with dedicated pools runs only on them. design default taken: an account
+      #   cluster's instances do not use the cloud's shared pools once it has a dedicated pool that
+      #   is not Removed (a Requested pool counts: its instances wait for it, default deny). An
+      #   account cluster with no dedicated pool runs on the shared pools, as the default cluster.
+      #   A node in no pool (node_pool_id absent) is a shared node.
+      # A pool row's state is not read by the second guard: a Removed pool's infrastructure pool is
+      # deleted with its nodes, and a claim that outlives it refuses rather than admits.
+      - name: node-in-other-cloud
+        when_related:
+          entity: weft.infrastructure.Node
+          where:
+            all:
+              - node_id == input.node_id
+              - not:
+                  exists:
+                    in: {entity: weft.cluster.Cluster}
+                    as: c
+                    that: {all: ["c.cluster_id == input.cluster_id", "c.cloud_id == cloud_id"]}
+          exists: true
+        error: weft.scheduling.NodeOutsideCluster
+      # The node's pool is an input tied to the node row (`node-pool-differs`): the third guard
+      # needs the cluster's pools and the node's pool in one walk, and Node inside ClusterNodePool
+      # inside a row walk nests two walks, which ESS 0.99.2 refuses (ESS-COMMAND-005 on the
+      # one-walk form, 2026-11-26).
+      - name: node-pool-differs
+        when_related:
+          via: input.node_id
+          predicate:
+            any:
+              - {all: ["defined(node_pool_id)", "node_pool_id != input.node_pool_id"]}
+              - {all: ["not defined(node_pool_id)", "defined(input.node_pool_id)"]}
+        error: weft.scheduling.RequestMismatch
+      - name: node-in-other-clusters-pool
+        when_related:
+          entity: weft.cluster.ClusterNodePool
+          where:
+            all:
+              - cluster_id != input.cluster_id
+              - defined(node_pool_id)
+              - node_pool_id == input.node_pool_id
+          exists: true
+        error: weft.scheduling.NodeOutsideCluster
+      - name: node-outside-dedicated-pools
+        when_related:
+          entity: weft.cluster.ClusterNodePool
+          where:
+            all:
+              - cluster_id == input.cluster_id
+              - state != Removed
+              - not:
+                  exists:
+                    in: {entity: weft.cluster.ClusterNodePool}
+                    as: p
+                    that: {all: ["p.cluster_id == cluster_id", "defined(p.node_pool_id)", "p.node_pool_id == input.node_pool_id"]}
+          exists: true
+        error: weft.scheduling.NodeOutsideCluster
+      # A node with no observation yet offers no level (default deny).
+      - name: isolation-not-offered
+        when_related:
+          via: input.node_id
+          predicate:
+            any:
+              - "not defined(isolation_facts)"
+              - not: {exists: {in: isolation_facts.levels, as: l, that: "l == input.isolation"}}
+        error: weft.scheduling.IsolationNotOffered
+      # Kept external: free capacity is the node's observed capacity minus the sum of the amounts
+      # its live bindings hold; an ESS 0.99.2 guard has no sum over rows.
+      - name: no-capacity
+        external: the node's free capacity does not cover the claims
+        error: weft.scheduling.NoCapacity
+      # Kept external: usage against the limit at every level of the account tree is
+      # weft.metering's (layer 8, above this one; accounts.yaml Quota OPEN), so no guard here may
+      # read it. It also answers for a claimed class with no quota row of the account, read as a
+      # limit of 0 (accounts.yaml Quota OPEN, default deny). UNMAPPED: that half is a stored fact
+      # (no weft.accounts.Quota row for the account and class), but the test nests a walk of Quota
+      # rows inside `exists` over `claims` and `not:`, which ESS 0.99.2 synthesis does not arrange;
+      # written as a guard it cost every PlaceInstance branch its scenario (run 2026-11-26).
+      - name: quota-exceeded
+        external: the claims exceed the remaining quota at some level of the account tree
+        error: weft.scheduling.QuotaExceeded
+      # §6: a device is bindable only after its wipe (weft.inventory.Device: release -> Wiping ->
+      # wiped -> Free). Kept external, though the fact is stored: a device a reserved binding of
+      # this placement names is still Wiping. UNMAPPED: the guard walks weft.claims.Binding rows
+      # inside a walk of weft.inventory.Device rows (Device names no binding; the binding lists its
+      # devices); ESS 0.99.2 synthesis does not arrange the nested walk, and written as a guard it
+      # cost PlaceInstance/no-such-request its scenario (runs 2026-11-26). The guard as written:
+      # Device where node_id == input.node_id, state == Wiping, and some Binding b with
+      # b.node_id == node_id, b.binding_id in input.bindings, device_id in b.device_ids.
+      - name: device-not-wiped
+        external: a device a reserved binding of this placement names has not been wiped since its last binding
+        error: weft.scheduling.DeviceNotWiped
+      - name: placed
+        creates: weft.scheduling.PlacementDecision
+        instance: decision_id
+        sets:
+          request_id: input.request_id
+          instance_id: {related: {via: input.request_id, field: instance_id}}
+          tenant_id: input.tenant_id
+          account_id: {related: {via: input.request_id, field: account_id}}
+          node_id: input.node_id
+          zone: input.zone
+          isolation: input.isolation
+          min_isolation: {related: {via: input.request_id, field: min_isolation}}
+          assigned: false
+          bindings: input.bindings
+          gang_id: {related: {via: input.request_id, field: gang_id}}
+          priority_value: {related: {via: input.request_id, field: priority_value}}
+          preemptible: {related: {via: input.request_id, field: preemptible}}
+          grace_seconds: {related: {via: input.request_id, field: grace_seconds}}
+          decided_at: input.decided_at
+        emits: [weft.scheduling.InstancePlaced]
+        payload:
+          weft.scheduling.InstancePlaced:
+            decision_id: {generated: true}
+            request_id: input.request_id
+            node_id: input.node_id
+            isolation: input.isolation
+            bindings: input.bindings
+
+  # §10: a single instance's reservation is committed and its request answered. A gang
+  # member is bound only by BindGang (§10).
+  - name: weft.scheduling.BindPlacement
+    naming:
+      display: Bind a placement
+    input:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+    outcomes:
+      - name: no-such-placement
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: gang-member
+        when_subject: {predicate: defined(gang_id)}
+        error: weft.scheduling.GangMemberAlone
+      - name: other-request
+        when_subject: {predicate: request_id != input.request_id}
+        error: weft.scheduling.RequestMismatch
+      - name: bound
+        moves: weft.scheduling.PlacementDecision.bind
+        instance: decision_id
+        affects:
+          - entity: weft.scheduling.SchedulingRequest
+            where: "request_id == input.request_id"
+            moves: weft.scheduling.SchedulingRequest.place
+        emits: [weft.scheduling.PlacementBound]
+        payload:
+          weft.scheduling.PlacementBound:
+            decision_id: input.decision_id
+            instance_id: {subject: instance_id}
+            node_id: {subject: node_id}
+            isolation: {subject: isolation}
+            min_isolation: {subject: min_isolation}
+            decided_at: {subject: decided_at}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # Wave 4 (§14 line 598, level form of R4; §11 line 469: `Assign`): weft.nodes created the
+  # assignment of a bound placement. Invoked by a binding on weft.nodes.InstanceAssigned; the
+  # decision leaves UnassignedPlacements. A repeated delivery is harmless (assigned stays true).
+  - name: weft.scheduling.RecordPlacementAssigned
+    naming:
+      display: Record a placement assigned to its node
+    input:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+    outcomes:
+      - name: no-such-placement
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: not-bound
+        when_subject: {predicate: state != Bound}
+        error: weft.scheduling.StateConflict
+      - name: recorded
+        updates: weft.scheduling.PlacementDecision
+        instance: decision_id
+        sets:
+          assigned: true
+        emits: [weft.scheduling.PlacementAssigned]
+        payload:
+          weft.scheduling.PlacementAssigned:
+            decision_id: input.decision_id
+            node_id: {subject: node_id}
+
+  # §10 and §11: the instance stopped, its eviction ended, or its node's assignment
+  # lease ended (nodes domain); the units are free again. A new request reschedules it.
+  # §11 line 476 and §14 R3 (line 587) for a placement no lease covers (weft-sim, 2026-11-26): a
+  # Bound placement its node never took (r4-assign drops `no-open-session`; the node never
+  # redialed) holds its units and its instance runs nowhere. Released once it has been unassigned
+  # for 120 s: the time rule is the guard `decided_at >= now - 120s` (`assignment-pending`), the
+  # clock is the caller's, who reads OverdueUnassignedPlacements and runs this once per row.
+  # `released-unassigned` emits UnassignedPlacementReleased, whose binding evicts the instance
+  # (reason NodeLost), and R1 requests the replica again; PlaceInstance refuses the node while
+  # it has no open session (`node-not-connected`).
+  # OPEN: the 120 s; the sketch gives no value. Taken: twice the lease (60 s, nodes.yaml Assign),
+  # so a node whose session was lost and redialed within a lease length still takes the
+  # placement through the level step on UnassignedPlacements.
+  - name: weft.scheduling.ReleasePlacement
+    naming:
+      display: Release a placement
+    input:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+    outcomes:
+      - name: no-such-placement
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: assignment-pending
+        when_subject:
+          predicate: {all: [state == Bound, assigned == false, "decided_at >= now - 120s"]}
+        error: weft.scheduling.AssignmentPending
+      - name: released-unassigned
+        when_subject:
+          predicate: {all: [state == Bound, assigned == false]}
+        moves: weft.scheduling.PlacementDecision.release
+        instance: decision_id
+        sets:
+          released_at: {generated: true}
+        emits: [weft.scheduling.PlacementReleased, weft.scheduling.UnassignedPlacementReleased]
+        payload:
+          weft.scheduling.PlacementReleased:
+            decision_id: input.decision_id
+            node_id: {subject: node_id}
+          weft.scheduling.UnassignedPlacementReleased:
+            decision_id: input.decision_id
+            instance_id: {subject: instance_id}
+            node_id: {subject: node_id}
+      - name: released
+        moves: weft.scheduling.PlacementDecision.release
+        instance: decision_id
+        sets:
+          released_at: {generated: true}
+        emits: [weft.scheduling.PlacementReleased]
+        payload:
+          weft.scheduling.PlacementReleased:
+            decision_id: input.decision_id
+            node_id: {subject: node_id}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # §10 and §4 Shape: a gang Job's N tasks. Issued by the control plane when it makes the
+  # Job's instances, before their requests.
+  - name: weft.scheduling.RegisterGang
+    naming:
+      display: Register a gang
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      # hardening pass 1 scheduling:982: the account of the gang Job's workload. The job is tied to
+      # the tenant through it in two one-level tests (job -> workload -> account -> tenant in one
+      # test nests two row walks, which ESS 0.99.2 refuses). Not stored: the gang stays per tenant.
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: job_id, type: weft.shared.JobId}
+      - {name: size, type: Integer}
+    outcomes:
+      - name: too-small
+        when: size < 2
+        error: weft.scheduling.InvalidGangSize
+      # hardening pass 1 scheduling:982: the job and the account exist; another tenant's job or
+      # account answers as a missing one.
+      - name: unknown-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: unknown-job
+        when_related: {via: input.job_id, exists: false}
+        error: weft.scheduling.NotFound
+      # hardening pass 1 scheduling:982: the account is of the gang's tenant.
+      - name: account-of-other-tenant
+        when_related: {via: input.account_id, predicate: tenant_id != input.tenant_id}
+        error: weft.scheduling.NotFound
+      # hardening pass 1 scheduling:982: §4 Shape: only a `gang` Job has a gang.
+      - name: job-not-gang
+        when_related: {via: input.job_id, predicate: gang == false}
+        error: weft.scheduling.JobNotGang
+      # hardening pass 1 scheduling:982: the job's workload is of that account.
+      - name: job-of-other-account
+        when_related:
+          entity: weft.workloads.Job
+          where:
+            all:
+              - job_id == input.job_id
+              - not:
+                  exists:
+                    in: {entity: weft.workloads.Workload}
+                    as: w
+                    that: {all: ["w.workload_id == workload_id", "w.account_id == input.account_id"]}
+          exists: true
+        error: weft.scheduling.NotFound
+      - name: registered
+        creates: weft.scheduling.Gang
+        instance: gang_id
+        sets:
+          tenant_id: input.tenant_id
+          job_id: input.job_id
+          size: input.size
+          registered_at: {generated: true}
+        emits: [weft.scheduling.GangRegistered]
+        payload:
+          weft.scheduling.GangRegistered:
+            gang_id: {generated: true}
+            job_id: input.job_id
+            size: input.size
+
+  # §10: "all tasks of a gang bound, or none". One command binds every member, or refuses
+  # and binds none. The gang is whole when no member request is still waiting without a
+  # reservation; a request holds at most one live decision (PlaceInstance `already-reserved`).
+  # UNMAPPED: that the gang has `size` member requests is not checked here: a row-set count in
+  # ESS 0.99.2 compares with a literal only (`count: {ne: input.size}` is refused as "expected
+  # i64"), and a creating outcome cannot also count on the gang (no `affects:` beside
+  # `creates:`). Open question for the owner: check the member count in the workloads domain,
+  # or wait for an ESS count against a stored field.
+  - name: weft.scheduling.BindGang
+    naming:
+      display: Bind a whole gang
+    input:
+      - {name: gang_id, type: weft.shared.GangId}
+    outcomes:
+      # The gang is the addressed subject (`instance: gang_id`), so its existence and state are
+      # the subject's: `unknown_instance` and `wrong_state` (as AbandonGang). A `when_related:` over
+      # `input.gang_id` was read by synthesis as a row of SchedulingRequest and failed on the
+      # interpreted target (2026-11-26).
+      - name: no-such-gang
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: not-forming
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+      - name: member-waiting
+        when_related:
+          entity: weft.scheduling.SchedulingRequest
+          where:
+            all:
+              - "gang_id == input.gang_id"
+              - {state: [Pending, Unschedulable]}
+              - not:
+                  exists:
+                    in: {entity: weft.scheduling.PlacementDecision}
+                    as: d
+                    that: {all: ["d.request_id == request_id", "d.state == Reserved"]}
+          exists: true
+        error: weft.scheduling.GangIncomplete
+      - name: bound
+        moves: weft.scheduling.Gang.bind
+        instance: gang_id
+        sets:
+          ended_at: {generated: true}
+        affects:
+          - entity: weft.scheduling.PlacementDecision
+            where: {all: ["gang_id == input.gang_id", "state == Reserved"]}
+            moves: weft.scheduling.PlacementDecision.bind
+          - entity: weft.scheduling.SchedulingRequest
+            where: {all: ["gang_id == input.gang_id", "state == Pending"]}
+            moves: weft.scheduling.SchedulingRequest.place
+        emits: [weft.scheduling.GangBound]
+        payload:
+          weft.scheduling.GangBound:
+            gang_id: input.gang_id
+
+  # §10: the "or none" half. Every reservation of the gang is released and every waiting
+  # member is unschedulable with reason GangIncomplete; nothing of the gang stays half placed.
+  - name: weft.scheduling.AbandonGang
+    naming:
+      display: Abandon a gang
+    input:
+      - {name: gang_id, type: weft.shared.GangId}
+      - {name: detail, type: String}
+    outcomes:
+      - name: no-such-gang
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: abandoned
+        moves: weft.scheduling.Gang.abandon
+        instance: gang_id
+        sets:
+          ended_at: {generated: true}
+        affects:
+          - entity: weft.scheduling.PlacementDecision
+            where: {all: ["gang_id == input.gang_id", "state == Reserved"]}
+            moves: weft.scheduling.PlacementDecision.release
+          - entity: weft.scheduling.SchedulingRequest
+            where: {all: ["gang_id == input.gang_id", "state == Pending"]}
+            moves: weft.scheduling.SchedulingRequest.declare_unschedulable
+            sets:
+              unschedulable_reason: GangIncomplete
+              unschedulable_detail: input.detail
+        emits: [weft.scheduling.GangAbandoned]
+        payload:
+          weft.scheduling.GangAbandoned:
+            gang_id: input.gang_id
+            detail: input.detail
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # §10: "`Priority` and `Preemption` with a grace period and a reason". The victim moves
+  # to Evicting and keeps its grace period (copied from its class); ReleasePlacement ends it
+  # when the instance stopped or the grace period is over.
+  # OPEN: may an instance of one tenant preempt an instance of another tenant? Taken: yes, the
+  # priority classes are cluster-wide and the operator marks which classes are preemptible.
+  # OPEN: is a preempted instance rescheduled by a new request (taken, by the workloads domain)
+  # or does it fail?
+  - name: weft.scheduling.PreemptPlacement
+    naming:
+      display: Preempt a placement
+    input:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: preemptor_request_id, type: weft.shared.SchedulingRequestId}
+      - {name: preemptor_priority, type: Integer}
+      - {name: reason, type: weft.scheduling.PreemptionReason}
+    outcomes:
+      - name: no-such-placement
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: not-preemptible
+        when_subject: {predicate: preemptible == false}
+        error: weft.scheduling.NotPreemptible
+      - name: not-lower
+        when_subject: {predicate: priority_value >= input.preemptor_priority}
+        error: weft.scheduling.PriorityNotHigher
+      # hardening pass 1 scheduling:1106: a placement is never preempted for its own request.
+      - name: preemptor-is-victim
+        when_subject: {predicate: request_id == input.preemptor_request_id}
+        error: weft.scheduling.RequestMismatch
+      - name: no-such-preemptor
+        when_related: {via: input.preemptor_request_id, exists: false}
+        error: weft.scheduling.NotFound
+      # OPEN (hardening pass 1 scheduling:1106): the victim's zone should be one of the
+      # preemptor's zones, or the room freed is of no use to it. Not a guard: a `via:` predicate
+      # cannot read `subject.zone`, and a row set beside this command's `when_subject` guards is
+      # refused (ESS 0.99.2, ESS-COMMAND-009).
+      # hardening pass 1 scheduling:1106: a GangPlacement preemption is for a gang member.
+      - name: preemptor-not-gang-member
+        when: {reason: [GangPlacement]}
+        when_related: {via: input.preemptor_request_id, predicate: not defined(gang_id)}
+        error: weft.scheduling.RequestMismatch
+      - name: preemptor-priority-differs
+        when_related: {via: input.preemptor_request_id, predicate: priority_value != input.preemptor_priority}
+        error: weft.scheduling.RequestMismatch
+      - name: preemptor-does-not-preempt
+        when_related: {via: input.preemptor_request_id, predicate: preempts == false}
+        error: weft.scheduling.PreemptionNotAllowed
+      - name: preemptor-not-waiting
+        when_related: {via: input.preemptor_request_id, predicate: {state: [Placed, Withdrawn]}}
+        error: weft.scheduling.PreemptorNotWaiting
+      - name: preempted
+        moves: weft.scheduling.PlacementDecision.evict
+        instance: decision_id
+        sets:
+          preempted_by: input.preemptor_request_id
+          preemption_reason: input.reason
+          evicting_since: {generated: true}
+        emits: [weft.scheduling.PreemptionStarted]
+        payload:
+          weft.scheduling.PreemptionStarted:
+            decision_id: input.decision_id
+            instance_id: {subject: instance_id}
+            node_id: {subject: node_id}
+            preempted_by: input.preemptor_request_id
+            reason: input.reason
+            grace_seconds: {subject: grace_seconds}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  # §10: "Scale up by asking a NodePool for a node" when an instance is unschedulable.
+  # A new node raises no quota, so a request unschedulable for its quota gets none.
+  # Decided in integration (2026-11-26): the Scheduler may request scale-up and scale-down and
+  # drain idle nodes; the ClusterOperator sets the pool bounds (cluster domain).
+  # OPEN: which pool to ask (machine type, zone, isolation support) is the scheduler's choice;
+  # the sketch gives no rule.
+  - name: weft.scheduling.RequestScaleUp
+    naming:
+      display: Ask a node pool for nodes
+    input:
+      - {name: node_pool_id, type: weft.shared.NodePoolId}
+      - {name: count, type: Integer}
+      - {name: for_request, type: weft.shared.SchedulingRequestId}
+    outcomes:
+      - name: no-nodes
+        when: count < 1
+        error: weft.scheduling.InvalidScaleCount
+      - name: no-such-request
+        when_related: {via: input.for_request, exists: false}
+        error: weft.scheduling.NotFound
+      # §9 (cluster, layer 1): the pool's bounds and asked size are stored on weft.infrastructure.NodePool;
+      # the same test as weft.infrastructure.RequestNodePoolScaleUp `at-max-size`.
+      - name: no-such-pool
+        when_related: {via: input.node_pool_id, exists: false}
+        error: weft.scheduling.NotFound
+      - name: not-unschedulable
+        when_related: {via: input.for_request, predicate: state != Unschedulable}
+        error: weft.scheduling.ScaleNotNeeded
+      - name: quota-bound
+        when_related: {via: input.for_request, predicate: unschedulable_reason == QuotaExceeded}
+        error: weft.scheduling.QuotaExceeded
+      - name: pool-deleted
+        when_related: {via: input.node_pool_id, predicate: state != Active}
+        error: weft.scheduling.StateConflict
+      - name: pool-at-maximum
+        when_related: {via: input.node_pool_id, predicate: desired_size >= max_size}
+        error: weft.scheduling.PoolAtLimit
+      - name: requested
+        creates: weft.scheduling.ScaleRequest
+        instance: scale_id
+        sets:
+          node_pool_id: input.node_pool_id
+          direction: Up
+          count: input.count
+          for_request: input.for_request
+          requested_at: {generated: true}
+        emits: [weft.scheduling.ScaleUpRequested]
+        payload:
+          weft.scheduling.ScaleUpRequested:
+            scale_id: {generated: true}
+            node_pool_id: input.node_pool_id
+            count: input.count
+            for_request: input.for_request
+
+  # §10: "drain idle nodes". The cluster domain drains the node and removes it.
+  # OPEN: how long a node must be idle before it is given back; the sketch gives no time.
+  - name: weft.scheduling.RequestScaleDown
+    naming:
+      display: Give an idle node back to its pool
+    input:
+      - {name: node_pool_id, type: weft.shared.NodePoolId}
+      - {name: node_id, type: weft.shared.NodeId}
+    outcomes:
+      - name: not-idle
+        when_related:
+          entity: weft.scheduling.PlacementDecision
+          where: {all: ["node_id == input.node_id", {state: [Reserved, Bound, Evicting]}]}
+          exists: true
+        error: weft.scheduling.NodeNotIdle
+      - name: already-requested
+        when_related:
+          entity: weft.scheduling.ScaleRequest
+          where: {all: ["node_id == input.node_id", "state == Requested"]}
+          exists: true
+        error: weft.scheduling.ScaleAlreadyRequested
+      # The node's existence and pool (weft.infrastructure.Node node_pool_id) and the pool's bounds
+      # (weft.infrastructure.NodePool desired_size, min_size) are stored in weft.cluster (layer 1), and
+      # weft.cluster refuses both again when it acts on the request (RequestNodePoolScaleDown
+      # `at-min-size`; the drain of a node of another pool). Kept external here.
+      # UNMAPPED (ESS 0.99.2 synthesis, runs 2026-11-26), each tried as a guard:
+      # - `via: input.node_id` with `node_pool_id != input.node_pool_id`: synthesis sent a pool other
+      #   than the node's and expected `requested`; the interpreted target refused it (failed).
+      # - the same as a row set over weft.infrastructure.Node: `pool-at-minimum` left undecided and its
+      #   disclosure scenarios failed.
+      # - the pool bounds as `via: input.node_pool_id` or a row set over NodePool: `requested` needs
+      #   a node in a pool above its minimum (CreateNodePool, RequestNodePoolScaleUp,
+      #   ProvisionPoolNode), which synthesis did not arrange; the row-set form made 36 cluster
+      #   disclosure scenarios fail.
+      # - `no-such-node` (`via: input.node_id, exists: false`): with PlaceInstance's node guards,
+      #   synthesis no longer arranged any outcome of this command.
+      # Open for the owner: make these guards once ESS arranges them, or leave them to weft.infrastructure.
+      - name: node-not-in-pool
+        external: the cluster domain finds the node in another pool, in no pool, or not at all
+        error: weft.scheduling.RequestMismatch
+      - name: pool-at-minimum
+        external: the cluster domain finds the node pool at its minimum size
+        error: weft.scheduling.PoolAtLimit
+      - name: requested
+        creates: weft.scheduling.ScaleRequest
+        instance: scale_id
+        sets:
+          node_pool_id: input.node_pool_id
+          direction: Down
+          count: 1
+          node_id: input.node_id
+          requested_at: {generated: true}
+        emits: [weft.scheduling.ScaleDownRequested]
+        payload:
+          weft.scheduling.ScaleDownRequested:
+            scale_id: {generated: true}
+            node_pool_id: input.node_pool_id
+            node_id: input.node_id
+
+  # §10: the cluster domain's answer to a scale request, recorded here.
+  # OPEN: does the cluster domain answer through these two commands (taken, issued as the
+  # Scheduler system actor reading the cluster's events), or does it own the scale request?
+  - name: weft.scheduling.RecordScaleFulfilled
+    naming:
+      display: Record a scale request fulfilled
+    input:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+    outcomes:
+      - name: no-such-scale
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: fulfilled
+        moves: weft.scheduling.ScaleRequest.fulfil
+        instance: scale_id
+        sets:
+          answered_at: {generated: true}
+        emits: [weft.scheduling.ScaleFulfilled]
+        payload:
+          weft.scheduling.ScaleFulfilled:
+            scale_id: input.scale_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+  - name: weft.scheduling.RecordScaleRefused
+    naming:
+      display: Record a scale request refused
+    input:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+      - {name: detail, type: String}
+    outcomes:
+      - name: no-such-scale
+        unknown_instance: true
+        error: weft.scheduling.NotFound
+      - name: refused
+        moves: weft.scheduling.ScaleRequest.refuse
+        instance: scale_id
+        sets:
+          answered_at: {generated: true}
+          detail: input.detail
+        emits: [weft.scheduling.ScaleRefused]
+        payload:
+          weft.scheduling.ScaleRefused:
+            scale_id: input.scale_id
+            detail: input.detail
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scheduling.StateConflict
+
+views:
+  # §10: every scheduling request.
+  - name: weft.scheduling.SchedulingRequests
+    source: weft.scheduling.SchedulingRequest
+    consistency: read_your_writes
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: claims, type: List<weft.workloads.ClaimRequest>}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: zones, type: List<weft.shared.ZoneName>}
+      - {name: priority, type: weft.shared.PriorityClassName}
+      - {name: priority_value, type: Integer}
+      - {name: preempts, type: Boolean}
+      - {name: preemptible, type: Boolean}
+      - {name: grace_seconds, type: Integer}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: requested_at, type: Timestamp}
+      - {name: unschedulable_reason, type: Optional<weft.scheduling.UnschedulableReason>}
+      - {name: unschedulable_detail, type: Optional<String>}
+      - {name: state, type: weft.scheduling.SchedulingRequest.State}
+
+  # §10: a request is never a silent wait. The requests not yet answered, with their age.
+  - name: weft.scheduling.PendingRequests
+    source: weft.scheduling.SchedulingRequest
+    consistency: read_your_writes
+    filter: state == Pending
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: priority_value, type: Integer}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: requested_at, type: Timestamp}
+
+  # §10: "`Unschedulable` with the reason".
+  - name: weft.scheduling.UnschedulableRequests
+    source: weft.scheduling.SchedulingRequest
+    consistency: read_your_writes
+    filter: state == Unschedulable
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: requested_at, type: Timestamp}
+      - {name: unschedulable_reason, type: Optional<weft.scheduling.UnschedulableReason>}
+      - {name: unschedulable_detail, type: Optional<String>}
+
+  # §10: one request by id.
+  - name: weft.scheduling.SchedulingRequestDetail
+    source: weft.scheduling.SchedulingRequest
+    consistency: read_your_writes
+    params:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+    filter: request_id == param.request_id
+    fields:
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: claims, type: List<weft.workloads.ClaimRequest>}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: zones, type: List<weft.shared.ZoneName>}
+      - {name: priority, type: weft.shared.PriorityClassName}
+      - {name: priority_value, type: Integer}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: requested_at, type: Timestamp}
+      - {name: unschedulable_reason, type: Optional<weft.scheduling.UnschedulableReason>}
+      - {name: unschedulable_detail, type: Optional<String>}
+      - {name: state, type: weft.scheduling.SchedulingRequest.State}
+
+  # §10: every placement decision.
+  - name: weft.scheduling.PlacementDecisions
+    source: weft.scheduling.PlacementDecision
+    consistency: read_your_writes
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: assigned, type: Boolean}
+      - {name: bindings, type: List<weft.shared.BindingId>}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: priority_value, type: Integer}
+      - {name: preemptible, type: Boolean}
+      - {name: grace_seconds, type: Integer}
+      - {name: decided_at, type: Timestamp}
+      - {name: preempted_by, type: Optional<weft.shared.SchedulingRequestId>}
+      - {name: preemption_reason, type: Optional<weft.scheduling.PreemptionReason>}
+      - {name: evicting_since, type: Optional<Timestamp>}
+      - {name: released_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.scheduling.PlacementDecision.State}
+
+  # §10: one placement decision by id (the nodes domain's Assignment names it).
+  - name: weft.scheduling.PlacementDetail
+    source: weft.scheduling.PlacementDecision
+    consistency: read_your_writes
+    params:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+    filter: decision_id == param.decision_id
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: request_id, type: weft.shared.SchedulingRequestId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: bindings, type: List<weft.shared.BindingId>}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: state, type: weft.scheduling.PlacementDecision.State}
+
+  # Wave 4 (§14 line 598, level form of R4: "placement bound -> assignment sent to the node"):
+  # the gap view. Desired: the decision is Bound; observed: `assigned`. The Scheduler reads it and
+  # runs weft.nodes.Assign per row (instance_id, node_id, placement_decision_id <- decision_id,
+  # assigned_at <- the Scheduler's clock);
+  # weft.nodes refuses a second assignment of an instance (InstanceAlreadyAssigned).
+  - name: weft.scheduling.UnassignedPlacements
+    source: weft.scheduling.PlacementDecision
+    consistency: read_your_writes
+    filter: {all: [state == Bound, assigned == false]}
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: decided_at, type: Timestamp}
+
+  # §11 line 476 and §14 R3 (line 587), time form (line 602): the Bound placements no node took
+  # within 120 s of the decision (ReleasePlacement, OPEN on the length there). The caller runs
+  # weft.scheduling.ReleasePlacement once per row; the guard holds the same rule. Besides a node
+  # that never redialed, a row is a placement Assign keeps refusing (`node-not-ready` for a
+  # cordon that outlasts it, `isolation-unavailable`), which is placed again elsewhere the same
+  # way.
+  # OPEN: a gang member's row is released alone, while §10 line 458 binds a gang all or nothing;
+  # should the row of a gang member release the whole gang instead (a gang command beside
+  # AbandonGang for a Bound gang)?
+  - name: weft.scheduling.OverdueUnassignedPlacements
+    source: weft.scheduling.PlacementDecision
+    consistency: read_your_writes
+    filter: {all: [state == Bound, assigned == false, "decided_at < now - 120s"]}
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: gang_id, type: Optional<weft.shared.GangId>}
+      - {name: decided_at, type: Timestamp}
+
+  # §10: what runs on one node, at which isolation, for which tenant.
+  - name: weft.scheduling.PlacementsOnNode
+    source: weft.scheduling.PlacementDecision
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: bindings, type: List<weft.shared.BindingId>}
+      - {name: state, type: weft.scheduling.PlacementDecision.State}
+
+  # §10: preemptions in progress: victim, preemptor, reason, grace period.
+  - name: weft.scheduling.Preemptions
+    source: weft.scheduling.PlacementDecision
+    consistency: read_your_writes
+    filter: state == Evicting
+    fields:
+      - {name: decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: preempted_by, type: Optional<weft.shared.SchedulingRequestId>}
+      - {name: preemption_reason, type: Optional<weft.scheduling.PreemptionReason>}
+      - {name: grace_seconds, type: Integer}
+      - {name: evicting_since, type: Optional<Timestamp>}
+
+  # §10: gangs and whether they were bound or abandoned.
+  - name: weft.scheduling.Gangs
+    source: weft.scheduling.Gang
+    consistency: read_your_writes
+    fields:
+      - {name: gang_id, type: weft.shared.GangId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: job_id, type: weft.shared.JobId}
+      - {name: size, type: Integer}
+      - {name: registered_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.scheduling.Gang.State}
+
+  # §10: scale requests and their answers.
+  - name: weft.scheduling.ScaleRequests
+    source: weft.scheduling.ScaleRequest
+    consistency: read_your_writes
+    fields:
+      - {name: scale_id, type: weft.shared.ScaleRequestId}
+      - {name: node_pool_id, type: weft.shared.NodePoolId}
+      - {name: direction, type: weft.scheduling.ScaleDirection}
+      - {name: count, type: Integer}
+      - {name: for_request, type: Optional<weft.shared.SchedulingRequestId>}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: requested_at, type: Timestamp}
+      - {name: answered_at, type: Optional<Timestamp>}
+      - {name: detail, type: Optional<String>}
+      - {name: state, type: weft.scheduling.ScaleRequest.State}

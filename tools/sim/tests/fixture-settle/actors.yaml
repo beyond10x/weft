@@ -1,0 +1,22 @@
+domain: demo.actors
+
+summary: A submitter and the placer that runs as a controller.
+
+naming:
+  wire: actors
+  display: Actors
+
+actors:
+  - name: demo.actors.Submitter
+    naming:
+      wire: submitter
+      display: Submitter
+    may:
+      - demo.job.AddJob
+      - demo.job.FinishJob
+  - name: demo.actors.Placer
+    naming:
+      wire: placer
+      display: Placer
+    may:
+      - demo.job.PlaceJob

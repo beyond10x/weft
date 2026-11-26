@@ -1,0 +1,9 @@
+format: weft-sim-experiment/1
+name: gold-shelf
+summary: One shelf labelled gold, which no random label reaches.
+setup:
+  - label: add-gold
+    command: demo.shelf.AddShelf
+    actor: demo.actors.Keeper
+    input: {label: gold}
+    expect: added

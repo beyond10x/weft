@@ -1,0 +1,2104 @@
+# Nodes: the control plane's durable record of the worker plane. One live session per node, the
+# assignments the control plane gives a node, what the node reports it observed, drains, and the
+# exec sessions carried inside a node's session.
+# Sources: docs/domain-sketch.md "Planes" (worker plane: "holds no state the control plane does not
+# know"), "Channels" (the node dials out, mutual TLS, one long-lived session per node; exec carried
+# inside the node's session), "11. Node control". The wire protocol of the session is
+# protocols/node-channel.yaml, written separately; this file records what crosses it.
+# 11. Node control names IssueIdentity and DeliverSecret among the orders to the agent. They are
+# the identity domain's (8. IdentityDocument) and the secrets domain's (7. "every delivery is an
+# audit event") records, carried over this session; this domain records neither.
+# OPEN: whether the nodes domain should also record that an IssueIdentity or DeliverSecret order
+# was sent over a given session. Taken: no.
+domain: weft.nodes
+
+summary: >-
+  The control plane's record of each node session, the assignments it gives a node, what the node
+  reports it observed, node drains and the exec sessions carried inside a node session.
+
+naming:
+  wire: weft
+  display: Nodes
+
+types:
+  # Channels: "one long-lived session per node".
+
+  # 11. Node control: Assign, Stop, Pause, Snapshot, read as the state the control plane wants
+  # the assigned instance in. The node converges to it and reports what it observed.
+  - name: weft.nodes.DesiredState
+    kind: enum
+    variants: [Run, Stop, Pause, Snapshot]
+
+
+
+
+
+
+
+  # Surfaces: protocols/exec-channel.yaml carries "exec, attach, logs, port forward" into an
+  # instance.
+  - name: weft.nodes.ExecKind
+    kind: enum
+    variants: [Exec, Attach, Logs, PortForward]
+
+  # 11. Node control: InstanceObserved. What the node saw the instance doing.
+  # OPEN: the set of observed states. Taken: these seven; Refused is the node declining to start
+  # it (artifact verification failed, 4. Workload "verified by the node before start", or the
+  # isolation level is not available).
+  - name: weft.nodes.ObservedInstanceState
+    kind: enum
+    variants: [Starting, Running, Paused, Snapshotted, Stopped, Failed, Refused]
+
+entities:
+  # Channels: "weft-node -> weft-control: the node dials out, mutual TLS, one long-lived session
+  # per node". 11. Node control: Heartbeat. States open, lost, closed, superseded (a redial replaced it).
+  - name: weft.nodes.NodeSession
+    naming:
+      summary: One session a node dialed out to the control plane, and when it was last heard.
+    identity:
+      name: session_id
+      type: weft.shared.NodeSessionId
+    fields:
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: agent_version
+        type: String
+      - name: opened_at
+        type: Timestamp
+      - name: last_seen_at
+        type: Timestamp
+      - name: ended_at
+        type: Optional<Timestamp>
+      - name: end_reason
+        type: Optional<String>
+    relations:
+      # references: the node (9. Cluster) is the cluster domain's and outlives every session.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    lifecycle:
+      initial: Open
+      states:
+        - {name: Open, summary: The node is connected and heartbeats arrive.}
+        - {name: Lost, summary: No heartbeat arrived within the timeout; the node may still run.}
+        - {name: Closed, summary: "The session ended in order, by the node or the control plane."}
+        - {name: Superseded, summary: "The node dialed again while this session was still open; its new session replaced this one."}
+      terminal: [Lost, Closed, Superseded]
+      transitions:
+        - name: lose
+          from: [Open]
+          to: Lost
+        - name: close
+          from: [Open]
+          to: Closed
+        - name: supersede
+          from: [Open]
+          to: Superseded
+
+  # 11. Node control: "An Assignment has a lease; a lost node's instances are rescheduled after
+  # the lease ends." One instance placed on one node, over the session it was given on.
+  # OPEN: fencing. A node that cannot renew a lease before it ends stops the instance itself, so a
+  # released assignment is never still running when the instance is placed again. That is the
+  # agent's behaviour in protocols/node-channel.yaml; this record only refuses a late renewal.
+  - name: weft.nodes.Assignment
+    naming:
+      summary: One instance assigned to one node, the state the control plane wants it in, and its lease.
+    identity:
+      name: assignment_id
+      type: weft.shared.AssignmentId
+    fields:
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: session_id
+        type: weft.shared.NodeSessionId
+      - name: placement_decision_id
+        type: weft.shared.PlacementDecisionId
+      # 10. Scheduling: "A workload's minimum is never weakened." The node starts the instance at
+      # this level or stronger, or reports it refused.
+      - name: min_isolation
+        type: weft.shared.IsolationLevel
+      - name: desired
+        type: weft.nodes.DesiredState
+      # The snapshot a Snapshot order writes; absent until one is ordered.
+      - name: snapshot_id
+        type: Optional<weft.shared.SnapshotId>
+      # Both on weft-control's clock, inputs of Assign and RenewLease (weft-sim full setup,
+      # 2026-11-26: a minted Timestamp is a fixed day in 2020, so every new lease read as ended).
+      - name: assigned_at
+        type: Timestamp
+      # The instant the lease was last granted (Assign) or renewed (RenewLease). The lease ends
+      # 60 s after it: ExpiredLeases, RenewLease `lease-expired`, ReleaseAssignment `lease-held`.
+      # ESS 0.99.2 cannot add a duration in `sets:` (only `now ± <literal>` in a guard or
+      # filter), so the end is not stored. OPEN: the lease length; see Assign.
+      - name: lease_renewed_at
+        type: Timestamp
+      - name: ended_at
+        type: Optional<Timestamp>
+    relations:
+      # references, not owns: the assignment outlives a lost session until its lease ends.
+      - name: session
+        kind: references
+        target: weft.nodes.NodeSession
+        cardinality: one
+        via: session_id
+      # references: the instance (4. Workload) outlives each assignment it gets; a released
+      # instance is placed again under a new one.
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      # references: the node (9. Cluster) is the cluster domain's and outlives its assignments.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      # references: the placement (10. Scheduling) is the Scheduler's record of why this node.
+      - name: placement_decision
+        kind: references
+        target: weft.scheduling.PlacementDecision
+        cardinality: one
+        via: placement_decision_id
+      # references: the snapshot (4. Workload: Snapshot) outlives the assignment that wrote it.
+      - name: snapshot
+        kind: references
+        target: weft.workloads.Snapshot
+        cardinality: one
+        via: snapshot_id
+    lifecycle:
+      initial: Active
+      states:
+        - {name: Active, summary: The node holds the assignment under a lease.}
+        - {name: Released, summary: "The lease ended unrenewed; the instance is free to be placed again."}
+        - {name: Ended, summary: "The instance was stopped on order and the node observed it stopped."}
+      terminal: [Released, Ended]
+      transitions:
+        - name: release
+          from: [Active]
+          to: Released
+        - name: end
+          from: [Active]
+          to: Ended
+
+  # 11. Node control: InstanceObserved; "The agent reports what it observed, never what it was
+  # told." Each report is kept as the node sent it, beside the assignment it concerns; it changes
+  # no assignment. An observation of an instance whose assignment was released is still recorded:
+  # that is how a node still running a released instance shows.
+  - name: weft.nodes.InstanceObservation
+    naming:
+      summary: What a node reported it observed about one assigned instance, at one time.
+    identity:
+      name: observation_id
+      type: weft.shared.InstanceObservationId
+    fields:
+      - name: session_id
+        type: weft.shared.NodeSessionId
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: assignment_id
+        type: weft.shared.AssignmentId
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: observed
+        type: weft.nodes.ObservedInstanceState
+      - name: exit_code
+        type: Optional<Integer>
+      - name: detail
+        type: Optional<String>
+      # The node's clock; recorded_at is the control plane's.
+      - name: observed_at
+        type: Timestamp
+      - name: recorded_at
+        type: Timestamp
+    relations:
+      - name: session
+        kind: references
+        target: weft.nodes.NodeSession
+        cardinality: one
+        via: session_id
+      - name: assignment
+        kind: references
+        target: weft.nodes.Assignment
+        cardinality: one
+        via: assignment_id
+      # references: the node and the instance outlive what was observed about them.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # 11. Node control: NodeObserved; 9. Cluster: a node "Reports Capacity and observed
+  # IsolationFacts". Capacity is the shared ResourceAmount per resource class, in the class's
+  # unit; isolation is the shared IsolationFacts, whose `levels` are the levels the node can
+  # provide.
+  # OPEN: a capacity entry holds one amount; the total-versus-allocatable split this file had is
+  # gone with the shared type. Taken: the amount is what the node can allocate.
+  - name: weft.nodes.NodeObservation
+    naming:
+      summary: What a node reported it observed about itself, its capacity and isolation, at one time.
+    identity:
+      name: observation_id
+      type: weft.shared.NodeObservationId
+    fields:
+      - name: session_id
+        type: weft.shared.NodeSessionId
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: capacity
+        type: List<weft.shared.ResourceAmount>
+      - name: isolation
+        type: weft.shared.IsolationFacts
+      - name: observed_at
+        type: Timestamp
+      - name: recorded_at
+        type: Timestamp
+    relations:
+      - name: session
+        kind: references
+        target: weft.nodes.NodeSession
+        cardinality: one
+        via: session_id
+      # references: the node outlives what it reported about itself.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # 11. Node control: UsageReported; 12. Metering: "UsageRecord: account, formation, instance,
+  # resource class, amount". The node knows the instance, not its account or formation; metering
+  # resolves those from the instance when it turns a report into a UsageRecord.
+  - name: weft.nodes.UsageReport
+    naming:
+      summary: How much of one resource class an assigned instance used in a window, as the node measured it.
+    identity:
+      name: report_id
+      type: weft.shared.UsageReportId
+    fields:
+      - name: session_id
+        type: weft.shared.NodeSessionId
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: assignment_id
+        type: weft.shared.AssignmentId
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: resource_class
+        type: weft.shared.ResourceClassName
+      - name: amount
+        type: Integer
+      - name: window_start
+        type: Timestamp
+      - name: window_end
+        type: Timestamp
+      - name: recorded_at
+        type: Timestamp
+    invariants:
+      - amount >= 0
+    relations:
+      - name: session
+        kind: references
+        target: weft.nodes.NodeSession
+        cardinality: one
+        via: session_id
+      - name: assignment
+        kind: references
+        target: weft.nodes.Assignment
+        cardinality: one
+        via: assignment_id
+      # references: node, instance and resource class (inventory) outlive a usage report.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: class
+        kind: references
+        target: weft.inventory.ResourceClass
+        cardinality: one
+        via: resource_class
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # 11. Node control: Drain; 10. Scheduling: "drain idle nodes"; 4. Workload: DisruptionBudget
+  # "at most N replicas down at once for a drain". The order to empty one node. The node's own
+  # Draining state is the cluster domain's (9. Cluster); moving the instances off it is the
+  # Scheduler's, within each DisruptionBudget. This record says the drain was ordered and when
+  # the node held no active assignment any more.
+  - name: weft.nodes.NodeDrain
+    naming:
+      summary: An order to empty one node of its instances, and whether it finished.
+    identity:
+      name: drain_id
+      type: weft.shared.DrainId
+    fields:
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: reason
+        type: String
+      - name: requested_at
+        type: Timestamp
+      - name: ended_at
+        type: Optional<Timestamp>
+    relations:
+      # references: the node (9. Cluster) outlives its drains.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    lifecycle:
+      initial: Draining
+      states:
+        - {name: Draining, summary: The node takes no new assignment and its instances are moved off.}
+        - {name: Drained, summary: The node holds no active assignment.}
+        - {name: Cancelled, summary: The drain was called off before the node was empty.}
+      terminal: [Drained, Cancelled]
+      transitions:
+        - name: complete
+          from: [Draining]
+          to: Drained
+        - name: cancel
+          from: [Draining]
+          to: Cancelled
+
+  # 11. Node control: Attach, Detach.
+  # OPEN: the sketch names Attach and Detach without an object. Taken: a resource Binding
+  # (6. Resources: "Claim -> Binding (concrete units on a node)", a volume or a device) attached
+  # to or detached from an assigned instance on its node. The other reading, attaching a terminal
+  # stream, is the ExecSession of kind Attach below.
+  - name: weft.nodes.Attachment
+    naming:
+      summary: One resource binding attached to one assigned instance on its node.
+    identity:
+      name: attachment_id
+      type: weft.shared.AttachmentId
+    fields:
+      - name: assignment_id
+        type: weft.shared.AssignmentId
+      - name: binding_id
+        type: weft.shared.BindingId
+      - name: attached_at
+        type: Timestamp
+      - name: detached_at
+        type: Optional<Timestamp>
+    relations:
+      - name: assignment
+        kind: references
+        target: weft.nodes.Assignment
+        cardinality: one
+        via: assignment_id
+      # references: the binding (6. Resources: Claim -> Binding) is the resources domain's;
+      # detaching it ends the attachment, not the binding.
+      - name: binding
+        kind: references
+        target: weft.claims.Binding
+        cardinality: one
+        via: binding_id
+    lifecycle:
+      initial: Attached
+      states: [Attached, Detached]
+      terminal: [Detached]
+      transitions:
+        - name: detach
+          from: [Attached]
+          to: Detached
+
+  # Channels: "weft-api -> weft-node for exec: carried inside the node's session, never a direct
+  # connection to the node". Who opened a stream into which instance, over which node session,
+  # and when it opened and closed. The stream's bytes are never recorded here.
+  - name: weft.nodes.ExecSession
+    naming:
+      summary: One exec, attach, logs or port-forward stream into an instance, carried in a node session.
+    identity:
+      name: exec_id
+      type: weft.shared.ExecSessionId
+    fields:
+      - name: session_id
+        type: weft.shared.NodeSessionId
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: assignment_id
+        type: weft.shared.AssignmentId
+      - name: instance_id
+        type: weft.shared.InstanceId
+      # hardening pass 1 D3: the account the stream acts in (the caller's, tied to the instance's
+      # account at open), so CloseExecSession can tie the stream to its caller.
+      - name: account_id
+        type: weft.shared.AccountId
+      # Who opened it.
+      - name: principal_id
+        type: weft.shared.PrincipalId
+      - name: kind
+        type: weft.nodes.ExecKind
+      - name: opened_at
+        type: Timestamp
+      - name: closed_at
+        type: Optional<Timestamp>
+      - name: close_reason
+        type: Optional<String>
+    relations:
+      - name: session
+        kind: references
+        target: weft.nodes.NodeSession
+        cardinality: one
+        via: session_id
+      - name: assignment
+        kind: references
+        target: weft.nodes.Assignment
+        cardinality: one
+        via: assignment_id
+      # references: node, instance and principal outlive a stream.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: principal
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: principal_id
+      # references: the account (2. Tenancy) outlives a stream.
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+    lifecycle:
+      initial: Open
+      states: [Open, Closed]
+      terminal: [Closed]
+      transitions:
+        - name: close
+          from: [Open]
+          to: Closed
+
+errors:
+  - name: weft.nodes.SessionNotFound
+    summary: No node session has this identifier, and nothing changed.
+  - name: weft.nodes.SessionNotOpen
+    summary: The node session is lost or closed, so it carries nothing more, and nothing changed.
+  - name: weft.nodes.NodeIdentityRefused
+    summary: >-
+      The client certificate of the connection does not name this node as a joined node of the
+      cluster, so no session opened.
+  - name: weft.nodes.SessionAlreadyOpen
+    summary: >-
+      The node already has an open session; a second one does not open until the first is
+      superseded, lost or closed.
+  - name: weft.nodes.NotOwnNode
+    summary: >-
+      The node agent reported about another node, or about an assignment or instance of another
+      node. A node agent reports about its own node only; nothing was recorded.
+  - name: weft.nodes.HeartbeatCurrent
+    summary: The session's last heartbeat is within the timeout, so it is not lost.
+  - name: weft.nodes.ReceivedInFuture
+    summary: >-
+      The receipt instant lies after the control plane's own decision instant, so it is no
+      receipt, and nothing changed.
+  - name: weft.nodes.AssignedInFuture
+    summary: >-
+      The assignment instant lies after the control plane's own decision instant, so no lease is
+      granted from it, and nothing changed.
+  - name: weft.nodes.SessionNodeMismatch
+    summary: The node session belongs to another node than the one named, and nothing changed.
+  - name: weft.nodes.AssignmentNotFound
+    summary: No assignment has this identifier, and nothing changed.
+  - name: weft.nodes.AssignmentNotActive
+    summary: The assignment was released or ended, so it takes no further order, and nothing changed.
+  - name: weft.nodes.InstanceAlreadyAssigned
+    summary: The instance already has an active assignment; it is not assigned a second time.
+  - name: weft.nodes.NoOpenSession
+    summary: The node has no open session, so nothing is sent to it and no assignment is made.
+  - name: weft.nodes.PlacementNotFound
+    summary: No placement decision has this identifier, and nothing changed.
+  - name: weft.nodes.PlacementMismatch
+    summary: >-
+      The placement decision places another instance, or on another node, than the one named, and
+      nothing changed.
+  - name: weft.nodes.PlacementNotBound
+    summary: >-
+      The placement decision is not bound (still reserved, being evicted or released), so the
+      instance is not assigned.
+  - name: weft.nodes.IsolationUnavailable
+    summary: >-
+      The node did not report the isolation level the instance needs, so the instance is not
+      assigned to it. A workload's minimum isolation is never weakened.
+  - name: weft.nodes.LeaseExpired
+    summary: >-
+      The assignment's lease has ended, so it is not renewed; the node stops the instance and the
+      control plane may place it again.
+  - name: weft.nodes.LeaseStillHeld
+    summary: The assignment's lease has not ended, so it is not released.
+  - name: weft.nodes.StopNotObserved
+    summary: The node has not reported the instance stopped, so the assignment does not end.
+  - name: weft.nodes.InstanceNotAssigned
+    summary: The instance named is not the one the assignment places, and nothing was recorded.
+  - name: weft.nodes.UsageAmountNegative
+    summary: The reported amount is below zero, and nothing was recorded.
+  - name: weft.nodes.UsageWindowInvalid
+    summary: The usage window does not end after it starts, and nothing was recorded.
+  - name: weft.nodes.NodeNotReady
+    summary: The node is cordoned, draining or gone, so it takes no new assignment.
+  - name: weft.nodes.NodeNotFound
+    summary: No node of the cluster has this identifier, and nothing changed.
+  - name: weft.nodes.DrainNotFound
+    summary: No drain has this identifier, and nothing changed.
+  - name: weft.nodes.DrainAlreadyRunning
+    summary: The node is already being drained; a second drain is not started.
+  - name: weft.nodes.DrainNotRunning
+    summary: The drain has finished or was cancelled, and nothing changed.
+  - name: weft.nodes.AssignmentsRemain
+    summary: The node still holds an active assignment, so the drain is not finished.
+  - name: weft.nodes.AttachmentNotFound
+    summary: No attachment has this identifier, and nothing changed.
+  - name: weft.nodes.AttachmentNotAttached
+    summary: The binding is already detached, and nothing changed.
+  - name: weft.nodes.BindingAlreadyAttached
+    summary: The binding is attached to an instance already; it is not attached a second time.
+  - name: weft.nodes.BindingNotClaimed
+    summary: >-
+      The binding does not answer a claim of the assigned instance, or lies on another node, so it
+      is not attached. An instance gets no resource it did not claim.
+  - name: weft.nodes.ExecNotPermitted
+    summary: >-
+      The principal holds no role that permits this kind of stream into the instance's account,
+      so no stream opened.
+  - name: weft.nodes.AssignmentNotOnNode
+    summary: The assignment places the instance on another node than the one named, and nothing changed.
+  - name: weft.nodes.ExecSessionNotFound
+    summary: No exec session has this identifier, and nothing changed.
+  - name: weft.nodes.ExecSessionClosed
+    summary: The exec session is closed already, and nothing changed.
+  - name: weft.nodes.SnapshotNotFound
+    summary: No snapshot has this identifier, and nothing changed.
+  - name: weft.nodes.SnapshotNotOfInstance
+    summary: The snapshot named is a snapshot of another instance than the one the assignment places, and nothing changed.
+
+events:
+  - name: weft.nodes.NodeSessionOpened
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: agent_version, type: String}
+
+  - name: weft.nodes.NodeSessionLost
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.nodes.NodeSessionSuperseded
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.nodes.NodeSessionClosed
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: String}
+
+  - name: weft.nodes.NodeHeartbeatReceived
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.nodes.InstanceAssigned
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: placement_decision_id, type: weft.shared.PlacementDecisionId}
+
+  - name: weft.nodes.AssignmentDesiredStateSet
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: desired, type: weft.nodes.DesiredState}
+
+  - name: weft.nodes.AssignmentLeaseRenewed
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  # § 14 R3 (line 587) edge: carries what workloads.EvictInstance needs (instance_id; the reason is
+  # NodeLost, the only way a lease ends unrenewed) and what scheduling.ReleasePlacement needs
+  # (placement_decision_id, the Assignment's stored decision).
+  - name: weft.nodes.AssignmentReleased
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: placement_decision_id, type: weft.shared.PlacementDecisionId}
+
+  # § 14 R2 (line 586) edge: carries what scheduling.ReleasePlacement needs
+  # (placement_decision_id, the Assignment's stored decision).
+  - name: weft.nodes.AssignmentEnded
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: placement_decision_id, type: weft.shared.PlacementDecisionId}
+
+  # § 11 InstanceObserved; § 14 R2 (line 586). exit_code and detail are what the node reported
+  # (InstanceObserved input), so a reader of the event sees the whole observation.
+  # § 14 (line 607): the node agent's Record* call is the one source of an observation. These two
+  # fields feed no binding into workloads.RecordInstanceExited / RecordInstanceFailed: the agent
+  # calls those itself (ess/9-actors/actors.yaml, NodeAgent), and a binding from this event would
+  # record each exit twice.
+  - name: weft.nodes.InstanceObservationRecorded
+    fields:
+      - {name: observation_id, type: weft.shared.InstanceObservationId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: observed, type: weft.nodes.ObservedInstanceState}
+      - {name: exit_code, type: Optional<Integer>}
+      - {name: detail, type: Optional<String>}
+      - {name: observed_at, type: Timestamp}
+
+  - name: weft.nodes.NodeObservationRecorded
+    fields:
+      - {name: observation_id, type: weft.shared.NodeObservationId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: capacity, type: List<weft.shared.ResourceAmount>}
+      - {name: isolation, type: weft.shared.IsolationFacts}
+      - {name: observed_at, type: Timestamp}
+
+  - name: weft.nodes.NodeDrainStarted
+    fields:
+      - {name: drain_id, type: weft.shared.DrainId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: String}
+
+  - name: weft.nodes.NodeDrained
+    fields:
+      - {name: drain_id, type: weft.shared.DrainId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.nodes.NodeDrainCancelled
+    fields:
+      - {name: drain_id, type: weft.shared.DrainId}
+      - {name: node_id, type: weft.shared.NodeId}
+
+  - name: weft.nodes.BindingAttached
+    fields:
+      - {name: attachment_id, type: weft.shared.AttachmentId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: binding_id, type: weft.shared.BindingId}
+
+  - name: weft.nodes.BindingDetached
+    fields:
+      - {name: attachment_id, type: weft.shared.AttachmentId}
+      - {name: binding_id, type: weft.shared.BindingId}
+
+  # 7. Secrets: "a value never appears in logs, plans, simulations or events"; nor does a stream's
+  # content appear here.
+  - name: weft.nodes.ExecSessionOpened
+    fields:
+      - {name: exec_id, type: weft.shared.ExecSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: kind, type: weft.nodes.ExecKind}
+
+  - name: weft.nodes.ExecSessionEnded
+    fields:
+      - {name: exec_id, type: weft.shared.ExecSessionId}
+      - {name: reason, type: String}
+
+  - name: weft.nodes.UsageReportRecorded
+    fields:
+      - {name: report_id, type: weft.shared.UsageReportId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: amount, type: Integer}
+      - {name: window_start, type: Timestamp}
+      - {name: window_end, type: Timestamp}
+
+commands:
+  # Channels / 11. Node control: the node dials out over mutual TLS. The certificate check is
+  # outside this model: it is decided before any row is read.
+  # Decided in integration (2026-11-26, matching protocols/node-channel.yaml
+  # replace-open-session): a node that redials while control still holds its old session Open
+  # gets a new session, and the old one moves to Superseded. The redial is two commands in this
+  # order: SupersedeNodeSession ends the old session, then OpenNodeSession opens the new one.
+  # ESS 0.99.2 refuses `affects:` beside `creates:` (ESS-COMMAND-009), so one command cannot do
+  # both. OpenNodeSession keeps its refusal while a session is Open: one node never holds two.
+  - name: weft.nodes.SupersedeNodeSession
+    naming:
+      display: Supersede a node session on redial
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+    outcomes:
+      # Kept `external`: the mutual-TLS handshake is outside weft's records; "joined" is the
+      # cluster's Node state, kept inside this refusal for the reason on OpenNodeSession.
+      - name: identity-refused
+        external: the client certificate of the redialing connection does not name node_id as a joined node of the cluster
+        before_row: true
+        error: weft.nodes.NodeIdentityRefused
+      - name: no-such-session
+        unknown_instance: true
+        error: weft.nodes.SessionNotFound
+      - name: other-node
+        when_subject:
+          predicate: node_id != input.node_id
+        error: weft.nodes.SessionNodeMismatch
+      - name: superseded
+        moves: weft.nodes.NodeSession.supersede
+        instance: session_id
+        sets:
+          ended_at: {generated: true}
+          end_reason: "superseded"
+        emits: [weft.nodes.NodeSessionSuperseded]
+        payload:
+          weft.nodes.NodeSessionSuperseded:
+            session_id: input.session_id
+            node_id: input.node_id
+        # Channels: exec is carried inside the node session, so no stream outlives it.
+        affects:
+          - entity: weft.nodes.ExecSession
+            where: session_id == input.session_id
+            moves: weft.nodes.ExecSession.close
+            sets:
+              closed_at: {generated: true}
+              close_reason: "superseded"
+      - name: not-open
+        wrong_state: true
+        error: weft.nodes.SessionNotOpen
+
+  # Channels / 11. Node control: the node dials out over mutual TLS. The certificate check is
+  # outside this model: it is decided before any row is read. A redial over a still-Open session
+  # runs SupersedeNodeSession first (above).
+  - name: weft.nodes.OpenNodeSession
+    naming:
+      display: Open a node session
+    input:
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: agent_version, type: String}
+      # The instant weft-control's node-channel endpoint received the frame, stamped by the control
+      # plane, never read from the frame (see Heartbeat).
+      - {name: received_at, type: Timestamp}
+    outcomes:
+      - name: received-in-future
+        when: received_at > now
+        error: weft.nodes.ReceivedInFuture
+      # Kept `external`: the mutual-TLS handshake is outside weft's records. "A joined node"
+      # (Actors, sketch line 117) is the cluster domain's Node state (line 449), a fact in weft.
+      # Written as guards on it (`exists: false`; `state` Provisioning or Gone), tried on
+      # 2026-11-26, ess 0.99.2 finds no route through `opened` any more, and every NodeSession
+      # scenario after it is lost (Heartbeat/seen, CloseNodeSession/closed, ...). Kept as one
+      # refusal until synthesis routes through a create guarded on another domain's row.
+      - name: identity-refused
+        external: the client certificate does not name this node as a joined node of the cluster
+        before_row: true
+        error: weft.nodes.NodeIdentityRefused
+      - name: already-open
+        when_related:
+          entity: weft.nodes.NodeSession
+          where:
+            all:
+              - node_id == input.node_id
+              - state == Open
+          exists: true
+        error: weft.nodes.SessionAlreadyOpen
+      - name: opened
+        creates: weft.nodes.NodeSession
+        instance: session_id
+        sets:
+          node_id: input.node_id
+          agent_version: input.agent_version
+          opened_at: {generated: true}
+          last_seen_at: input.received_at
+        emits: [weft.nodes.NodeSessionOpened]
+        payload:
+          weft.nodes.NodeSessionOpened:
+            session_id: {generated: true}
+            node_id: input.node_id
+            agent_version: input.agent_version
+
+  # 11. Node control: Heartbeat. The agent names its node; a heartbeat for another node's
+  # session is refused by name.
+  # last_seen_at is the receipt instant, an input: ESS 0.99.2 refuses `now` as a value
+  # (ESS-COMMAND-009), and a minted Timestamp is a fixed day in 2020, so every open session read
+  # as silent and LoseNodeSession marked healthy nodes Lost (weft-sim node-loss, 2026-11-26).
+  # weft-control's node-channel endpoint stamps it on receipt from its own clock; the node's frame
+  # carries no time (docs/ess-gaps.md gap 14). The guard bounds it by the decision instant: an
+  # instant after `now` is refused, so no caller can postpone its own loss; an earlier one only
+  # makes the session look older.
+  - name: weft.nodes.Heartbeat
+    naming:
+      display: Record a node heartbeat
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: received_at, type: Timestamp}
+    outcomes:
+      - name: received-in-future
+        when: received_at > now
+        error: weft.nodes.ReceivedInFuture
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the client certificate of the connection names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: no-such-session
+        unknown_instance: true
+        error: weft.nodes.SessionNotFound
+      - name: not-own-node
+        when_subject:
+          predicate: node_id != input.node_id
+        error: weft.nodes.NotOwnNode
+      - name: seen
+        when_subject_state: Open
+        updates: weft.nodes.NodeSession
+        instance: session_id
+        sets:
+          last_seen_at: input.received_at
+        emits: [weft.nodes.NodeHeartbeatReceived]
+        payload:
+          weft.nodes.NodeHeartbeatReceived:
+            session_id: input.session_id
+            node_id: input.node_id
+      - name: not-open
+        error: weft.nodes.SessionNotOpen
+
+  # 11. Node control: "a lost node's instances are rescheduled after the lease ends". The control
+  # plane marks a session lost when no heartbeat arrived within the timeout.
+  # OPEN: the heartbeat timeout. Taken: 30 seconds.
+  # OPEN: no actor of the sketch's list detects a lost session; it is weft-control's own step
+  # (a system actor such as a node supervisor), not the Scheduler's.
+  - name: weft.nodes.LoseNodeSession
+    naming:
+      display: Mark a node session lost
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+    outcomes:
+      - name: no-such-session
+        unknown_instance: true
+        error: weft.nodes.SessionNotFound
+      - name: heartbeat-current
+        when_subject:
+          predicate: last_seen_at > now - 30s
+        error: weft.nodes.HeartbeatCurrent
+      - name: lost
+        moves: weft.nodes.NodeSession.lose
+        instance: session_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.nodes.NodeSessionLost]
+        payload:
+          weft.nodes.NodeSessionLost:
+            session_id: input.session_id
+            node_id: {subject: node_id}
+        # Channels: exec is carried inside the node session, so no stream outlives it.
+        affects:
+          - entity: weft.nodes.ExecSession
+            where: session_id == input.session_id
+            moves: weft.nodes.ExecSession.close
+            sets:
+              closed_at: {generated: true}
+      - name: not-open
+        wrong_state: true
+        error: weft.nodes.SessionNotOpen
+
+  # Channels: the session ends in order when the node shuts down or the control plane closes it.
+  # Both sides end it the same way; the reason says which.
+  - name: weft.nodes.CloseNodeSession
+    naming:
+      display: Close a node session
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: String}
+    outcomes:
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the caller is the node agent and its client certificate names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: no-such-session
+        unknown_instance: true
+        error: weft.nodes.SessionNotFound
+      - name: not-own-node
+        when_subject:
+          predicate: node_id != input.node_id
+        error: weft.nodes.NotOwnNode
+      - name: closed
+        moves: weft.nodes.NodeSession.close
+        instance: session_id
+        sets:
+          ended_at: {generated: true}
+          end_reason: input.reason
+        emits: [weft.nodes.NodeSessionClosed]
+        payload:
+          weft.nodes.NodeSessionClosed:
+            session_id: input.session_id
+            node_id: input.node_id
+            reason: input.reason
+        affects:
+          - entity: weft.nodes.ExecSession
+            where: session_id == input.session_id
+            moves: weft.nodes.ExecSession.close
+            sets:
+              closed_at: {generated: true}
+              close_reason: input.reason
+      - name: not-open
+        wrong_state: true
+        error: weft.nodes.SessionNotOpen
+
+  # 11. Node control: Assign. The Scheduler hands a placed instance to a node over that node's
+  # open session, with a lease.
+  # UNMAPPED: the isolation check reads the node's latest NodeObserved report (a NodeObservation
+  # row ordered by observed_at); a guard over "the latest row of this node lists this level" was
+  # not found in ess/37, so it is written as a refusal decided outside the model.
+  # OPEN: the lease length; the sketch gives no value. Taken: 60 s, one length for the whole
+  # system, twice the heartbeat timeout (30 s, SilentNodeSessions), so a node that misses one
+  # heartbeat window keeps its instances. A per-cluster length needs a guard over a stored
+  # duration, which ESS 0.99.2 does not compare (docs/ess-gaps.md gap 6).
+  # assigned_at is weft-control's clock, an input, never minted (weft-sim full setup, 2026-11-26:
+  # a minted lease start of 2020 put every new assignment in ExpiredLeases). On the edge it is
+  # the placement's decision instant (PlacementBound.decided_at, stamped by the Scheduler when
+  # it placed), so a late delivery starts the lease earlier, never later; on the level step the
+  # Scheduler stamps its own clock. An instant after `now` is refused, so no caller extends a
+  # lease by naming a later start.
+  # § 14 R4 (line 588) edge: the input is what scheduling.PlacementBound carries (decision_id,
+  # instance_id, node_id), so a binding maps only the placement's fields. The session is the
+  # node's one Open session (Channels: "one long-lived session per node"; OpenNodeSession refuses
+  # a second), read here, not sent. The isolation is the placement's chosen level (10. Scheduling:
+  # at least the request's minimum, "never weakened"), read from the decision.
+  # OPEN: the Assignment's min_isolation now holds the placement's chosen level, which may be
+  # stronger than the workload's minimum; the node then refuses a weaker level the minimum would
+  # admit. Taken: the chosen level, since the Scheduler reserved units for it. Or should
+  # scheduling.PlacementDecision also store the request's minimum for this read?
+  - name: weft.nodes.Assign
+    naming:
+      display: Assign an instance to a node
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: placement_decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: assigned_at, type: Timestamp}
+    outcomes:
+      - name: assigned-in-future
+        when: assigned_at > now
+        error: weft.nodes.AssignedInFuture
+      - name: no-such-placement
+        when_related: {via: input.placement_decision_id, exists: false}
+        error: weft.nodes.PlacementNotFound
+      - name: no-such-node
+        when_related: {via: input.node_id, exists: false}
+        error: weft.nodes.NodeNotFound
+      - name: placement-mismatch
+        when_related:
+          via: input.placement_decision_id
+          predicate:
+            any:
+              - node_id != input.node_id
+              - instance_id != input.instance_id
+        error: weft.nodes.PlacementMismatch
+      # scheduling.PlacementDecision lifecycle: "Bound: committed, the nodes domain may assign it".
+      - name: placement-not-bound
+        when_related: {via: input.placement_decision_id, predicate: state != Bound}
+        error: weft.nodes.PlacementNotBound
+      - name: no-open-session
+        when_related:
+          entity: weft.nodes.NodeSession
+          where:
+            all:
+              - node_id == input.node_id
+              - state == Open
+          exists: false
+        error: weft.nodes.NoOpenSession
+      - name: already-assigned
+        when_related:
+          entity: weft.nodes.Assignment
+          where:
+            all:
+              - instance_id == input.instance_id
+              - state == Active
+          exists: true
+        error: weft.nodes.InstanceAlreadyAssigned
+      # 9. Cluster (sketch line 449): Node lifecycle "provisioning, joining, ready, cordoned,
+      # draining, gone" is the cluster domain's record, read through the Assignment's `node`
+      # relation. Only a Ready node takes a new assignment; a node the cluster does not know
+      # takes none.
+      - name: node-not-ready
+        when_related: {via: input.node_id, predicate: state != Ready}
+        error: weft.nodes.NodeNotReady
+      # Kept `external`: the guard compares two related rows, the placement's chosen `isolation`
+      # and the levels in the node's isolation facts (cluster.Node.isolation_facts, or the latest
+      # NodeObservation); a `when_related` predicate compares one row with the input.
+      - name: isolation-unavailable
+        external: the levels of the node's latest observed isolation facts do not include the placement's isolation or a stronger level
+        error: weft.nodes.IsolationUnavailable
+      - name: assigned
+        creates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          instance_id: input.instance_id
+          node_id: input.node_id
+          session_id:
+            related:
+              entity: weft.nodes.NodeSession
+              where:
+                all:
+                  - node_id == input.node_id
+                  - state == Open
+              field: session_id
+          placement_decision_id: input.placement_decision_id
+          min_isolation: {related: {via: input.placement_decision_id, field: isolation}}
+          desired: Run
+          assigned_at: input.assigned_at
+          lease_renewed_at: input.assigned_at
+        emits: [weft.nodes.InstanceAssigned]
+        payload:
+          weft.nodes.InstanceAssigned:
+            assignment_id: {generated: true}
+            instance_id: input.instance_id
+            node_id: input.node_id
+            session_id:
+              related:
+                entity: weft.nodes.NodeSession
+                where:
+                  all:
+                    - node_id == input.node_id
+                    - state == Open
+                field: session_id
+            min_isolation: {related: {via: input.placement_decision_id, field: isolation}}
+            placement_decision_id: input.placement_decision_id
+
+  # 11. Node control: Stop.
+  - name: weft.nodes.Stop
+    naming:
+      display: Order an assigned instance stopped
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      - name: ordered
+        when_subject_state: Active
+        updates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          desired: Stop
+        emits: [weft.nodes.AssignmentDesiredStateSet]
+        payload:
+          weft.nodes.AssignmentDesiredStateSet:
+            assignment_id: input.assignment_id
+            desired: Stop
+      - name: not-active
+        error: weft.nodes.AssignmentNotActive
+
+  # 11. Node control: Pause.
+  - name: weft.nodes.Pause
+    naming:
+      display: Order an assigned instance paused
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      - name: ordered
+        when_subject_state: Active
+        updates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          desired: Pause
+        emits: [weft.nodes.AssignmentDesiredStateSet]
+        payload:
+          weft.nodes.AssignmentDesiredStateSet:
+            assignment_id: input.assignment_id
+            desired: Pause
+      - name: not-active
+        error: weft.nodes.AssignmentNotActive
+
+  # 11. Node control: Pause, Snapshot.
+  # OPEN: the sketch names Pause and Snapshot but no order that runs the instance again. Taken:
+  # Resume sets the desired state back to Run.
+  - name: weft.nodes.Resume
+    naming:
+      display: Order an assigned instance running again
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      - name: ordered
+        when_subject_state: Active
+        updates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          desired: Run
+        emits: [weft.nodes.AssignmentDesiredStateSet]
+        payload:
+          weft.nodes.AssignmentDesiredStateSet:
+            assignment_id: input.assignment_id
+            desired: Run
+      - name: not-active
+        error: weft.nodes.AssignmentNotActive
+
+  # 11. Node control: Snapshot; 4. Workload: "Snapshot (freeze and restore an instance)".
+  # OPEN: what the instance does after the snapshot is written. Taken: it stays frozen until the
+  # next order (Resume or Stop).
+  - name: weft.nodes.Snapshot
+    naming:
+      display: Order a snapshot of an assigned instance
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      # hardening pass 1 (finding nodes.yaml:1130): the instance the assignment places, sent so
+      # the snapshot can be tied to it (a related row's guard compares with an input only, not
+      # with `subject.`). The Scheduler knows it from the assignment.
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: snapshot_id, type: weft.shared.SnapshotId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      # hardening pass 1 (finding nodes.yaml:1130): the instance named is the assignment's.
+      - name: instance-not-assigned
+        when_subject:
+          predicate: instance_id != input.instance_id
+        error: weft.nodes.InstanceNotAssigned
+      # hardening pass 1: ESS answers the subject's state before a related row's guard
+      # (ESS-COMMAND-004), so the Active check is a refusal here and `ordered` is unguarded.
+      - name: not-active
+        when_subject:
+          predicate: state != Active
+        error: weft.nodes.AssignmentNotActive
+      # hardening pass 1 (finding nodes.yaml:1130): a Snapshot order names a snapshot row that
+      # exists (default deny: no dangling target).
+      - name: no-such-snapshot
+        when_related: {via: input.snapshot_id, exists: false}
+        error: weft.nodes.SnapshotNotFound
+      # hardening pass 1 (finding nodes.yaml:1130): a snapshot of another instance (another
+      # account's) is never the target of this assignment's Snapshot order.
+      - name: snapshot-of-other-instance
+        when_related: {via: input.snapshot_id, predicate: instance_id != input.instance_id}
+        error: weft.nodes.SnapshotNotOfInstance
+      - name: ordered
+        updates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          desired: Snapshot
+          snapshot_id: input.snapshot_id
+        emits: [weft.nodes.AssignmentDesiredStateSet]
+        payload:
+          weft.nodes.AssignmentDesiredStateSet:
+            assignment_id: input.assignment_id
+            desired: Snapshot
+
+  # 11. Node control: "An Assignment has a lease". The node renews the lease of its own
+  # assignments over its open session; an ended lease is not revived.
+  # The renewal instant is the control plane's, never a value the node sends: `received_at`, stamped
+  # by weft-control's node-channel endpoint on receipt, as for Heartbeat (weft-sim full setup,
+  # 2026-11-26: a minted lease end of 2020 answered `lease-expired` to 165 of 165 renewals). An
+  # instant after `now` is refused, so no caller postpones its own lease end; the lease then
+  # runs 60 s from it (OPEN at Assign).
+  # OPEN: whether a Heartbeat renews every lease of its node instead of one renewal per
+  # assignment. Taken: one renewal per assignment, so a node renews only what it still runs.
+  # UNMAPPED: the renewal does not check that the node's session is Open: in ess/37 a guard on
+  # the related session answers after the assignment's held state, so the accepting branch would
+  # claim every Active assignment first. The node is proved by its client certificate instead.
+  - name: weft.nodes.RenewLease
+    naming:
+      display: Renew an assignment's lease
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: received_at, type: Timestamp}
+    outcomes:
+      - name: received-in-future
+        when: received_at > now
+        error: weft.nodes.ReceivedInFuture
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the client certificate of the connection names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      - name: not-own-node
+        when_subject:
+          predicate: node_id != input.node_id
+        error: weft.nodes.NotOwnNode
+      - name: lease-expired
+        when_subject:
+          predicate: lease_renewed_at < now - 60s
+        error: weft.nodes.LeaseExpired
+      - name: renewed
+        when_subject_state: Active
+        updates: weft.nodes.Assignment
+        instance: assignment_id
+        sets:
+          lease_renewed_at: input.received_at
+        emits: [weft.nodes.AssignmentLeaseRenewed]
+        payload:
+          weft.nodes.AssignmentLeaseRenewed:
+            assignment_id: input.assignment_id
+            node_id: input.node_id
+      - name: not-active
+        error: weft.nodes.AssignmentNotActive
+
+  # 11. Node control: "a lost node's instances are rescheduled after the lease ends". Releasing
+  # frees the instance for the Scheduler to place again; the session's state does not matter,
+  # the lease does.
+  # § 14 R3 (line 587) time form (line 602): the guard `lease_renewed_at >= now - 60s` is the
+  # rule, the clock is the caller's. The caller reads ExpiredLeases and runs this once per row. Not a
+  # many-rows command: ESS refuses `now` in an `affects:` filter, so "every expired lease of a
+  # node" cannot be one set effect. AssignmentReleased carries instance_id (EvictInstance, reason
+  # NodeLost) and placement_decision_id (scheduling.ReleasePlacement).
+  # OPEN: the integrator reads the lease end as a ControlPlane step, and LoseNodeSession is
+  # ControlPlane's; ess/9-actors/actors.yaml grants ReleaseAssignment to the Scheduler. Which
+  # actor holds the lease clock?
+  - name: weft.nodes.ReleaseAssignment
+    naming:
+      display: Release an assignment whose lease ended
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      - name: lease-held
+        when_subject:
+          predicate: lease_renewed_at >= now - 60s
+        error: weft.nodes.LeaseStillHeld
+      - name: released
+        when_subject_state: Active
+        moves: weft.nodes.Assignment.release
+        instance: assignment_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.nodes.AssignmentReleased]
+        payload:
+          weft.nodes.AssignmentReleased:
+            assignment_id: input.assignment_id
+            instance_id: {subject: instance_id}
+            node_id: {subject: node_id}
+            placement_decision_id: {subject: placement_decision_id}
+      - name: not-active
+        error: weft.nodes.AssignmentNotActive
+
+  # 11. Node control: Stop, and "the agent reports what it observed". An assignment ends only
+  # once the node reported the instance stopped, not when the stop was ordered. An instance that
+  # ran to completion (a Job, an Invocation) ends the same way, without a Stop order.
+  # OPEN: whether an observed Failed also ends the assignment, or the node restarts it under the
+  # instance's RestartPolicy. Taken: only Stopped ends it.
+  - name: weft.nodes.EndAssignment
+    naming:
+      display: End an assignment whose instance stopped
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.nodes.AssignmentNotFound
+      - name: stop-not-observed
+        when_related:
+          entity: weft.nodes.InstanceObservation
+          where:
+            all:
+              - assignment_id == input.assignment_id
+              - observed == Stopped
+          exists: false
+        error: weft.nodes.StopNotObserved
+      - name: ended
+        moves: weft.nodes.Assignment.end
+        instance: assignment_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.nodes.AssignmentEnded]
+        payload:
+          weft.nodes.AssignmentEnded:
+            assignment_id: input.assignment_id
+            instance_id: {subject: instance_id}
+            placement_decision_id: {subject: placement_decision_id}
+      - name: not-active
+        wrong_state: true
+        error: weft.nodes.AssignmentNotActive
+
+  # 11. Node control: InstanceObserved. A node reports about instances assigned to itself only:
+  # the session, the assignment and the certificate must all name the reporting node.
+  # OPEN: an instance the node finds running with no assignment it knows (an orphan) has no
+  # assignment_id to report under. Taken: not reportable here; the agent stops it.
+  - name: weft.nodes.InstanceObserved
+    naming:
+      display: Record what a node observed about an instance
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: observed, type: weft.nodes.ObservedInstanceState}
+      - {name: exit_code, type: Optional<Integer>}
+      - {name: detail, type: Optional<String>}
+      - {name: observed_at, type: Timestamp}
+    outcomes:
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the client certificate of the connection names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: no-such-session
+        when_related: {via: input.session_id, exists: false}
+        error: weft.nodes.SessionNotFound
+      - name: no-such-assignment
+        when_related: {via: input.assignment_id, exists: false}
+        error: weft.nodes.AssignmentNotFound
+      - name: session-of-other-node
+        when_related: {via: input.session_id, predicate: node_id != input.node_id}
+        error: weft.nodes.NotOwnNode
+      - name: session-not-open
+        when_related: {via: input.session_id, predicate: state != Open}
+        error: weft.nodes.SessionNotOpen
+      - name: assignment-of-other-node
+        when_related: {via: input.assignment_id, predicate: node_id != input.node_id}
+        error: weft.nodes.NotOwnNode
+      - name: instance-not-assigned
+        when_related: {via: input.assignment_id, predicate: instance_id != input.instance_id}
+        error: weft.nodes.InstanceNotAssigned
+      - name: recorded
+        creates: weft.nodes.InstanceObservation
+        instance: observation_id
+        sets:
+          session_id: input.session_id
+          node_id: input.node_id
+          assignment_id: input.assignment_id
+          instance_id: input.instance_id
+          observed: input.observed
+          exit_code: input.exit_code
+          detail: input.detail
+          observed_at: input.observed_at
+          recorded_at: {generated: true}
+        emits: [weft.nodes.InstanceObservationRecorded]
+        payload:
+          weft.nodes.InstanceObservationRecorded:
+            observation_id: {generated: true}
+            node_id: input.node_id
+            assignment_id: input.assignment_id
+            instance_id: input.instance_id
+            observed: input.observed
+            exit_code: input.exit_code
+            detail: input.detail
+            observed_at: input.observed_at
+
+  # 11. Node control: NodeObserved.
+  - name: weft.nodes.NodeObserved
+    naming:
+      display: Record what a node observed about itself
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: capacity, type: List<weft.shared.ResourceAmount>}
+      - {name: isolation, type: weft.shared.IsolationFacts}
+      - {name: observed_at, type: Timestamp}
+    outcomes:
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the client certificate of the connection names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: no-such-session
+        when_related: {via: input.session_id, exists: false}
+        error: weft.nodes.SessionNotFound
+      - name: session-of-other-node
+        when_related: {via: input.session_id, predicate: node_id != input.node_id}
+        error: weft.nodes.NotOwnNode
+      - name: session-not-open
+        when_related: {via: input.session_id, predicate: state != Open}
+        error: weft.nodes.SessionNotOpen
+      - name: recorded
+        creates: weft.nodes.NodeObservation
+        instance: observation_id
+        sets:
+          session_id: input.session_id
+          node_id: input.node_id
+          capacity: input.capacity
+          isolation: input.isolation
+          observed_at: input.observed_at
+          recorded_at: {generated: true}
+        emits: [weft.nodes.NodeObservationRecorded]
+        payload:
+          weft.nodes.NodeObservationRecorded:
+            observation_id: {generated: true}
+            node_id: input.node_id
+            capacity: input.capacity
+            isolation: input.isolation
+            observed_at: input.observed_at
+
+  # 11. Node control: UsageReported.
+  - name: weft.nodes.UsageReported
+    naming:
+      display: Record usage a node measured for an instance
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: amount, type: Integer}
+      - {name: window_start, type: Timestamp}
+      - {name: window_end, type: Timestamp}
+    outcomes:
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the client certificate of the connection names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: negative-amount
+        when: amount < 0
+        error: weft.nodes.UsageAmountNegative
+      - name: empty-window
+        when: window_end <= window_start
+        error: weft.nodes.UsageWindowInvalid
+      - name: no-such-session
+        when_related: {via: input.session_id, exists: false}
+        error: weft.nodes.SessionNotFound
+      - name: no-such-assignment
+        when_related: {via: input.assignment_id, exists: false}
+        error: weft.nodes.AssignmentNotFound
+      - name: session-of-other-node
+        when_related: {via: input.session_id, predicate: node_id != input.node_id}
+        error: weft.nodes.NotOwnNode
+      - name: session-not-open
+        when_related: {via: input.session_id, predicate: state != Open}
+        error: weft.nodes.SessionNotOpen
+      - name: assignment-of-other-node
+        when_related: {via: input.assignment_id, predicate: node_id != input.node_id}
+        error: weft.nodes.NotOwnNode
+      - name: instance-not-assigned
+        when_related: {via: input.assignment_id, predicate: instance_id != input.instance_id}
+        error: weft.nodes.InstanceNotAssigned
+      - name: recorded
+        creates: weft.nodes.UsageReport
+        instance: report_id
+        sets:
+          session_id: input.session_id
+          node_id: input.node_id
+          assignment_id: input.assignment_id
+          instance_id: input.instance_id
+          resource_class: input.resource_class
+          amount: input.amount
+          window_start: input.window_start
+          window_end: input.window_end
+          recorded_at: {generated: true}
+        emits: [weft.nodes.UsageReportRecorded]
+        payload:
+          weft.nodes.UsageReportRecorded:
+            report_id: {generated: true}
+            node_id: input.node_id
+            instance_id: input.instance_id
+            resource_class: input.resource_class
+            amount: input.amount
+            window_start: input.window_start
+            window_end: input.window_end
+
+  # 11. Node control: Drain; 10. Scheduling: "drain idle nodes"; 9. Cluster: ClusterOperator runs
+  # nodes.
+  - name: weft.nodes.Drain
+    naming:
+      display: Drain a node
+    input:
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: already-draining
+        when_related:
+          entity: weft.nodes.NodeDrain
+          where:
+            all:
+              - node_id == input.node_id
+              - state == Draining
+          exists: true
+        error: weft.nodes.DrainAlreadyRunning
+      - name: started
+        creates: weft.nodes.NodeDrain
+        instance: drain_id
+        sets:
+          node_id: input.node_id
+          reason: input.reason
+          requested_at: {generated: true}
+        emits: [weft.nodes.NodeDrainStarted]
+        payload:
+          weft.nodes.NodeDrainStarted:
+            drain_id: {generated: true}
+            node_id: input.node_id
+            reason: input.reason
+
+  # 11. Node control: Drain. The drain finishes once no assignment on the drained node is Active.
+  - name: weft.nodes.CompleteDrain
+    naming:
+      display: Record a node drained
+    input:
+      - {name: drain_id, type: weft.shared.DrainId}
+    outcomes:
+      - name: no-such-drain
+        unknown_instance: true
+        error: weft.nodes.DrainNotFound
+      - name: assignments-remain
+        when_related:
+          entity: weft.nodes.Assignment
+          where:
+            all:
+              - node_id == subject.node_id
+              - state == Active
+          exists: true
+        error: weft.nodes.AssignmentsRemain
+      - name: drained
+        moves: weft.nodes.NodeDrain.complete
+        instance: drain_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.nodes.NodeDrained]
+        payload:
+          weft.nodes.NodeDrained:
+            drain_id: input.drain_id
+            node_id: {subject: node_id}
+      - name: not-draining
+        wrong_state: true
+        error: weft.nodes.DrainNotRunning
+
+  # 11. Node control: Drain. Called off by the operator; the node becomes schedulable again
+  # through the cluster domain's record.
+  - name: weft.nodes.CancelDrain
+    naming:
+      display: Cancel a node drain
+    input:
+      - {name: drain_id, type: weft.shared.DrainId}
+    outcomes:
+      - name: no-such-drain
+        unknown_instance: true
+        error: weft.nodes.DrainNotFound
+      - name: cancelled
+        moves: weft.nodes.NodeDrain.cancel
+        instance: drain_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.nodes.NodeDrainCancelled]
+        payload:
+          weft.nodes.NodeDrainCancelled:
+            drain_id: input.drain_id
+            node_id: {subject: node_id}
+      - name: not-draining
+        wrong_state: true
+        error: weft.nodes.DrainNotRunning
+
+  # 11. Node control: Attach. See the OPEN on weft.nodes.Attachment for the reading taken.
+  # UNMAPPED: whether the binding answers a claim of this instance and lies on the assignment's
+  # node is the claims domain's record (6. Resources: Claim -> Binding). It joins more rows than
+  # one guard reads, so it stays a refusal decided outside the model (see binding-not-claimed).
+  # OPEN: a binding whose class shares (shared read-only, shared read-write) may be attached to
+  # several instances. Taken: one attachment per binding at a time until that is decided.
+  - name: weft.nodes.Attach
+    naming:
+      display: Attach a resource binding to an assigned instance
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: binding_id, type: weft.shared.BindingId}
+    outcomes:
+      - name: no-such-assignment
+        when_related: {via: input.assignment_id, exists: false}
+        error: weft.nodes.AssignmentNotFound
+      - name: assignment-not-active
+        when_related: {via: input.assignment_id, predicate: state != Active}
+        error: weft.nodes.AssignmentNotActive
+      - name: binding-attached
+        when_related:
+          entity: weft.nodes.Attachment
+          where:
+            all:
+              - binding_id == input.binding_id
+              - state == Attached
+          exists: true
+        error: weft.nodes.BindingAlreadyAttached
+      # Kept `external`: the fact is in weft, but it joins three rows (Binding -> Claim -> its
+      # `holder` union's instance, and the Binding's node against the Assignment's); a
+      # `when_related` predicate compares one row with the input. Guards on the Binding row alone
+      # (`exists: false`, `state != Active`) were tried on 2026-11-26: no Active claims.Binding
+      # can be arranged (claims.CommitBinding/committed has no scenario), and they cost
+      # Attach/no-such-assignment its scenario, so the refusal covers them for now.
+      - name: binding-not-claimed
+        external: the binding does not answer a claim of the assigned instance, or lies on another node
+        error: weft.nodes.BindingNotClaimed
+      - name: attached
+        creates: weft.nodes.Attachment
+        instance: attachment_id
+        sets:
+          assignment_id: input.assignment_id
+          binding_id: input.binding_id
+          attached_at: {generated: true}
+        emits: [weft.nodes.BindingAttached]
+        payload:
+          weft.nodes.BindingAttached:
+            attachment_id: {generated: true}
+            assignment_id: input.assignment_id
+            binding_id: input.binding_id
+
+  # 11. Node control: Detach.
+  - name: weft.nodes.Detach
+    naming:
+      display: Detach a resource binding from an instance
+    input:
+      - {name: attachment_id, type: weft.shared.AttachmentId}
+    outcomes:
+      - name: no-such-attachment
+        unknown_instance: true
+        error: weft.nodes.AttachmentNotFound
+      - name: detached
+        moves: weft.nodes.Attachment.detach
+        instance: attachment_id
+        sets:
+          detached_at: {generated: true}
+        emits: [weft.nodes.BindingDetached]
+        payload:
+          weft.nodes.BindingDetached:
+            attachment_id: input.attachment_id
+            binding_id: {subject: binding_id}
+      - name: not-attached
+        wrong_state: true
+        error: weft.nodes.AttachmentNotAttached
+
+  # Channels: exec "carried inside the node's session, never a direct connection to the node";
+  # Actors: Deployer "execs", Viewer "reads state, logs and usage". weft-api opens the stream
+  # over the open session of the node the instance is assigned to.
+  # hardening pass 1 D2: the principal is the caller's (`{caller: principal_id}`), no longer an
+  # input; no binding in ess/components.yaml maps OpenExecSession. Which kinds a role permits
+  # (Viewer: Logs only; ClusterOperator: none, "sees no tenant's ... workloads' data") is the
+  # access domain's RoleBinding check, decided before any row is read.
+  # hardening pass 1 D3: `account_id` is the account the stream acts in; it must be the caller's
+  # and the instance's. An ESS caller value cannot be compared with a related row's field, so the
+  # input carries the anchor: caller -> input.account_id -> instance -> assignment.
+  - name: weft.nodes.OpenExecSession
+    naming:
+      display: Open an exec stream into an instance
+    input:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: kind, type: weft.nodes.ExecKind}
+    outcomes:
+      # Kept `external`: the fact is in weft (the access domain's RoleBindings), but it joins the
+      # principal's role bindings, their roles and the instance's account; a `when_related`
+      # predicate compares one row with the input.
+      - name: not-permitted
+        external: the caller's principal holds no role binding that permits this kind of stream into the instance's account
+        before_row: true
+        error: weft.nodes.ExecNotPermitted
+      # hardening pass 1 D3: a stream acts in the caller's account only; another account answers
+      # as a missing assignment.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.nodes.AssignmentNotFound
+      - name: no-such-assignment
+        when_related: {via: input.assignment_id, exists: false}
+        error: weft.nodes.AssignmentNotFound
+      # hardening pass 1 D3: the instance the stream enters must exist (its account is read next);
+      # a missing one answers as a missing assignment.
+      - name: no-such-instance
+        when_related: {via: input.instance_id, exists: false}
+        error: weft.nodes.AssignmentNotFound
+      # ESS answers every existence check before any predicate over a row (ESS-COMMAND-004), so
+      # the session's existence sits here; a node session is the operator's row, not an account's.
+      - name: no-such-session
+        when_related: {via: input.session_id, exists: false}
+        error: weft.nodes.SessionNotFound
+      # hardening pass 1 D3 (disclosure): the instance is tied to the caller's account first among
+      # the row predicates, before any state of a foreign row answers; another account's instance
+      # answers as a missing assignment.
+      - name: instance-of-other-account
+        when_related: {via: input.instance_id, predicate: account_id != input.account_id}
+        error: weft.nodes.AssignmentNotFound
+      # hardening pass 1 D3 (disclosure): the assignment is tied to that instance before its node,
+      # session or state answer; an assignment of another (possibly foreign) instance answers as a
+      # missing one, not InstanceNotAssigned, so its existence is not disclosed.
+      - name: instance-not-assigned
+        when_related: {via: input.assignment_id, predicate: instance_id != input.instance_id}
+        error: weft.nodes.AssignmentNotFound
+      - name: session-of-other-node
+        when_related: {via: input.session_id, predicate: node_id != input.node_id}
+        error: weft.nodes.SessionNodeMismatch
+      - name: session-not-open
+        when_related: {via: input.session_id, predicate: state != Open}
+        error: weft.nodes.SessionNotOpen
+      - name: assignment-on-other-node
+        when_related: {via: input.assignment_id, predicate: node_id != input.node_id}
+        error: weft.nodes.AssignmentNotOnNode
+      - name: assignment-not-active
+        when_related: {via: input.assignment_id, predicate: state != Active}
+        error: weft.nodes.AssignmentNotActive
+      - name: opened
+        creates: weft.nodes.ExecSession
+        instance: exec_id
+        sets:
+          session_id: input.session_id
+          node_id: input.node_id
+          assignment_id: input.assignment_id
+          instance_id: input.instance_id
+          account_id: {caller: account_id}
+          principal_id: {caller: principal_id}
+          kind: input.kind
+          opened_at: {generated: true}
+        emits: [weft.nodes.ExecSessionOpened]
+        payload:
+          weft.nodes.ExecSessionOpened:
+            exec_id: {generated: true}
+            node_id: input.node_id
+            instance_id: input.instance_id
+            principal_id: {caller: principal_id}
+            kind: input.kind
+
+  # Channels: exec. The client ends its stream.
+  - name: weft.nodes.CloseExecSession
+    naming:
+      display: Close an exec stream
+    input:
+      - {name: exec_id, type: weft.shared.ExecSessionId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-exec
+        unknown_instance: true
+        error: weft.nodes.ExecSessionNotFound
+      # hardening pass 1 D3: a stream of another account answers as a missing one, before its
+      # state does.
+      - name: not-callers-account
+        when_subject:
+          predicate: account_id != caller.account_id
+        error: weft.nodes.ExecSessionNotFound
+      - name: closed
+        moves: weft.nodes.ExecSession.close
+        instance: exec_id
+        sets:
+          closed_at: {generated: true}
+          close_reason: input.reason
+        emits: [weft.nodes.ExecSessionEnded]
+        payload:
+          weft.nodes.ExecSessionEnded:
+            exec_id: input.exec_id
+            reason: input.reason
+      - name: already-closed
+        wrong_state: true
+        error: weft.nodes.ExecSessionClosed
+
+  # Channels: exec; 11. Node control: the agent reports what it observed. The node reports that
+  # the stream ended on its side (the process exited, the instance stopped). Only for a stream
+  # on its own node.
+  - name: weft.nodes.ExecEnded
+    naming:
+      display: Record an exec stream ended on the node
+    input:
+      - {name: exec_id, type: weft.shared.ExecSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: String}
+    outcomes:
+      # Kept `external`: the mutual-TLS client certificate is outside weft's records.
+      - name: identity-refused
+        external: the client certificate of the connection names another node than node_id
+        before_row: true
+        error: weft.nodes.NotOwnNode
+      - name: no-such-exec
+        unknown_instance: true
+        error: weft.nodes.ExecSessionNotFound
+      - name: not-own-node
+        when_subject:
+          predicate: node_id != input.node_id
+        error: weft.nodes.NotOwnNode
+      - name: ended
+        moves: weft.nodes.ExecSession.close
+        instance: exec_id
+        sets:
+          closed_at: {generated: true}
+          close_reason: input.reason
+        emits: [weft.nodes.ExecSessionEnded]
+        payload:
+          weft.nodes.ExecSessionEnded:
+            exec_id: input.exec_id
+            reason: input.reason
+      - name: already-closed
+        wrong_state: true
+        error: weft.nodes.ExecSessionClosed
+
+views:
+  # Channels: one long-lived session per node. The ClusterOperator's list of node sessions.
+  - name: weft.nodes.NodeSessions
+    source: weft.nodes.NodeSession
+    consistency: read_your_writes
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: agent_version, type: String}
+      - {name: opened_at, type: Timestamp}
+      - {name: last_seen_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: end_reason, type: Optional<String>}
+      - {name: state, type: weft.nodes.NodeSession.State}
+
+  # Channels: the sessions of one node, past and present.
+  - name: weft.nodes.NodeSessionsOfNode
+    source: weft.nodes.NodeSession
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: agent_version, type: String}
+      - {name: opened_at, type: Timestamp}
+      - {name: last_seen_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: end_reason, type: Optional<String>}
+      - {name: state, type: weft.nodes.NodeSession.State}
+
+  # 11. Node control: the open sessions whose heartbeat is older than the timeout; the input of
+  # LoseNodeSession.
+  - name: weft.nodes.SilentNodeSessions
+    source: weft.nodes.NodeSession
+    consistency: read_your_writes
+    filter: {all: [state == Open, "last_seen_at < now - 30s"]}
+    fields:
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: last_seen_at, type: Timestamp}
+
+  # 11. Node control: Assignment.
+  - name: weft.nodes.Assignments
+    source: weft.nodes.Assignment
+    consistency: read_your_writes
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: placement_decision_id, type: weft.shared.PlacementDecisionId}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: desired, type: weft.nodes.DesiredState}
+      - {name: snapshot_id, type: Optional<weft.shared.SnapshotId>}
+      - {name: assigned_at, type: Timestamp}
+      - {name: lease_renewed_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.nodes.Assignment.State}
+
+  # 11. Node control: what one node is assigned; the NodeAgent's own work list.
+  - name: weft.nodes.AssignmentsOfNode
+    source: weft.nodes.Assignment
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: min_isolation, type: weft.shared.IsolationLevel}
+      - {name: desired, type: weft.nodes.DesiredState}
+      - {name: snapshot_id, type: Optional<weft.shared.SnapshotId>}
+      - {name: lease_renewed_at, type: Timestamp}
+      - {name: state, type: weft.nodes.Assignment.State}
+
+  # 11. Node control: the assignments one instance had, and the node of each.
+  - name: weft.nodes.AssignmentsOfInstance
+    source: weft.nodes.Assignment
+    consistency: read_your_writes
+    params:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    filter: instance_id == param.instance_id
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: desired, type: weft.nodes.DesiredState}
+      - {name: assigned_at, type: Timestamp}
+      - {name: lease_renewed_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.nodes.Assignment.State}
+
+  # 11. Node control: "a lost node's instances are rescheduled after the lease ends". The active
+  # assignments whose lease has ended; the input of ReleaseAssignment.
+  - name: weft.nodes.ExpiredLeases
+    source: weft.nodes.Assignment
+    consistency: read_your_writes
+    filter: {all: [state == Active, "lease_renewed_at < now - 60s"]}
+    fields:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: lease_renewed_at, type: Timestamp}
+
+  # 11. Node control: InstanceObserved. 5. Deployments: "Drift: the difference between the live
+  # release and what the nodes report" reads these.
+  - name: weft.nodes.InstanceObservations
+    source: weft.nodes.InstanceObservation
+    consistency: read_your_writes
+    params:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    filter: instance_id == param.instance_id
+    fields:
+      - {name: observation_id, type: weft.shared.InstanceObservationId}
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: observed, type: weft.nodes.ObservedInstanceState}
+      - {name: exit_code, type: Optional<Integer>}
+      - {name: detail, type: Optional<String>}
+      - {name: observed_at, type: Timestamp}
+      - {name: recorded_at, type: Timestamp}
+
+  # § 14 R2 (line 586) level form, the repair of a missed edge (line 601): the node observed the
+  # instance Stopped and its assignment is still Active. The controller runs EndAssignment
+  # (assignment_id) per row. Observed (the observation) and desired (the assignment's state) sit
+  # on two rows, joined through the observation's reference `assignment_id` (one hop). Several
+  # Stopped observations of one assignment give several rows; EndAssignment answers the second
+  # not-active.
+  - name: weft.nodes.StoppedActiveAssignments
+    source: weft.nodes.InstanceObservation
+    consistency: read_your_writes
+    filter: {all: [observed == Stopped, assignment_id.state == Active]}
+    fields:
+      - {name: observation_id, type: weft.shared.InstanceObservationId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: observed_at, type: Timestamp}
+
+  # 11. Node control: NodeObserved.
+  - name: weft.nodes.NodeObservations
+    source: weft.nodes.NodeObservation
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: observation_id, type: weft.shared.NodeObservationId}
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: capacity, type: List<weft.shared.ResourceAmount>}
+      - {name: isolation, type: weft.shared.IsolationFacts}
+      - {name: observed_at, type: Timestamp}
+      - {name: recorded_at, type: Timestamp}
+
+  # 11. Node control: UsageReported; 12. Metering reads these.
+  - name: weft.nodes.UsageReports
+    source: weft.nodes.UsageReport
+    consistency: read_your_writes
+    params:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    filter: instance_id == param.instance_id
+    fields:
+      - {name: report_id, type: weft.shared.UsageReportId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: amount, type: Integer}
+      - {name: window_start, type: Timestamp}
+      - {name: window_end, type: Timestamp}
+      - {name: recorded_at, type: Timestamp}
+
+  # 11. Node control: Drain.
+  - name: weft.nodes.NodeDrains
+    source: weft.nodes.NodeDrain
+    consistency: read_your_writes
+    fields:
+      - {name: drain_id, type: weft.shared.DrainId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: String}
+      - {name: requested_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.nodes.NodeDrain.State}
+
+  # 11. Node control: Attach, Detach.
+  - name: weft.nodes.AttachmentsOfAssignment
+    source: weft.nodes.Attachment
+    consistency: read_your_writes
+    params:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    filter: assignment_id == param.assignment_id
+    fields:
+      - {name: attachment_id, type: weft.shared.AttachmentId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: binding_id, type: weft.shared.BindingId}
+      - {name: attached_at, type: Timestamp}
+      - {name: detached_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.nodes.Attachment.State}
+
+  # Channels (sketch line 98): exec is "carried inside the node's session"; every stream, open or
+  # closed. Closing a node session closes its streams (SupersedeNodeSession, LoseNodeSession,
+  # CloseNodeSession); this unfiltered view is where that set effect reads back.
+  - name: weft.nodes.ExecSessions
+    source: weft.nodes.ExecSession
+    consistency: read_your_writes
+    fields:
+      - {name: exec_id, type: weft.shared.ExecSessionId}
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: kind, type: weft.nodes.ExecKind}
+      - {name: opened_at, type: Timestamp}
+      - {name: closed_at, type: Optional<Timestamp>}
+      - {name: close_reason, type: Optional<String>}
+      - {name: state, type: weft.nodes.ExecSession.State}
+
+  # Channels: exec. Who opened which stream into an instance, and when.
+  - name: weft.nodes.ExecSessionsOfInstance
+    source: weft.nodes.ExecSession
+    consistency: read_your_writes
+    params:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    filter: instance_id == param.instance_id
+    fields:
+      - {name: exec_id, type: weft.shared.ExecSessionId}
+      - {name: session_id, type: weft.shared.NodeSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: kind, type: weft.nodes.ExecKind}
+      - {name: opened_at, type: Timestamp}
+      - {name: closed_at, type: Optional<Timestamp>}
+      - {name: close_reason, type: Optional<String>}
+      - {name: state, type: weft.nodes.ExecSession.State}

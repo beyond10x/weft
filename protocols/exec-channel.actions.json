@@ -1,0 +1,18 @@
+[
+  {"kind":"input","participant":"cli","name":"exec","payload":{}},
+  {"kind":"deliver","transmission":1},
+  {"kind":"input","participant":"api","name":"allow","payload":{}},
+  {"kind":"deliver","transmission":2},
+  {"kind":"input","participant":"node","name":"started","payload":{}},
+  {"kind":"deliver","transmission":3},
+  {"kind":"deliver","transmission":4},
+  {"kind":"input","participant":"cli","name":"type","payload":{}},
+  {"kind":"deliver","transmission":5},
+  {"kind":"deliver","transmission":6},
+  {"kind":"input","participant":"node","name":"write","payload":{}},
+  {"kind":"deliver","transmission":7},
+  {"kind":"deliver","transmission":8},
+  {"kind":"input","participant":"node","name":"exit","payload":{}},
+  {"kind":"deliver","transmission":9},
+  {"kind":"deliver","transmission":10}
+]

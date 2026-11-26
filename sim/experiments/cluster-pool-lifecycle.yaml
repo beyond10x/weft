@@ -1,0 +1,201 @@
+format: weft-sim-experiment/1
+name: cluster-pool-lifecycle
+summary: >-
+  The lifecycle of a tenant cluster's dedicated pools as the ControlPlane's level steps drive it
+  (ess/components.yaml "Tenant clusters", hardening pass 4). acme's cluster adds three pools; the
+  binding cluster-create-node-pool makes an infrastructure pool for each, carrying the cluster
+  pool's id (`requested_for`). Pool "drain" gets nodes (joined and Ready, and one that never
+  joins), pool "empty" none, and pool "early" is removed at tick 0 while still Requested. Tick 0: the ready
+  step records drain and empty Ready by joining UnlinkedClusterNodePools with TenantNodePools; it
+  records early's infrastructure pool on the removed row, whose ClusterNodePoolRemoved makes the
+  edge delete that empty pool. Fault: both Ready pools are removed. The edge deletes the empty
+  one at once and drops pool-has-nodes for the other; the drain step puts it Draining, the nodes
+  step drains and removes each node, and the delete step deletes the pool once no node is left.
+  Converged: every gap view is empty, every infrastructure pool of the three is Deleted.
+seed: 5
+
+vars:
+  zone: z1
+  per_pool: 2
+  isolation_facts: {kvm_present: true, cgroups_delegated: true, egress_denied: true, gpu_passthrough: false, levels: [Container, MicroVm]}
+  capacity: [{resource_class: cpu, amount: 32}]
+
+chain:
+  - weft.cluster.AddClusterNodePool
+  - weft.cluster.RecordClusterNodePoolReady
+  - weft.cluster.RemoveClusterNodePool
+  - weft.infrastructure.DrainNodePool
+  - weft.infrastructure.DrainNode
+  - weft.infrastructure.RemoveNode
+  - weft.infrastructure.DeleteNodePool
+
+setup:
+  - label: create-cloud
+    command: weft.infrastructure.CreateCloud
+    actor: weft.actors.ClusterOperator
+    input: {name: sim, placement: Hosts, access_mode: Federated, policy: {minimum_isolation: Container}, control_plane: {replicas: 3}}
+    expect: created
+    bind: {cloud_id: cloud_id}
+  - label: declare-zone
+    command: weft.infrastructure.DeclareZone
+    actor: weft.actors.ClusterOperator
+    input: {zone: "${zone}", cloud_id: "${cloud_id}"}
+    expect: declared
+  - label: create-tenant
+    command: weft.accounts.CreateTenant
+    actor: weft.actors.ClusterOperator
+    input: {name: acme}
+    expect: created
+    bind: {tenant_a: tenant_id}
+  - label: create-account
+    command: weft.accounts.CreateAccount
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}"}
+    input: {tenant_id: "${tenant_a}", name: prod}
+    expect: created
+    bind: {account_a: account_id}
+  - label: create-cluster
+    command: weft.cluster.CreateCluster
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cloud_id: "${cloud_id}", name: acme-main, control_plane: Shared, min_isolation: Container, zones: ["${zone}"]}
+    expect: created
+    bind: {cluster_a: cluster_id}
+  - label: add-pool-drain
+    command: weft.cluster.AddClusterNodePool
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", name: drain, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 1, max_size: 8}
+    expect: requested
+    bind: {cnp_drain: cluster_node_pool_id, pool_drain: NodePoolCreated.node_pool_id}
+  - label: add-pool-empty
+    command: weft.cluster.AddClusterNodePool
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", name: empty, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 0, max_size: 8}
+    expect: requested
+    bind: {cnp_empty: cluster_node_pool_id}
+  - label: add-pool-early
+    command: weft.cluster.AddClusterNodePool
+    actor: weft.actors.TenantOwner
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+    input: {account_id: "${account_a}", cluster_id: "${cluster_a}", name: early, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 0, max_size: 8}
+    expect: requested
+    bind: {cnp_early: cluster_node_pool_id}
+  - label: provision-drain
+    repeat: "${per_pool}"
+    command: weft.infrastructure.ProvisionPoolNode
+    actor: weft.actors.ClusterOperator
+    input: {node_pool_id: "${pool_drain}", join_token_expires_at: "2026-01-01T06:00:00Z"}
+    expect: provisioned
+    bind: {"node_${i}": node_id, "token_${i}": join_token}
+  - label: provision-drain-unjoined
+    command: weft.infrastructure.ProvisionPoolNode
+    actor: weft.actors.ClusterOperator
+    input: {node_pool_id: "${pool_drain}", join_token_expires_at: "2026-01-01T06:00:00Z"}
+    expect: provisioned
+  - {label: join-drain, repeat: "${per_pool}", command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_${i}}", join_token: "${token_${i}}"}, expect: joined}
+  - {label: observe-drain, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+
+ticks: 4
+
+faults:
+  - at: 2
+    kind: steps
+    steps:
+      - label: remove-pool-drain
+        command: weft.cluster.RemoveClusterNodePool
+        actor: weft.actors.TenantOwner
+        caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+        input: {cluster_node_pool_id: "${cnp_drain}"}
+      - label: remove-pool-empty
+        command: weft.cluster.RemoveClusterNodePool
+        actor: weft.actors.TenantOwner
+        caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+        input: {cluster_node_pool_id: "${cnp_empty}"}
+  # Before the ready step of tick 0 runs: the pool is removed while still Requested.
+  - at: 0
+    kind: steps
+    steps:
+      - label: remove-pool-early
+        command: weft.cluster.RemoveClusterNodePool
+        actor: weft.actors.TenantOwner
+        caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
+        input: {cluster_node_pool_id: "${cnp_early}"}
+
+controllers:
+  # ready: UnlinkedClusterNodePools joined with TenantNodePools on requested_for; a wrong pair
+  # answers made-for-another-pool, so the first accepted candidate is the pool's own.
+  - name: cluster-pool-ready
+    view: weft.cluster.UnlinkedClusterNodePools
+    filter: {state: Requested}
+    command: weft.cluster.RecordClusterNodePoolReady
+    actor: weft.actors.ControlPlane
+    caller: {tenant_id: "${tenant_a}", account_id: row.account_id}
+    input: {cluster_node_pool_id: row.cluster_node_pool_id, node_pool_id: cand.node_pool_id}
+    each: {view: weft.infrastructure.TenantNodePools}
+  - name: cluster-pool-record-removed
+    view: weft.cluster.UnlinkedClusterNodePools
+    filter: {state: Removed}
+    command: weft.cluster.RecordRemovedClusterNodePool
+    actor: weft.actors.ControlPlane
+    caller: {tenant_id: "${tenant_a}", account_id: row.account_id}
+    input: {cluster_node_pool_id: row.cluster_node_pool_id, node_pool_id: cand.node_pool_id}
+    each: {view: weft.infrastructure.TenantNodePools}
+  # drain
+  - name: cluster-pool-drain
+    view: weft.cluster.RemovedClusterNodePools
+    command: weft.infrastructure.DrainNodePool
+    actor: weft.actors.ControlPlane
+    input: {node_pool_id: row.node_pool_id}
+  # nodes
+  - name: pool-node-drain
+    view: weft.infrastructure.DrainingPoolNodes
+    filter: {state: Ready}
+    command: weft.infrastructure.DrainNode
+    actor: weft.actors.ControlPlane
+    input: {node_id: row.node_id}
+  - name: pool-node-remove-draining
+    view: weft.infrastructure.DrainingPoolNodes
+    filter: {state: Draining}
+    command: weft.infrastructure.RemoveNode
+    actor: weft.actors.ControlPlane
+    input: {node_id: row.node_id}
+  - name: pool-node-remove-provisioning
+    view: weft.infrastructure.DrainingPoolNodes
+    filter: {state: Provisioning}
+    command: weft.infrastructure.RemoveNode
+    actor: weft.actors.ControlPlane
+    input: {node_id: row.node_id}
+  # delete
+  - name: pool-delete
+    view: weft.infrastructure.DrainingNodePools
+    command: weft.infrastructure.DeleteNodePool
+    actor: weft.actors.ControlPlane
+    input: {node_pool_id: row.node_pool_id}
+converge_within: 4
+
+invariants: [no-double-placement, quota-conservation, tenant-isolation]
+
+mutations:
+  - {name: nodes-in-pool, kind: var, point: per_pool, values: [0, 2, 4]}
+  - {name: fault-tick, kind: fault, point: faults.0.at, values: [0, 2]}
+
+search:
+  mode: exhaustive
+  limit: 16
+  weights: {steps-to-converge: -1, unconverged: -20, violations: -5, pattern-matches: -10}
+  gates: [setup-failures]
+
+find:
+  gaps: true
+  patterns:
+    # After the setup and after each tick's controllers: a removed cluster pool whose
+    # infrastructure pool is still Active (neither draining nor deleted) is a pool the lifecycle
+    # left behind.
+    - name: removed-pool-left-active
+      rows:
+        - {view: weft.cluster.ClusterNodePools, params: {account_id: ["${account_a}"]}, as: p, state: Removed}
+        - {view: weft.infrastructure.NodePools, as: n, state: Active}
+      where:
+        - n.requested_for == p.cluster_node_pool_id

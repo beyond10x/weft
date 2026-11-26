@@ -1,0 +1,1839 @@
+# Access: how a user's CLI and a CI script reach the management API, and the audit record of every
+# management call's authorization. Sources: docs/domain-sketch.md "2. Access (the user's side)"
+# (lines 135-147), "Channels" (line 90, CLI -> weft-api), "Actors" (lines 98-114), "9. Cluster"
+# (line 406, a cluster's access mode), "CLI (high level)" (line 486, `weft login`).
+#
+# CliContext (line 139, "one cluster + one account, like a kube context"): client-side state of the
+# CLI. The server does not need it: every call names its account, and the cluster is the API the
+# CLI talks to. It is not modelled here.
+domain: weft.access
+
+summary: >-
+  The identity provider or implicit admin a cluster's access mode needs, CLI login through the browser, API tokens for CI and scripts, and
+  the audited authorization decision of every management call.
+
+naming:
+  wire: weft
+  display: Access
+
+types:
+  # Identifiers, `AccessMode` (lines 141-145) and `Role` (lines 128-129) are weft.shared's
+  # (integration 2026-11-26).
+
+  # Line 90 "authenticated per access mode": how a management call proved who it is.
+  - name: weft.access.CredentialKind
+    kind: enum
+    variants: [LocalSocket, LoginSession, ApiToken, NoCredential]
+
+  # Line 147 "authorized ... and audited".
+  - name: weft.access.Verdict
+    kind: enum
+    variants: [Allowed, Refused]
+
+  # Why a management call was refused. Deny by default: a call is allowed only when a credential
+  # is valid and a role binding grants the command on the account; every other case is one of these.
+  - name: weft.access.RefusalReason
+    kind: enum
+    variants:
+      - AccessNotConfigured
+      - MissingCredential
+      - UnknownCredential
+      - ExpiredCredential
+      - RevokedCredential
+      - OutsideTokenAccount
+      - OutsideTokenRole
+      - NoRoleBinding
+
+  # Design ci-cd-support § Stage 1.1 and open question 1 ("a claim map per `TrustedIssuer`",
+  # default taken): which claim of the issuer's ID token carries each fact a FederationRule
+  # matches. GitHub and GitLab name them differently. Claim names are to be checked against each
+  # forge's token documentation.
+  - name: weft.access.ClaimMap
+    kind: struct
+    fields:
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: ref_protected, type: String}
+      - {name: workflow, type: String}
+      - {name: environment, type: String}
+      - {name: run_id, type: String}
+
+  # Design ci-cd-support § Stage 1.1 "ref or ref pattern". `Exact`: the token's ref equals the
+  # rule's. `Prefix`: the token's ref starts with the rule's (a tag pattern `refs/tags/v`).
+  # OPEN: which pattern language ("ref pattern"); a glob is not a guard ESS checks. Taken: exact
+  # or prefix.
+  - name: weft.access.RefMatch
+    kind: enum
+    variants: [Exact, Prefix]
+
+entities:
+  # Lines 141-145: what access needs beside a cluster's AccessMode: for `federated`, its external
+  # identity provider; for `single-user`, its implicit admin.
+  # Decided (integration 2026-11-26): the access mode is weft.infrastructure.Cloud's `access_mode`, set
+  # when the cluster is created and never changed; this row stores no copy of it and reads it
+  # through the `cluster` relation. The settings here are configured once, like the mode.
+  - name: weft.access.CloudAccess
+    naming:
+      summary: The identity provider or implicit admin of one cluster, by its access mode.
+    identity:
+      name: cloud_id
+      type: weft.shared.CloudId
+    fields:
+      # The OpenID issuer URL of the external identity provider; absent in `single-user`.
+      - name: issuer
+        type: Optional<String>
+      # The client identifier weft-api is registered under at that provider.
+      - name: client_id
+        type: Optional<String>
+      # `single-user`: the one implicit admin every call on the local socket acts as. That the
+      # socket is readable only by its owner (line 142-143) is the host's file permission, outside
+      # this model.
+      # OPEN: which principal is the implicit admin, and which domain creates it (accounts)?
+      # Taken: the operator names an existing principal when configuring the cluster.
+      - name: implicit_admin_id
+        type: Optional<weft.shared.PrincipalId>
+    relations:
+      # A cluster outlives its access settings' link; no command of this domain deletes a cluster.
+      - name: cluster
+        kind: references
+        target: weft.infrastructure.Cloud
+        cardinality: one
+        via: cloud_id
+      - name: implicit_admin
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: implicit_admin_id
+    lifecycle:
+      initial: Configured
+      states: [Configured]
+      terminal: [Configured]
+
+  # Lines 144-145 (`federated`: CLI login through the browser, device flow, tokens from an external
+  # identity provider; like `fly auth login`) and line 486 (`weft login`, federated clusters only).
+  # weft-api runs the device flow: the CLI starts a login and polls with its device code, the user
+  # signs in at the identity provider in the browser, and weft-api approves the login for the
+  # principal the provider's identity maps to. The CLI then collects a session token once.
+  # OPEN: does the CLI hold a weft session token, or the identity provider's own tokens? Taken: a
+  # weft session token bound to this login; the provider's tokens stay with weft-api, unstored.
+  # OPEN: how long a device code and an approved session live. Taken: the implementation sets
+  # `expires_at` from a cluster setting the sketch does not name; nothing here extends it.
+  # Synthesis (2026-11-26): `user_code`, `device_code_digest` and `expires_at` are minted by
+  # weft-api (RFC 8628: the server issues both codes and their lifetime), so no arranged row
+  # satisfies a guard over them, and ApproveLogin, DenyLogin, CollectLoginToken, ExpireLogin and
+  # RevokeLogin get no synthesized scenario past their unknown-id branch. They stay minted: a
+  # client-chosen device code or expiry would weaken the login. The cover is a synthesis seed
+  # (an authored CliLogin setup row, `--synthesis-seed`).
+  - name: weft.access.CliLogin
+    naming:
+      summary: One CLI login of a federated cluster, from device code to session end.
+    identity:
+      name: login_id
+      type: weft.shared.CliLoginId
+    fields:
+      - name: cloud_id
+        type: weft.shared.CloudId
+      # The code the user confirms in the browser. Not a credential on its own: approval also
+      # needs the user's sign-in at the identity provider.
+      - name: user_code
+        type: String
+      # The device code itself is returned once by StartLogin and never stored; this is its digest
+      # (base64url of SHA-256 of its ASCII text).
+      - name: device_code_digest
+        type: String
+      # While Pending: when the device code expires. Once Approved: when the session ends.
+      - name: expires_at
+        type: Timestamp
+      # The principal the identity provider's identity maps to; set by approval.
+      - name: principal_id
+        type: Optional<weft.shared.PrincipalId>
+      # Whether the CLI has collected the session token. The token is returned once.
+      - name: token_issued
+        type: Boolean
+      # The digest of the session token, set when it is issued; the token itself is never stored.
+      - name: token_digest
+        type: Optional<String>
+    relations:
+      - name: cloud_access
+        kind: references
+        target: weft.access.CloudAccess
+        cardinality: one
+        via: cloud_id
+      - name: principal
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: principal_id
+    # OPEN: the browser user refusing the login (RFC 8628 `access_denied`, from memory, not
+    # checked) is not in the brief's state list. Taken: a Denied state, so a refused login ends.
+    lifecycle:
+      initial: Pending
+      states: [Pending, Approved, Denied, Expired, Revoked]
+      terminal: [Denied, Expired, Revoked]
+      transitions:
+        - name: approve
+          from: [Pending]
+          to: Approved
+        - name: deny
+          from: [Pending]
+          to: Denied
+        - name: expire
+          from: [Pending, Approved]
+          to: Expired
+        # A pending login is not revoked: it expires, or the browser user denies it.
+        - name: revoke
+          from: [Approved]
+          to: Revoked
+
+  # Line 146 `ApiToken`: for CI and scripts; scoped to one account and a role; expires. Line 108
+  # `Automation`: an API token acting with one role in one account.
+  # The secret is returned once by CreateApiToken and never again; only its digest is stored, and
+  # no view or event carries either.
+  # OPEN: does a token scoped to an account reach that account's sub-accounts (a RoleBinding does,
+  # lines 128-129)? Taken: no; the named account only.
+  - name: weft.access.ApiToken
+    naming:
+      summary: A credential for CI and scripts, one role in one account until it expires.
+    identity:
+      name: api_token_id
+      type: weft.shared.ApiTokenId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: role
+        type: weft.shared.Role
+      # A label for people; not a credential.
+      - name: name
+        type: String
+      # The principal that created the token. Its role on the account bounds the token's role.
+      - name: created_by
+        type: weft.shared.PrincipalId
+      - name: expires_at
+        type: Timestamp
+      # base64url of SHA-256 of the secret's ASCII text.
+      - name: secret_digest
+        type: String
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: creator
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: created_by
+    lifecycle:
+      initial: Active
+      states: [Active, Expired, Revoked]
+      terminal: [Expired, Revoked]
+      transitions:
+        - name: expire
+          from: [Active]
+          to: Expired
+        - name: revoke
+          from: [Active]
+          to: Revoked
+
+  # Line 147: "Every management call is authorized against RoleBindings and audited." One row per
+  # management call: who, with which credential, which command, on which account, and the verdict.
+  # The decision itself is taken by weft-api from the credential (this domain) and the role
+  # bindings (weft.accounts, lines 128-129); this row records it. Append-only: no command changes or
+  # removes a row.
+  # In `single-user` every call on the local socket is the implicit admin's and is allowed (line
+  # 142-143); it is still recorded, with credential LocalSocket.
+  # OPEN: how long audit rows are kept, and who may export them. Taken: kept; read through the
+  # views below only.
+  # OPEN: is the input of a call recorded? Taken: no; a call's input may hold a secret value
+  # (line 386: a value never appears in logs or events).
+  - name: weft.access.AuthorizationDecision
+    naming:
+      summary: The audited authorization decision of one management call.
+    identity:
+      name: decision_id
+      type: weft.shared.AuthorizationDecisionId
+    fields:
+      - name: cloud_id
+        type: weft.shared.CloudId
+      # Absent when no credential named a principal.
+      - name: principal_id
+        type: Optional<weft.shared.PrincipalId>
+      - name: credential
+        type: weft.access.CredentialKind
+      - name: login_id
+        type: Optional<weft.shared.CliLoginId>
+      - name: api_token_id
+        type: Optional<weft.shared.ApiTokenId>
+      # The qualified name of the management command, e.g. `weft.access.CreateApiToken`.
+      - name: command
+        type: String
+      # Absent for a call on the cluster itself (node pools, price lists: ClusterOperator).
+      - name: account_id
+        type: Optional<weft.shared.AccountId>
+      # The role that allowed the call; absent when refused.
+      - name: role
+        type: Optional<weft.shared.Role>
+      - name: verdict
+        type: weft.access.Verdict
+      - name: reason
+        type: Optional<weft.access.RefusalReason>
+      - name: decided_at
+        type: Timestamp
+    relations:
+      - name: login
+        kind: references
+        target: weft.access.CliLogin
+        cardinality: one
+        via: login_id
+      - name: api_token
+        kind: references
+        target: weft.access.ApiToken
+        cardinality: one
+        via: api_token_id
+      - name: cloud_access
+        kind: references
+        target: weft.access.CloudAccess
+        cardinality: one
+        via: cloud_id
+      - name: principal
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: principal_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # Design ci-cd-support § Stage 1.1: "`TrustedIssuer`: an OIDC issuer weft accepts (issuer URL,
+  # JWKS location, audience), per tenant." Default deny: a token of an issuer no active row names
+  # is refused (ExchangeFederatedToken, unknown-issuer).
+  # OPEN: the design gives no end of a trusted issuer. Taken: Withdrawn, refused while an active
+  # federation rule names it.
+  - name: weft.access.TrustedIssuer
+    naming:
+      summary: An OIDC issuer whose ID tokens a tenant accepts for federated exchange.
+    identity:
+      name: trusted_issuer_id
+      type: weft.shared.TrustedIssuerId
+    fields:
+      - name: tenant_id
+        type: weft.shared.TenantId
+      # The token's `iss` claim must equal it exactly (`https://token.actions.githubusercontent.com`).
+      - name: issuer_url
+        type: String
+      # Where the issuer's signing keys are read.
+      - name: jwks_url
+        type: String
+      # The token's `aud` claim must equal it.
+      - name: audience
+        type: String
+      - name: claim_map
+        type: weft.access.ClaimMap
+    relations:
+      # "per tenant": one tenant per issuer row; a tenant has many. The tenant outlives the link.
+      # UNMAPPED: whether a tenant owns its trusted issuers (removed with the tenant) or only
+      # references them; no source says. Written as references.
+      - name: tenant
+        kind: references
+        target: weft.accounts.Tenant
+        cardinality: one
+        via: tenant_id
+    lifecycle:
+      initial: Active
+      states: [Active, Withdrawn]
+      terminal: [Withdrawn]
+      transitions:
+        - name: withdraw
+          from: [Active]
+          to: Withdrawn
+
+  # Design ci-cd-support § Stage 1.1: "`FederationRule`: which tokens of an issuer become which weft
+  # identity. It matches claims (repository, ref or ref pattern, workflow, environment) and grants
+  # one role in one account, limited to named formations and environments, with a token lifetime
+  # cap (default 15 min)." § Security: "A federation rule names a repository exactly; a wildcard
+  # over repositories is refused. A rule for a production environment requires a protected ref."
+  - name: weft.access.FederationRule
+    naming:
+      summary: Which ID tokens of a trusted issuer become one role in one account, and for how long.
+    identity:
+      name: federation_rule_id
+      type: weft.shared.FederationRuleId
+    fields:
+      - name: trusted_issuer_id
+        type: weft.shared.TrustedIssuerId
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: role
+        type: weft.shared.Role
+      # Exactly as the forge names it; no wildcard (CreateFederationRule, wildcard-repository).
+      - name: repository
+        type: String
+      - name: ref
+        type: String
+      - name: ref_match
+        type: weft.access.RefMatch
+      # OPEN: an absent workflow or forge environment matches any; a present one must equal the
+      # claim. Taken as written; the repository stays exact either way.
+      - name: workflow
+        type: Optional<String>
+      - name: forge_environment
+        type: Optional<String>
+      # The token's `ref_protected` claim (GitHub and GitLab both issue one, to be checked) must
+      # be true when this is set.
+      - name: require_protected_ref
+        type: Boolean
+      # UNMAPPED: "a rule for a production environment": weft.formations.Environment has no
+      # production marker, and this layer may not name it. Taken: the rule's creator declares it,
+      # and a production rule must require a protected ref.
+      - name: production
+        type: Boolean
+      # UNMAPPED: "limited to named formations and environments". FormationId and EnvironmentId
+      # name entities of weft.formations (layer 4); this layer (2) may not store them. Taken: the
+      # names as text, matched by weft-api when it authorizes a call made with the exchanged
+      # token. Whether the limit moves to a record of layer 4 or above is open for the owner.
+      - name: formation_names
+        type: List<String>
+      - name: environment_names
+        type: List<String>
+      - name: token_lifetime_seconds
+        type: Integer
+      - name: created_by
+        type: weft.shared.PrincipalId
+    relations:
+      # A rule names one issuer; an issuer has many rules. WithdrawTrustedIssuer refuses while an
+      # active rule names it, so the issuer outlives its rules' link.
+      - name: trusted_issuer
+        kind: references
+        target: weft.access.TrustedIssuer
+        cardinality: one
+        via: trusted_issuer_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: creator
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: created_by
+    invariants:
+      - token_lifetime_seconds > 0
+    # OPEN: what a close of the rule's account does to its rules (section 14 R6 names tokens).
+    # Taken: nothing here; the exchange of a closed account is refused by weft-api's
+    # authorization of the exchanged token. A many-rows WithdrawAccountFederationRules like
+    # RevokeAccountApiTokens is the candidate.
+    lifecycle:
+      initial: Active
+      states: [Active, Withdrawn]
+      terminal: [Withdrawn]
+      transitions:
+        - name: withdraw
+          from: [Active]
+          to: Withdrawn
+
+  # Design ci-cd-support § Stage 1.1: "Each exchange is recorded (who, which rule, which claims) as
+  # an authorization record." One row per granted exchange; append-only.
+  # UNMAPPED: whether the exchanged token is a weft.access.ApiToken row (so a call made with it is
+  # authorized like any API token) or its own credential kind. ApiToken needs a creating
+  # principal, which an exchange has not, and AuthorizationDecision's CredentialKind has no
+  # federated kind; neither is changed here. Taken: the token's digest and expiry live on this
+  # record. The owner decides how RecordAuthorization names it.
+  # OPEN: a refused exchange changes nothing, so it leaves no row here. Whether refused attempts
+  # are recorded (a command of their own, like RecordAuthorization) is open.
+  # OPEN: may an exchanged token be revoked before it expires (within token_lifetime_seconds)?
+  # Taken: no.
+  - name: weft.access.FederatedExchange
+    naming:
+      summary: The record of one granted exchange of a CI job's ID token for a short-lived weft token.
+    identity:
+      name: federated_exchange_id
+      type: weft.shared.FederatedExchangeId
+    fields:
+      - name: trusted_issuer_id
+        type: weft.shared.TrustedIssuerId
+      - name: federation_rule_id
+        type: weft.shared.FederationRuleId
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: role
+        type: weft.shared.Role
+      # The token's claims, as matched.
+      - name: subject
+        type: String
+      - name: repository
+        type: String
+      - name: ref
+        type: String
+      - name: workflow
+        type: String
+      - name: forge_environment
+        type: Optional<String>
+      - name: run_id
+        type: String
+      # hardening pass 1 D5: the token's `ref_protected` claim, as matched. A command that deploys
+      # with the exchanged token into a protected environment (weft.formations Environment.protected)
+      # refuses when this is false; that guard is the deploying domain's.
+      - name: ref_protected
+        type: Boolean
+      # hardening pass 1 D4: the rule's "limited to named formations and environments", copied
+      # from the rule at exchange. Read by no guard of this layer (it may not name formations); the
+      # deploying commands (weft.deployments CreatePlan, StartRelease) are to hold them.
+      - name: formation_names
+        type: List<String>
+      - name: environment_names
+        type: List<String>
+      - name: exchanged_at
+        type: Timestamp
+      - name: expires_at
+        type: Timestamp
+      # base64url of SHA-256 of the returned token's ASCII text; the token itself is never stored.
+      - name: token_digest
+        type: String
+    relations:
+      - name: trusted_issuer
+        kind: references
+        target: weft.access.TrustedIssuer
+        cardinality: one
+        via: trusted_issuer_id
+      - name: federation_rule
+        kind: references
+        target: weft.access.FederationRule
+        cardinality: one
+        via: federation_rule_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+errors:
+  - name: weft.access.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.access.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.access.AlreadyConfigured
+    summary: The cluster's access settings are already set; they are set once.
+  - name: weft.access.IdentityProviderMissing
+    summary: A `federated` cluster needs an identity provider issuer and client identifier.
+  - name: weft.access.ImplicitAdminMissing
+    summary: A `single-user` cluster needs the principal that is its implicit admin.
+  - name: weft.access.AccessNotConfigured
+    summary: The cluster's access settings are not configured yet, so no call is let in.
+  - name: weft.access.LoginNotAvailable
+    summary: The cluster is `single-user`; it has no login.
+  - name: weft.access.MixedModeSettings
+    summary: >-
+      A setting of the other access mode was given: an identity provider for `single-user`, or an
+      implicit admin for `federated`.
+  - name: weft.access.IdentityRejected
+    summary: The identity provider's token failed its check; nothing changed.
+  - name: weft.access.UnknownPrincipal
+    summary: The signed-in identity maps to no active principal of this cluster; no session.
+  - name: weft.access.UserCodeMismatch
+    summary: The user code does not belong to this login.
+  - name: weft.access.DeviceCodeMismatch
+    summary: The device code does not belong to this login; nothing about the login is disclosed.
+  - name: weft.access.AuthorizationPending
+    summary: The login is not approved yet; poll again.
+  - name: weft.access.DeniedLogin
+    summary: The browser user denied this login.
+  - name: weft.access.ExpiredLogin
+    summary: The login's device code or session has expired.
+  - name: weft.access.RevokedLogin
+    summary: The login's session was revoked.
+  - name: weft.access.TokenAlreadyIssued
+    summary: The session token of this login was collected already; it is returned once.
+  - name: weft.access.NotYetExpired
+    summary: The record's expiry time has not passed; nothing changed.
+  - name: weft.access.NotOwnLogin
+    summary: The login belongs to another principal; nothing changed.
+  - name: weft.access.ExpiryNotInFuture
+    summary: The token's expiry is not in the future.
+  - name: weft.access.LifetimeTooLong
+    summary: The token's expiry lies beyond the cluster's longest token lifetime.
+  - name: weft.access.TokenCannotCreateToken
+    summary: A call made with an API token may not create another API token.
+  - name: weft.access.RoleExceedsCaller
+    summary: >-
+      The caller does not hold the requested role, or a stronger one, on the account or an account
+      above it; a token never carries more than its creator holds.
+  - name: weft.access.AccountUnavailable
+    summary: The account does not exist or is closed.
+  - name: weft.access.AccountNotClosed
+    summary: The account does not exist or is still open, so no API token was revoked.
+  - name: weft.access.InconsistentDecision
+    summary: >-
+      An allowed decision names a refusal reason or no role, or a refused one names a role or no
+      reason; nothing was recorded.
+  - name: weft.access.CredentialMismatch
+    summary: >-
+      The credential kind and the login or token named disagree; nothing was recorded.
+  - name: weft.access.InsecureIssuer
+    summary: The issuer or its key location is not an `https://` URL, or the audience is empty.
+  - name: weft.access.DuplicateIssuer
+    summary: The tenant already trusts an active issuer with this URL.
+  - name: weft.access.IssuerInUse
+    summary: An active federation rule still names this issuer; withdraw the rules first.
+  - name: weft.access.IssuerUnavailable
+    summary: The trusted issuer does not exist or is withdrawn; no rule was created.
+  - name: weft.access.WildcardRepository
+    summary: A federation rule names one repository exactly; a wildcard or empty name is refused.
+  - name: weft.access.EmptyRef
+    summary: A federation rule names a ref or a ref prefix; an empty one would match every ref.
+  - name: weft.access.ProductionRuleUnprotectedRef
+    summary: A rule for a production environment must require a protected ref.
+  - name: weft.access.TokenLifetimeOutOfRange
+    summary: The token lifetime is not positive or exceeds the bound.
+  - name: weft.access.UnknownIssuer
+    summary: The ID token's issuer is not an active trusted issuer of the rule's tenant.
+  - name: weft.access.BadAudience
+    summary: The ID token's audience is not the trusted issuer's audience.
+  - name: weft.access.ExpiredIdToken
+    summary: The ID token has expired.
+  - name: weft.access.IdTokenSignatureInvalid
+    summary: The ID token's signature does not verify against the issuer's published keys.
+  - name: weft.access.NoMatchingRule
+    summary: >-
+      No active federation rule matches the token's claims for the requested account and role;
+      default deny.
+
+events:
+  # The mode is weft.cluster's; its own event at cluster creation carries it.
+  - name: weft.access.AccessConfigured
+    fields:
+      - {name: cloud_id, type: weft.shared.CloudId}
+
+  # No event of this domain carries a device code, a user code or a token.
+  - name: weft.access.LoginStarted
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: cloud_id, type: weft.shared.CloudId}
+
+  - name: weft.access.LoginApproved
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+
+  - name: weft.access.LoginDenied
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+
+  - name: weft.access.LoginTokenIssued
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+
+  - name: weft.access.LoginExpired
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+
+  - name: weft.access.LoginRevoked
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+
+  - name: weft.access.ApiTokenCreated
+    fields:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: expires_at, type: Timestamp}
+
+  - name: weft.access.ApiTokenExpired
+    fields:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+
+  - name: weft.access.ApiTokenRevoked
+    fields:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+
+  # One per RevokeAccountApiTokens; each token it revoked also gets its own ApiTokenRevoked.
+  - name: weft.access.AccountApiTokensRevoked
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: revoked, type: Integer}
+
+  - name: weft.access.CallAuthorized
+    fields:
+      - {name: decision_id, type: weft.shared.AuthorizationDecisionId}
+      - {name: command, type: String}
+      - {name: verdict, type: weft.access.Verdict}
+
+  - name: weft.access.TrustedIssuerRegistered
+    fields:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: issuer_url, type: String}
+
+  - name: weft.access.TrustedIssuerWithdrawn
+    fields:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+
+  - name: weft.access.FederationRuleCreated
+    fields:
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: repository, type: String}
+      - {name: created_by, type: weft.shared.PrincipalId}
+
+  - name: weft.access.FederationRuleWithdrawn
+    fields:
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+
+  # No event carries the ID token or the exchanged token.
+  - name: weft.access.FederatedTokenExchanged
+    fields:
+      - {name: federated_exchange_id, type: weft.shared.FederatedExchangeId}
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: repository, type: String}
+      - {name: run_id, type: String}
+
+commands:
+  # Lines 141-145, line 406. A ClusterOperator sets, once, what the cluster's access mode needs.
+  # The mode itself is weft.infrastructure.Cloud's `access_mode`, fixed when the cluster was created;
+  # that `single-user` needs the `local` placement is weft.cluster's guard at creation.
+  - name: weft.access.ConfigureAccess
+    naming:
+      display: Configure a cluster's access settings
+    input:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: issuer, type: Optional<String>}
+      - {name: client_id, type: Optional<String>}
+      - {name: implicit_admin_id, type: Optional<weft.shared.PrincipalId>}
+    outcomes:
+      - name: no-such-cluster
+        when_related: {via: input.cloud_id, exists: false}
+        error: weft.access.NotFound
+      # The mode is read from the weft.infrastructure.Cloud row the input names (`via:` resolves the
+      # CloudId to that entity here, since this command creates the ClusterAccess row). Until
+      # 2026-11-26 these read Cluster by `entity:`/`where: cloud_id == input.cloud_id`, which
+      # synthesis cannot arrange (CreateCluster mints the id), so no branch had a scenario.
+      - name: provider-missing
+        when:
+          any:
+            - not defined(issuer)
+            - not defined(client_id)
+        when_related: {via: input.cloud_id, predicate: access_mode == Federated}
+        error: weft.access.IdentityProviderMissing
+      - name: admin-missing
+        when: not defined(implicit_admin_id)
+        when_related: {via: input.cloud_id, predicate: access_mode == SingleUser}
+        error: weft.access.ImplicitAdminMissing
+      - name: provider-in-single-user
+        when:
+          any: [defined(issuer), defined(client_id)]
+        when_related: {via: input.cloud_id, predicate: access_mode == SingleUser}
+        error: weft.access.MixedModeSettings
+      - name: admin-in-federated
+        when: defined(implicit_admin_id)
+        when_related: {via: input.cloud_id, predicate: access_mode == Federated}
+        error: weft.access.MixedModeSettings
+      - name: already-configured
+        when_related:
+          entity: weft.access.CloudAccess
+          where: cloud_id == input.cloud_id
+          exists: true
+        error: weft.access.AlreadyConfigured
+      # Synthesis (ess 0.99.2) finds no input and Cluster row that pass every guard above
+      # (ESS-SYNTH-003, one candidate tried); split per mode, it answers ESS-SYNTH-008 and asks
+      # for an authored scenario. So `configured`, and every route through a ClusterAccess row
+      # (StartLogin and the login flow, RecordAuthorization), needs an authored scenario or a seed.
+      - name: configured
+        creates: weft.access.CloudAccess
+        instance: cloud_id
+        sets:
+          issuer: input.issuer
+          client_id: input.client_id
+          implicit_admin_id: input.implicit_admin_id
+        emits: [weft.access.AccessConfigured]
+        payload:
+          weft.access.AccessConfigured:
+            cloud_id: input.cloud_id
+
+  # Lines 144-145, line 486 `weft login`. Called before the caller has any credential: the CLI of
+  # whoever is about to log in.
+  # The verification page is weft-api's own; the CLI knows its address, so it is not returned.
+  - name: weft.access.StartLogin
+    naming:
+      display: Start a CLI login
+    input:
+      - {name: cloud_id, type: weft.shared.CloudId}
+    response:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: device_code, type: String}
+      - {name: user_code, type: String}
+      - {name: expires_at, type: Timestamp}
+    outcomes:
+      - name: not-configured
+        when_related:
+          via: input.cloud_id
+          exists: false
+        error: weft.access.AccessNotConfigured
+      # Line 143: `single-user` has no login. The ClusterAccess row tells the mode: ConfigureAccess
+      # stores an implicit admin exactly when weft.infrastructure.Cloud's `access_mode` is SingleUser
+      # (admin-missing, admin-in-federated), and the mode and the row never change. A guard
+      # reading Cluster by `entity:`/`where:` had no scenario (its identity is minted by
+      # CreateCluster), and `when_related` cannot read through the `cluster` relation.
+      - name: no-login-in-single-user
+        when_related: {via: input.cloud_id, predicate: defined(implicit_admin_id)}
+        error: weft.access.LoginNotAvailable
+      - name: started
+        creates: weft.access.CliLogin
+        instance: login_id
+        returns: true
+        one_time_response: [device_code]
+        sets:
+          cloud_id: input.cloud_id
+          user_code: {generated: true}
+          device_code_digest: {generated: true}
+          expires_at: {generated: true}
+          token_issued: false
+        emits: [weft.access.LoginStarted]
+        payload:
+          weft.access.LoginStarted:
+            login_id: {response: login_id}
+            cloud_id: input.cloud_id
+
+  # Lines 144-145: the user signs in at the identity provider in the browser and confirms the user
+  # code; weft-api then approves the login for the principal that identity maps to.
+  # `principal_id` is the principal weft-api resolved from the provider's verified identity; the
+  # mapping of a provider subject to a principal is weft.accounts' (line 127).
+  - name: weft.access.ApproveLogin
+    naming:
+      display: Approve a CLI login in the browser
+    input:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: user_code, type: String}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+    outcomes:
+      - name: identity-rejected
+        external: >-
+          the identity provider's token fails its check (signature, issuer, audience or expiry)
+        before_row: true
+        error: weft.access.IdentityRejected
+      - name: no-such-login
+        unknown_instance: true
+        error: weft.access.NotFound
+      - name: user-code-mismatch
+        when_subject:
+          predicate: user_code != input.user_code
+        error: weft.access.UserCodeMismatch
+      - name: code-expired
+        when_subject:
+          predicate: expires_at <= now
+        error: weft.access.ExpiredLogin
+      # Deny by default: a provider identity that maps to no principal, to a disabled one, or to a
+      # principal that is not a user (only a user has a provider subject, weft.accounts
+      # Principal.subject) gets no session. Read from the weft.accounts.Principal row
+      # `principal_id` names; before 2026-11-26 this was one `external:` refusal.
+      - name: unknown-principal
+        when_related: {via: input.principal_id, exists: false}
+        error: weft.access.UnknownPrincipal
+      - name: principal-disabled
+        when_related: {via: input.principal_id, predicate: state != Active}
+        error: weft.access.UnknownPrincipal
+      - name: principal-not-user
+        when_related: {via: input.principal_id, predicate: kind != user}
+        error: weft.access.UnknownPrincipal
+      - name: approved
+        moves: weft.access.CliLogin.approve
+        instance: login_id
+        sets:
+          principal_id: input.principal_id
+          expires_at: {generated: true}
+        emits: [weft.access.LoginApproved]
+        payload:
+          weft.access.LoginApproved:
+            login_id: input.login_id
+            principal_id: input.principal_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # OPEN: RFC 8628 lets the browser user refuse a login (`access_denied`, from memory, not checked);
+  # the sketch does not say. Taken: a signed-in browser user may deny it, which ends it.
+  - name: weft.access.DenyLogin
+    naming:
+      display: Deny a CLI login in the browser
+    input:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: user_code, type: String}
+    outcomes:
+      - name: identity-rejected
+        external: >-
+          the identity provider's token fails its check (signature, issuer, audience or expiry)
+        before_row: true
+        error: weft.access.IdentityRejected
+      - name: no-such-login
+        unknown_instance: true
+        error: weft.access.NotFound
+      - name: user-code-mismatch
+        when_subject:
+          predicate: user_code != input.user_code
+        error: weft.access.UserCodeMismatch
+      - name: denied
+        moves: weft.access.CliLogin.deny
+        instance: login_id
+        emits: [weft.access.LoginDenied]
+        payload:
+          weft.access.LoginDenied:
+            login_id: input.login_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Lines 144-145: the CLI polls with its device code and, once the login is approved, collects
+  # the session token. The token is returned once; a second collection is refused.
+  - name: weft.access.CollectLoginToken
+    naming:
+      display: Collect the session token of a CLI login
+    input:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: device_code, type: String}
+    response:
+      - {name: session_token, type: String}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: expires_at, type: Timestamp}
+    outcomes:
+      - name: no-such-login
+        unknown_instance: true
+        error: weft.access.NotFound
+      # Checked before any state is disclosed: a wrong device code learns nothing.
+      - name: device-code-mismatch
+        when_subject:
+          predicate: device_code_digest != base64url(sha256(ascii(input.device_code)))
+        error: weft.access.DeviceCodeMismatch
+      - name: pending
+        when_subject_state: Pending
+        error: weft.access.AuthorizationPending
+      - name: denied
+        when_subject_state: Denied
+        error: weft.access.DeniedLogin
+      - name: expired
+        when_subject_state: Expired
+        error: weft.access.ExpiredLogin
+      - name: revoked
+        when_subject_state: Revoked
+        error: weft.access.RevokedLogin
+      - name: already-issued
+        when_subject:
+          predicate: token_issued == true
+        error: weft.access.TokenAlreadyIssued
+      # `token_digest` is the digest of the returned `session_token`; the token is never stored.
+      - name: issued
+        updates: weft.access.CliLogin
+        instance: login_id
+        returns: true
+        one_time_response: [session_token]
+        sets:
+          token_issued: true
+          token_digest: {generated: true, present: true}
+        emits: [weft.access.LoginTokenIssued]
+        payload:
+          weft.access.LoginTokenIssued:
+            login_id: input.login_id
+
+  # OPEN: which actor runs expiry; the sketch's actor list has no clock of weft-api. Taken: weft-api
+  # itself, once `expires_at` has passed.
+  - name: weft.access.ExpireLogin
+    naming:
+      display: Expire a CLI login
+    input:
+      - {name: login_id, type: weft.shared.CliLoginId}
+    outcomes:
+      - name: no-such-login
+        unknown_instance: true
+        error: weft.access.NotFound
+      - name: not-yet-expired
+        when_subject:
+          predicate: expires_at > now
+        error: weft.access.NotYetExpired
+      - name: expired
+        moves: weft.access.CliLogin.expire
+        instance: login_id
+        emits: [weft.access.LoginExpired]
+        payload:
+          weft.access.LoginExpired:
+            login_id: input.login_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Logout (`weft logout`, not in the sketch's CLI list): its own principal ends the session.
+  # `caller_id` is the calling principal. OPEN: the integrator replaces it with `{caller: …}` once
+  # actors declare a principal attribute (ess/16 caller values); until then it is an input.
+  # hardening pass 1 D2: still an input. ClusterOperator may send this and declares no attributes,
+  # so the command cannot read the caller (ESS: every actor of a command must declare it). The same
+  # holds for ApproveLogin's `principal_id` and keeps DenyLogin without a caller tie.
+  # OPEN: may a TenantOwner or AccountAdmin revoke another principal's login? Taken: no; disabling
+  # the principal (weft.accounts) is that lever.
+  - name: weft.access.RevokeLogin
+    naming:
+      display: Revoke a CLI login
+    input:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: caller_id, type: weft.shared.PrincipalId}
+    outcomes:
+      - name: no-such-login
+        unknown_instance: true
+        error: weft.access.NotFound
+      # hardening pass 4: a pending login has no principal yet, so it is nobody's own login and
+      # answers NotOwnLogin before its state is read; ESS 0.99.2 reads `!=` over an absent Optional
+      # as Unknown.
+      - name: not-own-login
+        when_subject:
+          predicate: {any: [not defined(principal_id), principal_id != input.caller_id]}
+        error: weft.access.NotOwnLogin
+      - name: revoked
+        moves: weft.access.CliLogin.revoke
+        instance: login_id
+        emits: [weft.access.LoginRevoked]
+        payload:
+          weft.access.LoginRevoked:
+            login_id: input.login_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Line 146 `ApiToken`. The secret is in the response once (`one_time_response`) and nowhere else.
+  # hardening pass 1 D2: the creating principal is the caller's `principal_id` (every actor that
+  # may send this declares it); the client-sent `caller_id` input is gone (no binding mapped it).
+  # OPEN: may a call made with an API token create a token? Taken: no, so a leaked token cannot
+  # mint a longer-lived one.
+  # OPEN: do API tokens exist on a `single-user` cluster? Taken: not refused here; its API
+  # listens only on the owner's local socket (line 142-143), so a token reaches nothing more.
+  # OPEN: the longest token lifetime; the sketch says only "expires". Taken: a cluster setting the
+  # implementation reads; a token past it is refused, and every token has an expiry.
+  - name: weft.access.CreateApiToken
+    naming:
+      display: Create an API token
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: name, type: String}
+      - {name: expires_at, type: Timestamp}
+    response:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+      - {name: secret, type: String}
+    outcomes:
+      - name: token-caller
+        external: the call is authenticated by an API token
+        before_row: true
+        error: weft.access.TokenCannotCreateToken
+      - name: expiry-not-in-future
+        when: expires_at <= now
+        error: weft.access.ExpiryNotInFuture
+      - name: lifetime-too-long
+        external: the expiry lies beyond the cluster's longest token lifetime
+        before_row: true
+        error: weft.access.LifetimeTooLong
+      # hardening pass 1 D3: a token is created only in the account the request acts in; another
+      # account answers as a missing one, so its existence is not disclosed. Declared before
+      # account-unavailable: ESS answers an input guard before an external.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.access.AccountUnavailable
+      # The account tree and its state are weft.accounts' (lines 123-126).
+      # OPEN: the fact is in weft, so the target is two stored guards in place of this external:
+      # `when_related: {via: input.account_id, exists: false}` and
+      # `{via: input.account_id, predicate: state == Closed}`, both AccountUnavailable. Kept
+      # external (2026-11-26) because with them synthesis must arrange a weft.accounts.Account and
+      # cannot yet (weft.accounts.CreateAccount reads its Tenant by `entity:`/`where:` over the
+      # minted tenant_id), which cost every CreateApiToken scenario. Switch once it can.
+      - name: account-unavailable
+        external: the account does not exist or is closed
+        error: weft.access.AccountUnavailable
+      # Deny by default: a token never widens access beyond its creator's role bindings
+      # (lines 128-129).
+      - name: role-exceeds-caller
+        external: >-
+          the caller holds no role binding granting this role, or a stronger one, on the account or
+          an account above it
+        error: weft.access.RoleExceedsCaller
+      - name: created
+        creates: weft.access.ApiToken
+        instance: api_token_id
+        returns: true
+        one_time_response: [secret]
+        sets:
+          account_id: input.account_id
+          role: input.role
+          name: input.name
+          created_by: {caller: principal_id}
+          expires_at: input.expires_at
+          secret_digest: {generated: true}
+        emits: [weft.access.ApiTokenCreated]
+        payload:
+          weft.access.ApiTokenCreated:
+            api_token_id: {response: api_token_id}
+            account_id: input.account_id
+            role: input.role
+            created_by: {caller: principal_id}
+            expires_at: input.expires_at
+
+  # Line 146 "expires". Run by weft-api once `expires_at` has passed; see ExpireLogin for the actor
+  # OPEN.
+  - name: weft.access.ExpireApiToken
+    naming:
+      display: Expire an API token
+    input:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+    outcomes:
+      - name: no-such-token
+        unknown_instance: true
+        error: weft.access.NotFound
+      - name: not-yet-expired
+        when_subject:
+          predicate: expires_at > now
+        error: weft.access.NotYetExpired
+      - name: expired
+        moves: weft.access.ApiToken.expire
+        instance: api_token_id
+        emits: [weft.access.ApiTokenExpired]
+        payload:
+          weft.access.ApiTokenExpired:
+            api_token_id: input.api_token_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Line 146 (a token is revocable: the brief's focus; the sketch says "expires"). Who may revoke is
+  # decided by the call's authorization against RoleBindings (line 147), like every management call.
+  - name: weft.access.RevokeApiToken
+    naming:
+      display: Revoke an API token
+    input:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+    outcomes:
+      - name: no-such-token
+        unknown_instance: true
+        error: weft.access.NotFound
+      # hardening pass 1 D3: only a token of the account the request acts in is revoked; another
+      # account's token answers as a missing one, before its state is disclosed.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.access.NotFound
+      - name: revoked
+        moves: weft.access.ApiToken.revoke
+        instance: api_token_id
+        emits: [weft.access.ApiTokenRevoked]
+        payload:
+          weft.access.ApiTokenRevoked:
+            api_token_id: input.api_token_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Sketch § 14 line 590, R6: "account closed -> its ... tokens expired". Line 146: a token is
+  # scoped to one account. Every active API token of a closed account is ended at once, invoked by
+  # one binding on weft.accounts.AccountClosed (account_id). Many-rows form: `instances:` selects
+  # the rows. A repeated delivery finds no active token and revokes none.
+  # OPEN: the sketch says "expired"; the tokens are moved by `revoke` instead. `expire` is the
+  # time step (ExpireApiToken refuses NotYetExpired while expires_at lies ahead), and a token of
+  # a closed account ends before its expiry. Which word the owner wants on the record is open.
+  # OPEN: CLI logins are not touched. A CliLogin belongs to a principal of the tenant and a
+  # cluster, not to an account (lines 139-145), so no login is "of" the closed account. Ending a
+  # principal's logins belongs to disabling the principal (weft.accounts.PrincipalDisabled), which
+  # R6 does not name.
+  - name: weft.access.RevokeAccountApiTokens
+    naming:
+      display: Revoke every API token of a closed account
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+    outcomes:
+      - name: no-such-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.access.AccountNotClosed
+      - name: account-open
+        when_related: {via: input.account_id, predicate: state != Closed}
+        error: weft.access.AccountNotClosed
+      - name: revoked
+        moves: weft.access.ApiToken.revoke
+        instances:
+          where:
+            all:
+              - account_id == input.account_id
+              - state == Active
+        emits:
+          - weft.access.AccountApiTokensRevoked
+          - {event: weft.access.ApiTokenRevoked, each: changed}
+        payload:
+          weft.access.AccountApiTokensRevoked:
+            account_id: input.account_id
+            revoked: {count: changed}
+          weft.access.ApiTokenRevoked:
+            api_token_id: {changed: api_token_id}
+
+  # Line 147. weft-api records the decision of every management call, allowed or refused, before
+  # it answers the call. A refused call is recorded too; that is why this is a command of its own
+  # and not a refusal of the called command, which changes nothing.
+  # OPEN: which actor records; the sketch's actor list has no weft-api actor. Taken: weft-api.
+  - name: weft.access.RecordAuthorization
+    naming:
+      display: Record the authorization decision of a management call
+    input:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: principal_id, type: Optional<weft.shared.PrincipalId>}
+      - {name: credential, type: weft.access.CredentialKind}
+      - {name: login_id, type: Optional<weft.shared.CliLoginId>}
+      - {name: api_token_id, type: Optional<weft.shared.ApiTokenId>}
+      - {name: command, type: String}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: role, type: Optional<weft.shared.Role>}
+      - {name: verdict, type: weft.access.Verdict}
+      - {name: reason, type: Optional<weft.access.RefusalReason>}
+    outcomes:
+      - name: inconsistent-allowed
+        when:
+          all:
+            - verdict == Allowed
+            - any: [defined(reason), not defined(role)]
+        error: weft.access.InconsistentDecision
+      - name: inconsistent-refused
+        when:
+          all:
+            - verdict == Refused
+            - any: [not defined(reason), defined(role)]
+        error: weft.access.InconsistentDecision
+      - name: credential-mismatch
+        when:
+          any:
+            - all: [credential == LoginSession, not defined(login_id)]
+            - all: [credential == ApiToken, not defined(api_token_id)]
+            - all: [credential == LocalSocket, defined(login_id)]
+            - all: [credential == LocalSocket, defined(api_token_id)]
+            - all: [credential == NoCredential, defined(principal_id)]
+            - all: [credential == LoginSession, defined(api_token_id)]
+            - all: [credential == ApiToken, defined(login_id)]
+        error: weft.access.CredentialMismatch
+      # hardening pass 1 (finding access.yaml:1166, RecordAuthorization): an allowed call made with
+      # an API token acts in the token's own account. A refused one may name a token of another
+      # account (OutsideTokenAccount) or an unknown one, so only Allowed is tied.
+      - name: token-of-other-account
+        when:
+          all: [verdict == Allowed, defined(api_token_id), defined(account_id)]
+        when_related:
+          entity: weft.access.ApiToken
+          where:
+            all:
+              - api_token_id == input.api_token_id
+              - account_id != input.account_id
+          exists: true
+        error: weft.access.CredentialMismatch
+      # hardening pass 1 (finding access.yaml:1166): a known login is recorded only under its own
+      # principal. An unknown login has no row and is not refused here (UnknownCredential).
+      # hardening pass 4: a pending login has no principal, so it is no principal's own and is
+      # refused; ESS 0.99.2 reads `!=` over an absent Optional as Unknown.
+      - name: login-of-other-principal
+        when:
+          all: [defined(login_id), defined(principal_id)]
+        when_related:
+          entity: weft.access.CliLogin
+          where:
+            all:
+              - login_id == input.login_id
+              - any: [not defined(principal_id), principal_id != input.principal_id]
+          exists: true
+        error: weft.access.CredentialMismatch
+      - name: recorded
+        creates: weft.access.AuthorizationDecision
+        instance: decision_id
+        sets:
+          cloud_id: input.cloud_id
+          principal_id: input.principal_id
+          credential: input.credential
+          login_id: input.login_id
+          api_token_id: input.api_token_id
+          command: input.command
+          account_id: input.account_id
+          role: input.role
+          verdict: input.verdict
+          reason: input.reason
+          decided_at: {generated: true}
+        emits: [weft.access.CallAuthorized]
+        payload:
+          weft.access.CallAuthorized:
+            decision_id: {generated: true}
+            command: input.command
+            verdict: input.verdict
+
+  # Design ci-cd-support § Stage 1.1 `TrustedIssuer`, per tenant. Who may register is decided by
+  # the call's authorization (line 147), like every management call.
+  # OPEN: which role trusts an issuer for a tenant. Taken: the TenantOwner (actors.yaml,
+  # integrator).
+  - name: weft.access.RegisterTrustedIssuer
+    naming:
+      display: Trust an OIDC issuer for federated exchange
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: issuer_url, type: String}
+      - {name: jwks_url, type: String}
+      - {name: audience, type: String}
+      - {name: claim_map, type: weft.access.ClaimMap}
+    response:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+    outcomes:
+      - name: insecure
+        when:
+          any:
+            - {not: {issuer_url: {starts_with: "https://"}}}
+            - {not: {jwks_url: {starts_with: "https://"}}}
+            - audience == ""
+        error: weft.access.InsecureIssuer
+      # hardening pass 1 D3: an issuer is trusted only for the caller's tenant; another tenant
+      # answers as a missing one. Declared before no-such-tenant: ESS answers an input guard
+      # before a row read, and both give NotFound.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.access.NotFound
+      - name: no-such-tenant
+        when_related: {via: input.tenant_id, exists: false}
+        error: weft.access.NotFound
+      - name: duplicate
+        when_related:
+          entity: weft.access.TrustedIssuer
+          where:
+            all:
+              - tenant_id == input.tenant_id
+              - issuer_url == input.issuer_url
+              - state == Active
+          exists: true
+        error: weft.access.DuplicateIssuer
+      - name: registered
+        creates: weft.access.TrustedIssuer
+        instance: trusted_issuer_id
+        returns: true
+        sets:
+          tenant_id: input.tenant_id
+          issuer_url: input.issuer_url
+          jwks_url: input.jwks_url
+          audience: input.audience
+          claim_map: input.claim_map
+        emits: [weft.access.TrustedIssuerRegistered]
+        payload:
+          weft.access.TrustedIssuerRegistered:
+            trusted_issuer_id: {response: trusted_issuer_id}
+            tenant_id: input.tenant_id
+            issuer_url: input.issuer_url
+
+  # Design ci-cd-support § Stage 1.1. The end of a trusted issuer (OPEN on the entity). Refused
+  # while an active rule names it, so no rule is left pointing at an issuer weft no longer trusts.
+  - name: weft.access.WithdrawTrustedIssuer
+    naming:
+      display: Stop trusting an OIDC issuer
+    input:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      # hardening pass 1 D3: the tenant the request acts in, tied to the caller and to the issuer
+      # below. A `when_subject` tie is refused beside the row set of in-use (one kind of related
+      # read per command), and a row set may not read the caller, so the tie runs through it.
+      - {name: tenant_id, type: weft.shared.TenantId}
+    outcomes:
+      # hardening pass 1 D3: the request acts only in the caller's tenant.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.access.NotFound
+      - name: no-such-issuer
+        unknown_instance: true
+        error: weft.access.NotFound
+      # hardening pass 1 D3: only an issuer of that tenant is withdrawn; another tenant's answers
+      # as a missing one, before its rules are disclosed. Left open: `wrong-state` (held state)
+      # answers before a row set, so another tenant's withdrawn issuer still answers StateConflict.
+      - name: issuer-of-other-tenant
+        when_related:
+          entity: weft.access.TrustedIssuer
+          where:
+            all:
+              - trusted_issuer_id == input.trusted_issuer_id
+              - tenant_id != input.tenant_id
+          exists: true
+        error: weft.access.NotFound
+      - name: in-use
+        when_related:
+          entity: weft.access.FederationRule
+          where:
+            all:
+              - trusted_issuer_id == input.trusted_issuer_id
+              - state == Active
+          exists: true
+        error: weft.access.IssuerInUse
+      - name: withdrawn
+        moves: weft.access.TrustedIssuer.withdraw
+        instance: trusted_issuer_id
+        emits: [weft.access.TrustedIssuerWithdrawn]
+        payload:
+          weft.access.TrustedIssuerWithdrawn:
+            trusted_issuer_id: input.trusted_issuer_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Design ci-cd-support § Stage 1.1 `FederationRule` and § Security (exact repository, protected
+  # ref for production). hardening pass 1 D2: the creating principal is the caller's `principal_id`
+  # (every actor that may send this declares it); the client-sent `caller_id` input is gone (no
+  # binding mapped it).
+  # OPEN: the upper bound of a rule's token lifetime cap; the design gives only the default of
+  # 15 min. Taken: at most 1 h. The CLI sends 15 min when the user names none.
+  - name: weft.access.CreateFederationRule
+    naming:
+      display: Create a federation rule
+    input:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: ref_match, type: weft.access.RefMatch}
+      - {name: workflow, type: Optional<String>}
+      - {name: forge_environment, type: Optional<String>}
+      - {name: require_protected_ref, type: Boolean}
+      - {name: production, type: Boolean}
+      - {name: formation_names, type: List<String>}
+      - {name: environment_names, type: List<String>}
+      - {name: token_lifetime_seconds, type: Integer}
+    response:
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+    outcomes:
+      # § Security: "a wildcard over repositories is refused".
+      - name: wildcard-repository
+        when:
+          any:
+            - repository == ""
+            - {repository: {contains: "*"}}
+            - {repository: {contains: "?"}}
+            - {repository: {contains: "["}}
+        error: weft.access.WildcardRepository
+      - name: empty-ref
+        when: ref == ""
+        error: weft.access.EmptyRef
+      # § Security: "A rule for a production environment requires a protected ref".
+      - name: production-unprotected
+        when:
+          all:
+            - production == true
+            - require_protected_ref == false
+        error: weft.access.ProductionRuleUnprotectedRef
+      - name: lifetime-out-of-range
+        when:
+          any:
+            - token_lifetime_seconds <= 0
+            - token_lifetime_seconds > 3600
+        error: weft.access.TokenLifetimeOutOfRange
+      # hardening pass 1 D3: a rule is created only in the account the request acts in; another
+      # account answers as a missing one. Declared before the issuer and account checks: ESS
+      # answers an input guard before a row read or an external.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.access.AccountUnavailable
+      - name: no-such-issuer
+        when_related: {via: input.trusted_issuer_id, exists: false}
+        error: weft.access.IssuerUnavailable
+      - name: issuer-withdrawn
+        when_related: {via: input.trusted_issuer_id, predicate: state == Withdrawn}
+        error: weft.access.IssuerUnavailable
+      # Kept external for the reason CreateApiToken's account-unavailable gives (synthesis cannot
+      # arrange a weft.accounts.Account yet).
+      - name: account-unavailable
+        external: the account does not exist or is closed
+        error: weft.access.AccountUnavailable
+      # The issuer is trusted per tenant; the rule's account must be of that tenant. The account's
+      # tenant is read from weft.accounts, external for the same reason.
+      # hardening pass 1 (disclosure, access.yaml:1366): another tenant's issuer answers
+      # IssuerUnavailable, as a missing or withdrawn one does, so its existence is not disclosed.
+      # A stored guard `issuer.tenant_id != caller.tenant_id` would be stronger, but ESS compares
+      # the caller only with an input or the subject row, not with a related row.
+      - name: issuer-not-of-tenant
+        external: the account is not in the tenant that trusts the issuer
+        error: weft.access.IssuerUnavailable
+      # Deny by default: a rule never grants more than its creator holds (lines 128-129).
+      - name: role-exceeds-caller
+        external: >-
+          the caller holds no role binding granting this role, or a stronger one, on the account or
+          an account above it
+        error: weft.access.RoleExceedsCaller
+      - name: created
+        creates: weft.access.FederationRule
+        instance: federation_rule_id
+        returns: true
+        sets:
+          trusted_issuer_id: input.trusted_issuer_id
+          account_id: input.account_id
+          role: input.role
+          repository: input.repository
+          ref: input.ref
+          ref_match: input.ref_match
+          workflow: input.workflow
+          forge_environment: input.forge_environment
+          require_protected_ref: input.require_protected_ref
+          production: input.production
+          formation_names: input.formation_names
+          environment_names: input.environment_names
+          token_lifetime_seconds: input.token_lifetime_seconds
+          created_by: {caller: principal_id}
+        emits: [weft.access.FederationRuleCreated]
+        payload:
+          weft.access.FederationRuleCreated:
+            federation_rule_id: {response: federation_rule_id}
+            trusted_issuer_id: input.trusted_issuer_id
+            account_id: input.account_id
+            role: input.role
+            repository: input.repository
+            created_by: {caller: principal_id}
+
+  # Design ci-cd-support § Stage 1.1. Who may withdraw is the call's authorization (line 147).
+  - name: weft.access.WithdrawFederationRule
+    naming:
+      display: Withdraw a federation rule
+    input:
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+    outcomes:
+      - name: no-such-rule
+        unknown_instance: true
+        error: weft.access.NotFound
+      # hardening pass 1 D3: only a rule of the account the request acts in is withdrawn; another
+      # account's rule answers as a missing one, before its state is disclosed.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.access.NotFound
+      - name: withdrawn
+        moves: weft.access.FederationRule.withdraw
+        instance: federation_rule_id
+        emits: [weft.access.FederationRuleWithdrawn]
+        payload:
+          weft.access.FederationRuleWithdrawn:
+            federation_rule_id: input.federation_rule_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.access.StateConflict
+
+  # Design ci-cd-support § Stage 1.1: "the CLI sends the job's OIDC token; weft checks signature,
+  # issuer, audience, expiry and the rule's claims, and returns a short-lived API token (OAuth 2.0
+  # token exchange, RFC 8693; JWT bearer, RFC 7523; to be checked against the RFC text). A token
+  # that matches no rule is refused by name. Default deny." § Stage 1.4: `weft deploy` in a CI job
+  # does the exchange itself. Called before the caller has any weft credential.
+  # The input is the ID token as weft-api decoded it through the issuer's claim map: `issuer`,
+  # `audience`, `expires_at` are its `iss`, `aud`, `exp`; the rest are the claims the map names.
+  # The raw token is never stored.
+  # OPEN: does the CLI name the rule, or does weft-api search the issuer's rules for a match?
+  # Taken: the CLI names it (with the account and role it asks for), so the match is a guard on
+  # one row the specification checks; a wrong name is NoMatchingRule like any mismatch.
+  # The issued token lives at most the rule's token_lifetime_seconds and never past the ID token's `exp`
+  # (`expires_at` is minted by weft-api under that rule).
+  - name: weft.access.ExchangeFederatedToken
+    naming:
+      display: Exchange a CI job's ID token for a weft token
+    input:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: issuer, type: String}
+      - {name: audience, type: String}
+      - {name: expires_at, type: Timestamp}
+      - {name: subject, type: String}
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: ref_protected, type: Boolean}
+      - {name: workflow, type: String}
+      - {name: forge_environment, type: Optional<String>}
+      - {name: run_id, type: String}
+    response:
+      - {name: federated_exchange_id, type: weft.shared.FederatedExchangeId}
+      - {name: token, type: String}
+      - {name: expires_at, type: Timestamp}
+    outcomes:
+      # hardening pass 1 (disclosure, access.yaml:1526): the signature answers first, before any
+      # claim of the token is compared with an issuer or a rule. Declared last, it let a forged,
+      # unsigned token walk another tenant's rule claim by claim (NoMatchingRule until all matched).
+      # `before_row` puts it ahead of every row read. Its own error stays: answered first, it tells a
+      # forger nothing about any rule.
+      - name: bad-signature
+        external: the ID token's signature does not verify against the keys at the issuer's JWKS location
+        before_row: true
+        error: weft.access.IdTokenSignatureInvalid
+      - name: expired
+        when: expires_at <= now
+        error: weft.access.ExpiredIdToken
+      - name: unknown-issuer
+        when_related: {via: input.trusted_issuer_id, exists: false}
+        error: weft.access.UnknownIssuer
+      - name: no-such-rule
+        when_related: {via: input.federation_rule_id, exists: false}
+        error: weft.access.NoMatchingRule
+      - name: issuer-withdrawn
+        when_related:
+          via: input.trusted_issuer_id
+          predicate:
+            any:
+              - state == Withdrawn
+              - issuer_url != input.issuer
+        error: weft.access.UnknownIssuer
+      - name: bad-audience
+        when_related: {via: input.trusted_issuer_id, predicate: audience != input.audience}
+        error: weft.access.BadAudience
+      - name: rule-withdrawn
+        when_related: {via: input.federation_rule_id, predicate: state == Withdrawn}
+        error: weft.access.NoMatchingRule
+      - name: rule-not-for-request
+        when_related:
+          via: input.federation_rule_id
+          predicate:
+            any:
+              - trusted_issuer_id != input.trusted_issuer_id
+              - account_id != input.account_id
+              - role != input.role
+              - repository != input.repository
+        error: weft.access.NoMatchingRule
+      - name: ref-not-matched
+        when_related:
+          via: input.federation_rule_id
+          predicate:
+            all: [ref_match == Exact, ref != input.ref]
+        error: weft.access.NoMatchingRule
+      - name: ref-unprotected
+        when: ref_protected == false
+        when_related: {via: input.federation_rule_id, predicate: require_protected_ref == true}
+        error: weft.access.NoMatchingRule
+      - name: workflow-not-matched
+        when_related:
+          via: input.federation_rule_id
+          predicate:
+            all:
+              - defined(workflow)
+              - workflow != input.workflow
+        error: weft.access.NoMatchingRule
+      - name: environment-not-matched
+        when_related:
+          via: input.federation_rule_id
+          predicate:
+            all:
+              - defined(forge_environment)
+              - forge_environment != input.forge_environment
+        error: weft.access.NoMatchingRule
+      # A prefix rule: ESS compares a stored text with an input only as `<field> starts_with
+      # <input>`, the reverse of "the token's ref starts with the rule's prefix", so this check is
+      # weft-api's. It never refuses for an Exact rule (decided by ref-not-matched above).
+      - name: ref-prefix-not-matched
+        external: the rule matches by prefix and the token's ref does not start with the rule's ref
+        error: weft.access.NoMatchingRule
+      - name: exchanged
+        creates: weft.access.FederatedExchange
+        instance: federated_exchange_id
+        returns: true
+        one_time_response: [token]
+        sets:
+          trusted_issuer_id: input.trusted_issuer_id
+          federation_rule_id: input.federation_rule_id
+          account_id: input.account_id
+          role: input.role
+          subject: input.subject
+          repository: input.repository
+          ref: input.ref
+          workflow: input.workflow
+          forge_environment: input.forge_environment
+          run_id: input.run_id
+          # hardening pass 1 D4, D5: the rule's limits and the token's protected-ref claim travel
+          # on the exchange record, so a command that deploys with the exchanged token can hold them.
+          ref_protected: input.ref_protected
+          formation_names: {related: {via: input.federation_rule_id, field: formation_names}}
+          environment_names: {related: {via: input.federation_rule_id, field: environment_names}}
+          exchanged_at: {generated: true}
+          expires_at: {generated: true}
+          token_digest: {generated: true}
+        emits: [weft.access.FederatedTokenExchanged]
+        payload:
+          weft.access.FederatedTokenExchanged:
+            federated_exchange_id: {response: federated_exchange_id}
+            federation_rule_id: input.federation_rule_id
+            account_id: input.account_id
+            role: input.role
+            repository: input.repository
+            run_id: input.run_id
+
+views:
+  # Lines 141-145: the CLI reads a cluster's access mode to know whether `weft login` applies.
+  # OPEN: may this be read without a credential (the CLI needs it before login)? Taken: yes; it
+  # holds no secret. The implicit admin is left out of it. `mode` is read from
+  # weft.infrastructure.Cloud through the `cluster` relation; this row stores no copy.
+  - name: weft.access.CloudAccessOf
+    source: weft.access.CloudAccess
+    consistency: read_your_writes
+    params:
+      - {name: cloud_id, type: weft.shared.CloudId}
+    filter: cloud_id == param.cloud_id
+    fields:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - name: mode
+        type: Optional<weft.shared.AccessMode>
+        field: {related: {via: cloud_id, field: access_mode}}
+      - {name: issuer, type: Optional<String>}
+      - {name: client_id, type: Optional<String>}
+
+  # Lines 144-145: a principal's own CLI logins. No user code, device code or token digest.
+  - name: weft.access.LoginsOfPrincipal
+    source: weft.access.CliLogin
+    consistency: read_your_writes
+    params:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+    filter: principal_id == param.principal_id
+    fields:
+      - {name: login_id, type: weft.shared.CliLoginId}
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: principal_id, type: Optional<weft.shared.PrincipalId>}
+      - {name: expires_at, type: Timestamp}
+      - {name: state, type: weft.access.CliLogin.State}
+
+  # Line 146: the API tokens of one account. Neither the secret nor its digest is shown.
+  - name: weft.access.ApiTokensOfAccount
+    source: weft.access.ApiToken
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: api_token_id, type: weft.shared.ApiTokenId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: name, type: String}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: expires_at, type: Timestamp}
+      - {name: state, type: weft.access.ApiToken.State}
+
+  # Line 147 "audited": the decisions of management calls on one account, in a time window the
+  # caller names.
+  - name: weft.access.AuditOfAccount
+    source: weft.access.AuthorizationDecision
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - account_id == param.account_id
+        - decided_at >= param.from
+        - decided_at < param.to
+    fields: &audit-fields
+      - {name: decision_id, type: weft.shared.AuthorizationDecisionId}
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: principal_id, type: Optional<weft.shared.PrincipalId>}
+      - {name: credential, type: weft.access.CredentialKind}
+      - {name: login_id, type: Optional<weft.shared.CliLoginId>}
+      - {name: api_token_id, type: Optional<weft.shared.ApiTokenId>}
+      - {name: command, type: String}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: role, type: Optional<weft.shared.Role>}
+      - {name: verdict, type: weft.access.Verdict}
+      - {name: reason, type: Optional<weft.access.RefusalReason>}
+      - {name: decided_at, type: Timestamp}
+
+  # Line 147 with lines 101-102: the decisions of calls on the cluster itself (no account), for the
+  # ClusterOperator, who sees no tenant's data.
+  - name: weft.access.AuditOfCloud
+    source: weft.access.AuthorizationDecision
+    consistency: read_your_writes
+    params:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - cloud_id == param.cloud_id
+        - not defined(account_id)
+        - decided_at >= param.from
+        - decided_at < param.to
+    fields: *audit-fields
+
+  # Design ci-cd-support § Stage 1.1: the issuers a tenant trusts. Their keys are public; nothing
+  # here is secret.
+  - name: weft.access.TrustedIssuersOfTenant
+    source: weft.access.TrustedIssuer
+    consistency: read_your_writes
+    params:
+      - {name: tenant_id, type: weft.shared.TenantId}
+    filter: tenant_id == param.tenant_id
+    fields:
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: issuer_url, type: String}
+      - {name: jwks_url, type: String}
+      - {name: audience, type: String}
+      - {name: claim_map, type: weft.access.ClaimMap}
+      - {name: state, type: weft.access.TrustedIssuer.State}
+
+  # Design ci-cd-support § Stage 1.1: the federation rules of one account.
+  - name: weft.access.FederationRulesOfAccount
+    source: weft.access.FederationRule
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: ref_match, type: weft.access.RefMatch}
+      - {name: workflow, type: Optional<String>}
+      - {name: forge_environment, type: Optional<String>}
+      - {name: require_protected_ref, type: Boolean}
+      - {name: production, type: Boolean}
+      - {name: formation_names, type: List<String>}
+      - {name: environment_names, type: List<String>}
+      - {name: token_lifetime_seconds, type: Integer}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: state, type: weft.access.FederationRule.State}
+
+  # The invariant reads token_lifetime_seconds: this view holds every rule in every state.
+  - name: weft.access.FederationRules
+    source: weft.access.FederationRule
+    consistency: read_your_writes
+    fields:
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+      - {name: token_lifetime_seconds, type: Integer}
+      - {name: state, type: weft.access.FederationRule.State}
+
+  # Design ci-cd-support § Security: "Every exchange ... is a record with ... the token's claims."
+  # The exchanges into one account in a time window. No token or digest is shown.
+  - name: weft.access.FederatedExchangesOfAccount
+    source: weft.access.FederatedExchange
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - account_id == param.account_id
+        - exchanged_at >= param.from
+        - exchanged_at < param.to
+    fields:
+      - {name: federated_exchange_id, type: weft.shared.FederatedExchangeId}
+      - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
+      - {name: federation_rule_id, type: weft.shared.FederationRuleId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+      - {name: subject, type: String}
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: workflow, type: String}
+      - {name: forge_environment, type: Optional<String>}
+      - {name: run_id, type: String}
+      - {name: exchanged_at, type: Timestamp}
+      - {name: expires_at, type: Timestamp}

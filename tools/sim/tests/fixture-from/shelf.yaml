@@ -1,0 +1,126 @@
+domain: demo.shelf
+
+summary: Shelves for the explore --from test.
+
+naming:
+  wire: shelf
+  display: Shelf
+
+types:
+  - name: demo.shelf.ShelfId
+    kind: newtype
+    of: Uuid
+
+entities:
+  - name: demo.shelf.Shelf
+    identity:
+      name: shelf_id
+      type: demo.shelf.ShelfId
+    fields:
+      - name: label
+        type: String
+    lifecycle:
+      initial: Open
+      states:
+        - Open
+        - Sealed
+      terminal: [Sealed]
+      transitions:
+        - name: seal
+          from: [Open]
+          to: Sealed
+
+commands:
+  - name: demo.shelf.AddShelf
+    input:
+      - {name: label, type: String}
+    outcomes:
+      - name: added
+        creates: demo.shelf.Shelf
+        instance: shelf_id
+        sets:
+          label: input.label
+        emits: [demo.shelf.ShelfAdded]
+        payload:
+          demo.shelf.ShelfAdded:
+            shelf_id: {generated: true}
+            label: input.label
+
+  - name: demo.shelf.Polish
+    input:
+      - {name: shelf_id, type: demo.shelf.ShelfId}
+    outcomes:
+      - name: no-such-shelf
+        unknown_instance: true
+        error: demo.shelf.NotFound
+      - name: not-gold
+        when_subject:
+          predicate: label != gold
+        error: demo.shelf.Refused
+      - name: polished
+        moves: demo.shelf.Shelf.seal
+        instance: shelf_id
+        emits: [demo.shelf.ShelfSealed]
+        payload:
+          demo.shelf.ShelfSealed:
+            shelf_id: input.shelf_id
+      - name: not-open
+        wrong_state: true
+        error: demo.shelf.Refused
+
+  - name: demo.shelf.Relabel
+    input:
+      - {name: shelf_id, type: demo.shelf.ShelfId}
+      - {name: label, type: String}
+    outcomes:
+      - name: no-such-shelf
+        unknown_instance: true
+        error: demo.shelf.NotFound
+      - name: other-label
+        when_subject:
+          predicate: label != input.label
+        error: demo.shelf.Refused
+      - name: relabelled
+        moves: demo.shelf.Shelf.seal
+        instance: shelf_id
+        emits: [demo.shelf.ShelfSealed]
+        payload:
+          demo.shelf.ShelfSealed:
+            shelf_id: input.shelf_id
+      - name: not-open
+        wrong_state: true
+        error: demo.shelf.Refused
+
+  - name: demo.shelf.Jam
+    input:
+      - {name: shelf_id, type: demo.shelf.ShelfId}
+    outcomes:
+      - name: no-such-shelf
+        unknown_instance: true
+        error: demo.shelf.NotFound
+      - name: stuck
+        when_subject:
+          predicate: defined(label)
+        error: demo.shelf.Refused
+      - name: jammed
+        moves: demo.shelf.Shelf.seal
+        instance: shelf_id
+        emits: [demo.shelf.ShelfSealed]
+        payload:
+          demo.shelf.ShelfSealed:
+            shelf_id: input.shelf_id
+
+events:
+  - name: demo.shelf.ShelfAdded
+    fields:
+      - {name: shelf_id, type: demo.shelf.ShelfId}
+      - {name: label, type: String}
+  - name: demo.shelf.ShelfSealed
+    fields:
+      - {name: shelf_id, type: demo.shelf.ShelfId}
+
+errors:
+  - name: demo.shelf.NotFound
+    summary: No shelf has this identifier.
+  - name: demo.shelf.Refused
+    summary: The shelf refuses.

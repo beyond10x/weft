@@ -1,0 +1,1502 @@
+# Accounts: tenants, accounts nested to any depth, principals, roles and their bindings, and quotas
+# per account and resource class. Source: docs/domain-sketch.md "1. Accounts" (lines 118-130) and
+# "Actors" (lines 95-112). The `Export` of that section (an endpoint shared to another account) is
+# `weft.formations`', beside the endpoint it names.
+domain: weft.accounts
+
+summary: >-
+  Tenants and the accounts nested inside them, the principals that act in them, the roles bound
+  to those principals on an account and below, and the quota each account holds per resource
+  class.
+
+naming:
+  wire: weft
+  display: Accounts
+
+types:
+  # Sketch line 122-123: an account is written as a path `acme/research/gpu-lab`, so one name is
+  # one path segment and holds no `/`.
+  # OPEN: the characters and length of a tenant or account name. Taken: lower-case letters,
+  # digits and `-`, 1 to 63 characters (a DNS label).
+  - name: weft.accounts.Name
+    kind: newtype
+    of: String
+    alphabet: "abcdefghijklmnopqrstuvwxyz0123456789-"
+    invariants:
+      - value.count >= 1
+      - value.count <= 63
+
+  # Sketch line 124.
+  - name: weft.accounts.PrincipalKind
+    kind: enum
+    variants: [user, service-account, workload-identity]
+
+  # Roles are weft.shared.Role (integration 2026-11-26): sketch line 125-126 (`viewer`,
+  # `deployer`, `admin`, `billing`) and lines 101-102 (TenantOwner, AccountAdmin). `owner` is the
+  # tenant owner's role.
+  # OPEN: whether roles are a fixed set or tenants define their own. Taken: a fixed set, so no
+  # role can be written that grants more than these.
+  # OPEN: what `billing` may do. Taken: read usage, quotas and prices of its accounts; the
+  # integrator's actor table decides.
+
+entities:
+  # Sketch line 120: "Tenant: top-level customer. Owns everything below it."
+  - name: weft.accounts.Tenant
+    naming:
+      summary: A top-level customer of the cloud. It owns everything below it.
+    identity:
+      name: tenant_id
+      type: weft.shared.TenantId
+    fields:
+      - name: name
+        type: weft.accounts.Name
+    # Sketch line 120 ("Owns everything below it"): every record of this domain that belongs to a
+    # tenant is owned by it, and refers to the account it is about.
+    relations:
+      - name: accounts
+        kind: owns
+        target: weft.accounts.Account
+        cardinality: many
+        via: tenant_id
+      - name: principals
+        kind: owns
+        target: weft.accounts.Principal
+        cardinality: many
+        via: tenant_id
+      - name: role_bindings
+        kind: owns
+        target: weft.accounts.RoleBinding
+        cardinality: many
+        via: tenant_id
+      - name: quotas
+        kind: owns
+        target: weft.accounts.Quota
+        cardinality: many
+        via: tenant_id
+    # OPEN: the sketch gives a tenant no lifecycle. Taken: Active, then Closed once no account of
+    # it is open. Suspending a tenant is left out.
+    lifecycle:
+      initial: Active
+      states: [Active, Closed]
+      terminal: [Closed]
+      transitions:
+        - name: close
+          from: [Active]
+          to: Closed
+
+  # Sketch lines 121-123: "a sub-account inside a tenant or inside another account. Nested to any
+  # depth." A top-level account has no parent account; its parent is its tenant.
+  # No cycle: an account is created under a parent that exists already, and no command changes
+  # `parent_account_id` afterwards, so every chain of parents ends at a top-level account.
+  # OPEN: can an account move to another parent? Taken: no; a move would need a guard that the
+  # new parent is not the account itself or one of its descendants.
+  # OPEN: is the full path (`acme/research/gpu-lab`) stored? Taken: no; a client builds it from
+  # AccountTree.
+  - name: weft.accounts.Account
+    naming:
+      summary: An account inside a tenant or inside another account, nested to any depth.
+    identity:
+      name: account_id
+      type: weft.shared.AccountId
+    fields:
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: parent_account_id
+        type: Optional<weft.shared.AccountId>
+        summary: The account this one is nested in; absent for an account directly in its tenant.
+      - name: name
+        type: weft.accounts.Name
+    relations:
+      - name: parent
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: parent_account_id
+    # OPEN: the sketch gives an account no lifecycle. Taken: Open, then Closed once no
+    # sub-account of it is open. Records are kept, never deleted.
+    lifecycle:
+      initial: Open
+      states: [Open, Closed]
+      terminal: [Closed]
+      transitions:
+        - name: close
+          from: [Open]
+          to: Closed
+
+  # Sketch line 124: "Principal: a user, a service account, or a workload identity."
+  # OPEN: whether one user can belong to several tenants. Taken: a principal belongs to one
+  # tenant; the same person in two tenants is two principals.
+  - name: weft.accounts.Principal
+    naming:
+      summary: A user, a service account or a workload identity that roles are bound to.
+    identity:
+      name: principal_id
+      type: weft.shared.PrincipalId
+    fields:
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: kind
+        type: weft.accounts.PrincipalKind
+      - name: name
+        type: String
+      - name: subject
+        type: Optional<String>
+        summary: The subject the external identity provider gives a user (sketch line 141-142); absent for other kinds.
+      - name: workload_identity
+        type: Optional<weft.shared.WorkloadIdentity>
+        summary: The workload identity of a workload principal (sketch lines 387-388); absent for other kinds.
+    # OPEN: the sketch gives a principal no lifecycle. Taken: Active, then Disabled for good;
+    # disabling revokes every binding of the principal.
+    lifecycle:
+      initial: Active
+      states: [Active, Disabled]
+      terminal: [Disabled]
+      transitions:
+        - name: disable
+          from: [Active]
+          to: Disabled
+
+  # Sketch line 125: "Role + RoleBinding: what a principal may do on an account and below".
+  # A binding with no account holds on the whole tenant; only that form carries `owner`
+  # (TenantOwner, sketch line 101). `admin` on an account is the AccountAdmin of sketch line 102.
+  # The tenant owns the binding (Tenant.role_bindings, sketch line 120); it refers to its
+  # principal and account. No command deletes either; closing an account or disabling a
+  # principal revokes its bindings in the same outcome.
+  - name: weft.accounts.RoleBinding
+    naming:
+      summary: One role held by one principal on one account and every account below it, or on the whole tenant.
+    identity:
+      name: role_binding_id
+      type: weft.shared.RoleBindingId
+    fields:
+      - name: principal_id
+        type: weft.shared.PrincipalId
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: account_id
+        type: Optional<weft.shared.AccountId>
+        summary: The account the role holds on, and below it; absent for a binding on the whole tenant.
+      - name: role
+        type: weft.shared.Role
+    relations:
+      - name: principal
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: principal_id
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+    lifecycle:
+      initial: Active
+      states: [Active, Revoked]
+      terminal: [Revoked]
+      transitions:
+        - name: revoke
+          from: [Active]
+          to: Revoked
+
+  # Sketch lines 127-128: "Quota: per account and resource class. A child's quota is at most its
+  # parent's remaining quota." The resource classes are the inventory domain's (sketch lines
+  # 360-368), named by weft.shared.ResourceClassName (relation Quota.resource_class).
+  # A sub-account's quota is drawn from the quota of its parent account for the same class:
+  # `remaining` is the limit minus the sum of the limits the quotas of its sub-accounts drew from
+  # it. It is stored, not computed, because an ESS 0.99.2 guard compares one stored field with
+  # the input (`remaining < input.by`), and every command that changes a limit changes it in the
+  # same outcome.
+  # A top-level account has no parent account, so its quota has no parent quota; the
+  # ClusterOperator grants it (sketch line 99 runs the cloud; line 101 TenantOwner sets quotas in
+  # a tenant, below that).
+  # OPEN: whether the parent's own usage also lowers its remaining quota. Taken: no, remaining is
+  # limit minus what sub-accounts drew; usage is checked against the limit at every level by the
+  # metering domain (sketch line 440).
+  # OPEN: whether a tenant has one ceiling over all its top-level accounts. Taken: no; each
+  # top-level account's quota is the ClusterOperator's grant.
+  # OPEN: whether an account with no quota row for a class may use that class. Taken: no
+  # (default deny); the metering and scheduling domains read a missing row as a limit of 0.
+  - name: weft.accounts.Quota
+    naming:
+      summary: How much of one resource class one account may hold, and how much of it sub-accounts drew.
+    identity:
+      name: quota_id
+      type: weft.shared.QuotaId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: parent_quota_id
+        type: Optional<weft.shared.QuotaId>
+        summary: The quota of the parent account for the same class; absent for a top-level account.
+      - name: resource_class
+        type: weft.shared.ResourceClassName
+      - name: limit
+        type: Integer
+        summary: Units of the class this account and its sub-accounts may hold together.
+      - name: remaining
+        type: Integer
+        summary: The limit minus the limits of the quotas sub-accounts drew from this one.
+    invariants:
+      - limit >= 0
+      - remaining >= 0
+      - remaining <= limit
+    relations:
+      - name: parent
+        kind: references
+        target: weft.accounts.Quota
+        cardinality: one
+        via: parent_quota_id
+      # The tenant owns the quota (Tenant.quotas, sketch line 120); the account is the one it is
+      # for. Accounts are closed, never deleted, so the quota does not outlive its account.
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      # The resource class the quota counts (sketch lines 127 and 360-368), operator-owned in
+      # the inventory domain (layer 1); it stands on its own and outlives every quota of it.
+      - name: resource_class
+        kind: references
+        target: weft.inventory.ResourceClass
+        cardinality: one
+        via: resource_class
+    # OPEN: the sketch gives a quota no lifecycle. Taken: one state; a quota is released to 0,
+    # never removed.
+    lifecycle:
+      initial: Set
+      states: [Set]
+      terminal: [Set]
+
+errors:
+  - name: weft.accounts.TenantNotFound
+    summary: No tenant has this identifier, and nothing changed.
+  - name: weft.accounts.TenantNotActive
+    summary: The tenant is closed, so nothing is created in it or changed on it.
+  - name: weft.accounts.TenantNameTaken
+    summary: Another tenant already has this name, and nothing was created.
+  - name: weft.accounts.TenantHasOpenAccounts
+    summary: The tenant still has an open account, so it was not closed.
+  - name: weft.accounts.AccountNotFound
+    summary: No account has this identifier, and nothing changed.
+  - name: weft.accounts.AccountNotOpen
+    summary: The account is closed, so nothing is created in it or changed on it.
+  - name: weft.accounts.AccountNameTaken
+    summary: An open account with this name already sits under the same parent, and nothing was created.
+  - name: weft.accounts.AccountHasOpenChildren
+    summary: The account still has an open sub-account, so it was not closed.
+  - name: weft.accounts.PrincipalNotFound
+    summary: No principal has this identifier, and nothing changed.
+  - name: weft.accounts.PrincipalNotActive
+    summary: The principal is disabled, so no role is bound to it and nothing on it changes.
+  - name: weft.accounts.PrincipalExists
+    summary: The tenant already has a principal for this subject or workload identity, and nothing was created.
+  - name: weft.accounts.CrossTenantBinding
+    summary: The principal, the account or the tenant named do not all belong to one tenant, so no role was bound.
+  - name: weft.accounts.OwnerIsTenantWide
+    summary: The `owner` role is bound on a whole tenant only, never on one account, and nothing was bound.
+  - name: weft.accounts.BindingExists
+    summary: The principal already holds this role on this account or tenant, and nothing was bound.
+  - name: weft.accounts.GrantNotPermitted
+    summary: The caller holds no role that may grant this role here, so no role was bound and no access widened.
+  - name: weft.accounts.LastTenantOwner
+    summary: This is the tenant's last active owner binding, so it was not revoked.
+  - name: weft.accounts.RoleBindingNotFound
+    summary: No role binding has this identifier, and nothing changed.
+  - name: weft.accounts.RoleBindingRevoked
+    summary: The role binding is revoked already, and nothing changed.
+  - name: weft.accounts.WrongBindingKind
+    summary: An owner binding is revoked with RevokeTenantOwner and every other binding with RevokeRole; nothing changed.
+  - name: weft.accounts.InvalidQuotaAmount
+    summary: A limit is below 0, or a raise or a cut is not above 0; nothing changed.
+  - name: weft.accounts.QuotaNotFound
+    summary: No quota has this identifier, and nothing changed.
+  - name: weft.accounts.QuotaExists
+    summary: The account already has a quota for this resource class, and nothing was created.
+  - name: weft.accounts.NotTopLevelAccount
+    summary: The account sits inside another account, so its quota is drawn from its parent's quota, not granted by the operator.
+  - name: weft.accounts.TopLevelQuota
+    summary: The quota belongs to a top-level account and has no parent quota; only the operator changes it.
+  - name: weft.accounts.QuotaParentMismatch
+    summary: The parent quota named is not the quota of the account's parent account for the same resource class; nothing changed.
+  - name: weft.accounts.QuotaExceedsParent
+    summary: The amount is more than the parent's remaining quota (its limit minus what its sub-accounts drew); nothing changed.
+  - name: weft.accounts.QuotaBelowAllocated
+    summary: The quota would drop below what sub-accounts already drew from it; nothing changed.
+  - name: weft.accounts.QuotaAlreadyDrawn
+    summary: The sub-account's quota is above 0 already; release it before drawing a new limit. Nothing changed.
+  - name: weft.accounts.QuotaChanged
+    summary: The quota's limit is not the one the caller read; nothing changed.
+
+events:
+  - name: weft.accounts.TenantCreated
+    fields:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: weft.accounts.Name}
+  - name: weft.accounts.TenantClosed
+    fields:
+      - {name: tenant_id, type: weft.shared.TenantId}
+  - name: weft.accounts.AccountCreated
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: weft.accounts.Name}
+  - name: weft.accounts.SubAccountCreated
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: parent_account_id, type: weft.shared.AccountId}
+      - {name: name, type: weft.accounts.Name}
+  - name: weft.accounts.AccountClosed
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+  - name: weft.accounts.PrincipalAdded
+    fields:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: kind, type: weft.accounts.PrincipalKind}
+      - {name: name, type: String}
+  - name: weft.accounts.PrincipalDisabled
+    fields:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+  - name: weft.accounts.RoleBound
+    fields:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+  - name: weft.accounts.TenantOwnerBound
+    fields:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+  - name: weft.accounts.RoleRevoked
+    fields:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+  - name: weft.accounts.QuotaGranted
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: limit, type: Integer}
+  - name: weft.accounts.QuotaAllocated
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: parent_quota_id, type: weft.shared.QuotaId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+  - name: weft.accounts.QuotaRaised
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: by, type: Integer}
+  - name: weft.accounts.QuotaLowered
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: by, type: Integer}
+  - name: weft.accounts.QuotaDrawn
+    fields:
+      - {name: parent_quota_id, type: weft.shared.QuotaId}
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: limit, type: Integer}
+  - name: weft.accounts.QuotaReleased
+    fields:
+      - {name: parent_quota_id, type: weft.shared.QuotaId}
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: limit, type: Integer}
+
+commands:
+  # Sketch line 120 (Tenant) and line 99 (ClusterOperator runs the cloud itself).
+  - name: weft.accounts.CreateTenant
+    naming:
+      display: Create a tenant
+    input:
+      - {name: name, type: weft.accounts.Name}
+    outcomes:
+      - name: name-taken
+        when_related:
+          entity: weft.accounts.Tenant
+          where: name == input.name
+          exists: true
+        error: weft.accounts.TenantNameTaken
+      - name: created
+        creates: weft.accounts.Tenant
+        instance: tenant_id
+        sets:
+          name: input.name
+        emits: [weft.accounts.TenantCreated]
+        payload:
+          weft.accounts.TenantCreated:
+            tenant_id: {generated: true}
+            name: input.name
+
+  # Sketch line 120. A tenant closes only when no account of it is open; its remaining role
+  # bindings (the tenant-wide ones) are revoked with it.
+  - name: weft.accounts.CloseTenant
+    naming:
+      display: Close a tenant
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+    outcomes:
+      - name: no-such-tenant
+        unknown_instance: true
+        error: weft.accounts.TenantNotFound
+      - name: has-open-accounts
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - tenant_id == input.tenant_id
+              - state == Open
+          exists: true
+        error: weft.accounts.TenantHasOpenAccounts
+      - name: closed
+        moves: weft.accounts.Tenant.close
+        instance: tenant_id
+        affects:
+          - entity: weft.accounts.RoleBinding
+            where:
+              all:
+                - tenant_id == input.tenant_id
+                - state == Active
+            moves: weft.accounts.RoleBinding.revoke
+        emits: [weft.accounts.TenantClosed]
+        payload:
+          weft.accounts.TenantClosed:
+            tenant_id: input.tenant_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.accounts.TenantNotActive
+
+  # Sketch line 121 ("a sub-account inside a tenant") and line 454
+  # (`weft account create acme/research/gpu-lab --quota gpu=4`). The quota of the CLI line is a
+  # second call, AllocateQuota.
+  - name: weft.accounts.CreateAccount
+    naming:
+      display: Create an account in a tenant
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: weft.accounts.Name}
+    outcomes:
+      # hardening pass 1 D3: the tenant is the caller's, so another tenant answers as a missing one,
+      # before any row of it is read.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.accounts.TenantNotFound
+      - name: no-such-tenant
+        when_related: {via: input.tenant_id, exists: false}
+        error: weft.accounts.TenantNotFound
+      - name: tenant-closed
+        when_related: {via: input.tenant_id, predicate: state == Closed}
+        error: weft.accounts.TenantNotActive
+      - name: name-taken
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - tenant_id == input.tenant_id
+              - not defined(parent_account_id)
+              - name == input.name
+              - state == Open
+          exists: true
+        error: weft.accounts.AccountNameTaken
+      - name: created
+        creates: weft.accounts.Account
+        instance: account_id
+        sets:
+          tenant_id: input.tenant_id
+          parent_account_id: {cleared: true}
+          name: input.name
+        emits: [weft.accounts.AccountCreated]
+        payload:
+          weft.accounts.AccountCreated:
+            account_id: {generated: true}
+            tenant_id: input.tenant_id
+            name: input.name
+
+  # Sketch lines 121-123 ("or inside another account. Nested to any depth"). The tenant is the
+  # parent's tenant, read from the parent row, so a sub-account never lands in another tenant.
+  - name: weft.accounts.CreateSubAccount
+    naming:
+      display: Create a sub-account
+    input:
+      - {name: parent_account_id, type: weft.shared.AccountId}
+      - {name: name, type: weft.accounts.Name}
+    outcomes:
+      # hardening pass 1 D3: the parent is the account the request acts in, so another account
+      # answers as a missing one, before its row is read.
+      - name: not-callers-account
+        when: parent_account_id != caller.account_id
+        error: weft.accounts.AccountNotFound
+      - name: no-such-parent
+        when_related: {via: input.parent_account_id, exists: false}
+        error: weft.accounts.AccountNotFound
+      - name: parent-closed
+        when_related: {via: input.parent_account_id, predicate: state == Closed}
+        error: weft.accounts.AccountNotOpen
+      # hardening pass 3: `defined` first, so a top-level account (no parent) is decided as not
+      # selected; ESS 0.99.2 reads `==` over an absent Optional as Unknown.
+      - name: name-taken
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - defined(parent_account_id)
+              - parent_account_id == input.parent_account_id
+              - name == input.name
+              - state == Open
+          exists: true
+        error: weft.accounts.AccountNameTaken
+      - name: created
+        creates: weft.accounts.Account
+        instance: account_id
+        sets:
+          tenant_id: {related: {via: input.parent_account_id, field: tenant_id}}
+          parent_account_id: input.parent_account_id
+          name: input.name
+        emits: [weft.accounts.SubAccountCreated]
+        payload:
+          weft.accounts.SubAccountCreated:
+            account_id: {generated: true}
+            tenant_id: {related: {via: input.parent_account_id, field: tenant_id}}
+            parent_account_id: input.parent_account_id
+            name: input.name
+
+  # Sketch line 121. An account closes only when no sub-account of it is open; its role bindings
+  # are revoked with it.
+  # Exports out of and into the account are revoked by loop R6 (sketch § 14): a binding on
+  # AccountClosed invokes weft.formations.RevokeAccountExports.
+  # OPEN: whether closing an account is refused while workloads of it run, and whether its
+  # quotas return to the parent. Taken: neither is checked here; the quotas stay allocated, which
+  # widens nothing.
+  - name: weft.accounts.CloseAccount
+    naming:
+      display: Close an account
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+    outcomes:
+      # hardening pass 1 D3: the account closed is the account the request acts in, so another
+      # account answers as a missing one before its row or children are read. Written over the
+      # input, not `when_subject`: ESS 0.99.2 refuses a subject guard beside the row set below.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.accounts.AccountNotFound
+      - name: no-such-account
+        unknown_instance: true
+        error: weft.accounts.AccountNotFound
+      # hardening pass 3: `defined` first, as in CreateSubAccount name-taken.
+      - name: has-open-children
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - defined(parent_account_id)
+              - parent_account_id == input.account_id
+              - state == Open
+          exists: true
+        error: weft.accounts.AccountHasOpenChildren
+      - name: closed
+        moves: weft.accounts.Account.close
+        instance: account_id
+        affects:
+          - entity: weft.accounts.RoleBinding
+            where:
+              all:
+                - defined(account_id)
+                - account_id == input.account_id
+                - state == Active
+            moves: weft.accounts.RoleBinding.revoke
+        emits: [weft.accounts.AccountClosed]
+        payload:
+          weft.accounts.AccountClosed:
+            account_id: input.account_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.accounts.AccountNotOpen
+
+  # Sketch line 124 ("a user") and lines 141-142 (federated login, tokens from an external
+  # identity provider): a user is known by the provider's subject.
+  - name: weft.accounts.AddUser
+    naming:
+      display: Add a user
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: String}
+      - {name: subject, type: String}
+    outcomes:
+      # hardening pass 1 D3: the tenant is the caller's, so another tenant answers as a missing one,
+      # before any row of it is read.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.accounts.TenantNotFound
+      - name: no-such-tenant
+        when_related: {via: input.tenant_id, exists: false}
+        error: weft.accounts.TenantNotFound
+      - name: tenant-closed
+        when_related: {via: input.tenant_id, predicate: state == Closed}
+        error: weft.accounts.TenantNotActive
+      # hardening pass 3: `defined` first; service accounts and workload principals have no subject.
+      - name: subject-taken
+        when_related:
+          entity: weft.accounts.Principal
+          where:
+            all:
+              - tenant_id == input.tenant_id
+              - defined(subject)
+              - subject == input.subject
+              - state == Active
+          exists: true
+        error: weft.accounts.PrincipalExists
+      - name: added
+        creates: weft.accounts.Principal
+        instance: principal_id
+        sets:
+          tenant_id: input.tenant_id
+          kind: user
+          name: input.name
+          subject: input.subject
+          workload_identity: {cleared: true}
+        emits: [weft.accounts.PrincipalAdded]
+        payload:
+          weft.accounts.PrincipalAdded:
+            principal_id: {generated: true}
+            tenant_id: input.tenant_id
+            kind: user
+            name: input.name
+
+  # Sketch line 124 ("a service account") and line 105 (Automation acts through an API token of
+  # the access domain; the token's principal is a service account).
+  - name: weft.accounts.AddServiceAccount
+    naming:
+      display: Add a service account
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: String}
+    outcomes:
+      # hardening pass 1 D3: the tenant is the caller's, so another tenant answers as a missing one,
+      # before any row of it is read.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.accounts.TenantNotFound
+      - name: no-such-tenant
+        when_related: {via: input.tenant_id, exists: false}
+        error: weft.accounts.TenantNotFound
+      - name: tenant-closed
+        when_related: {via: input.tenant_id, predicate: state == Closed}
+        error: weft.accounts.TenantNotActive
+      - name: added
+        creates: weft.accounts.Principal
+        instance: principal_id
+        sets:
+          tenant_id: input.tenant_id
+          kind: service-account
+          name: input.name
+          subject: {cleared: true}
+          workload_identity: {cleared: true}
+        emits: [weft.accounts.PrincipalAdded]
+        payload:
+          weft.accounts.PrincipalAdded:
+            principal_id: {generated: true}
+            tenant_id: input.tenant_id
+            kind: service-account
+            name: input.name
+
+  # Sketch line 124 ("a workload identity") and lines 387-388 (the identity
+  # `tenant/account/formation/environment/component/instance`). A workload holds no role until a
+  # binding names its principal (sketch line 12, default deny).
+  # OPEN: whether a workload principal names one instance's identity or a prefix of it (every
+  # instance of a component). Taken: the identity text as given; how it matches an instance's
+  # identity is the identity domain's.
+  # OPEN: whether the identity issuer adds workload principals by itself at instance start.
+  # Taken: no; a person adds one, so no workload gains a principal without a decision.
+  - name: weft.accounts.AddWorkloadPrincipal
+    naming:
+      display: Add a workload principal
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: String}
+      - {name: workload_identity, type: weft.shared.WorkloadIdentity}
+    outcomes:
+      # hardening pass 1 D3: the tenant is the caller's, so another tenant answers as a missing one,
+      # before any row of it is read.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.accounts.TenantNotFound
+      - name: no-such-tenant
+        when_related: {via: input.tenant_id, exists: false}
+        error: weft.accounts.TenantNotFound
+      - name: tenant-closed
+        when_related: {via: input.tenant_id, predicate: state == Closed}
+        error: weft.accounts.TenantNotActive
+      # hardening pass 3: `defined` first; users and service accounts have no workload identity.
+      - name: identity-taken
+        when_related:
+          entity: weft.accounts.Principal
+          where:
+            all:
+              - tenant_id == input.tenant_id
+              - defined(workload_identity)
+              - workload_identity == input.workload_identity
+              - state == Active
+          exists: true
+        error: weft.accounts.PrincipalExists
+      - name: added
+        creates: weft.accounts.Principal
+        instance: principal_id
+        sets:
+          tenant_id: input.tenant_id
+          kind: workload-identity
+          name: input.name
+          subject: {cleared: true}
+          workload_identity: input.workload_identity
+        emits: [weft.accounts.PrincipalAdded]
+        payload:
+          weft.accounts.PrincipalAdded:
+            principal_id: {generated: true}
+            tenant_id: input.tenant_id
+            kind: workload-identity
+            name: input.name
+
+  # Sketch line 124. Disabling a principal revokes every active binding of it in the same
+  # outcome, so a disabled principal holds no role.
+  # OPEN: whether disabling the principal of a tenant's last active owner is refused. Taken: not
+  # refused; the ClusterOperator binds a new owner (BindTenantOwner).
+  - name: weft.accounts.DisablePrincipal
+    naming:
+      display: Disable a principal
+    input:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+    outcomes:
+      - name: no-such-principal
+        unknown_instance: true
+        error: weft.accounts.PrincipalNotFound
+      # hardening pass 1 D3: the principal is of the caller's tenant, so another tenant's
+      # principal answers as a missing one before its state is read.
+      - name: not-callers-tenant
+        when_subject: {predicate: tenant_id != caller.tenant_id}
+        error: weft.accounts.PrincipalNotFound
+      - name: disabled
+        moves: weft.accounts.Principal.disable
+        instance: principal_id
+        affects:
+          - entity: weft.accounts.RoleBinding
+            where:
+              all:
+                - principal_id == input.principal_id
+                - state == Active
+            moves: weft.accounts.RoleBinding.revoke
+        emits: [weft.accounts.PrincipalDisabled]
+        payload:
+          weft.accounts.PrincipalDisabled:
+            principal_id: input.principal_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.accounts.PrincipalNotActive
+
+  # Sketch line 125 ("what a principal may do on an account and below") and lines 101-102
+  # (TenantOwner grants roles; AccountAdmin manages one account and its sub-accounts).
+  # `tenant_id` is the tenant both the principal and the account must belong to; checking each
+  # against it keeps a binding inside one tenant (sketch line 129, nothing crosses accounts).
+  - name: weft.accounts.BindRole
+    naming:
+      display: Bind a role on an account
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: role, type: weft.shared.Role}
+    outcomes:
+      - name: owner-on-account
+        when: role == owner
+        error: weft.accounts.OwnerIsTenantWide
+      # hardening pass 1 D3: the tenant named is the caller's; another tenant answers as a missing
+      # one before any of its rows is read.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.accounts.TenantNotFound
+      # hardening pass 1 D3: the account is the account the request acts in, so another account
+      # answers as a missing one before its row is read.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.accounts.AccountNotFound
+      - name: no-such-principal
+        when_related: {via: input.principal_id, exists: false}
+        error: weft.accounts.PrincipalNotFound
+      - name: no-such-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.accounts.AccountNotFound
+      # hardening pass 1 disclosure (accounts.yaml:773): a principal of another tenant answers as
+      # a missing one (was CrossTenantBinding), before any state check.
+      - name: principal-in-other-tenant
+        when_related: {via: input.principal_id, predicate: tenant_id != input.tenant_id}
+        error: weft.accounts.PrincipalNotFound
+      # hardening pass 1 disclosure (accounts.yaml:776): an account of another tenant answers as a
+      # missing one (was CrossTenantBinding).
+      - name: account-in-other-tenant
+        when_related: {via: input.account_id, predicate: tenant_id != input.tenant_id}
+        error: weft.accounts.AccountNotFound
+      - name: principal-disabled
+        when_related: {via: input.principal_id, predicate: state == Disabled}
+        error: weft.accounts.PrincipalNotActive
+      - name: account-closed
+        when_related: {via: input.account_id, predicate: state == Closed}
+        error: weft.accounts.AccountNotOpen
+      - name: already-bound
+        when_related:
+          entity: weft.accounts.RoleBinding
+          where:
+            all:
+              - principal_id == input.principal_id
+              - defined(account_id)
+              - account_id == input.account_id
+              - role == input.role
+              - state == Active
+          exists: true
+        error: weft.accounts.BindingExists
+      # Granting is a widening of access. The caller's own roles decide whether it may grant this
+      # role on this account; that check is the access domain's (sketch line 144).
+      # OPEN: which role may grant which. Taken: owner grants any role on any account of its
+      # tenant; admin grants viewer, deployer, admin and billing on its account and below; no
+      # other role grants.
+      - name: grant-not-permitted
+        external: the caller holds no role on this account or above it that may grant this role
+        error: weft.accounts.GrantNotPermitted
+      - name: bound
+        creates: weft.accounts.RoleBinding
+        instance: role_binding_id
+        sets:
+          principal_id: input.principal_id
+          tenant_id: input.tenant_id
+          account_id: input.account_id
+          role: input.role
+        emits: [weft.accounts.RoleBound]
+        payload:
+          weft.accounts.RoleBound:
+            role_binding_id: {generated: true}
+            principal_id: input.principal_id
+            tenant_id: input.tenant_id
+            account_id: input.account_id
+            role: input.role
+
+  # Sketch line 101 (TenantOwner) and line 120 (the tenant owns everything below it). The first
+  # owner of a new tenant is bound by the ClusterOperator.
+  - name: weft.accounts.BindTenantOwner
+    naming:
+      display: Bind a tenant owner
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+    outcomes:
+      - name: no-such-tenant
+        when_related: {via: input.tenant_id, exists: false}
+        error: weft.accounts.TenantNotFound
+      - name: no-such-principal
+        when_related: {via: input.principal_id, exists: false}
+        error: weft.accounts.PrincipalNotFound
+      # hardening pass 1 disclosure (accounts.yaml:836): a principal of another tenant answers as
+      # a missing one (was CrossTenantBinding). No caller tie: ClusterOperator also sends this
+      # command and declares no caller attributes.
+      - name: principal-in-other-tenant
+        when_related: {via: input.principal_id, predicate: tenant_id != input.tenant_id}
+        error: weft.accounts.PrincipalNotFound
+      - name: tenant-closed
+        when_related: {via: input.tenant_id, predicate: state == Closed}
+        error: weft.accounts.TenantNotActive
+      - name: principal-disabled
+        when_related: {via: input.principal_id, predicate: state == Disabled}
+        error: weft.accounts.PrincipalNotActive
+      - name: already-bound
+        when_related:
+          entity: weft.accounts.RoleBinding
+          where:
+            all:
+              - principal_id == input.principal_id
+              - tenant_id == input.tenant_id
+              - role == owner
+              - state == Active
+          exists: true
+        error: weft.accounts.BindingExists
+      - name: grant-not-permitted
+        external: the caller is neither the ClusterOperator nor an owner of this tenant
+        error: weft.accounts.GrantNotPermitted
+      - name: bound
+        creates: weft.accounts.RoleBinding
+        instance: role_binding_id
+        sets:
+          principal_id: input.principal_id
+          tenant_id: input.tenant_id
+          account_id: {cleared: true}
+          role: owner
+        emits: [weft.accounts.TenantOwnerBound]
+        payload:
+          weft.accounts.TenantOwnerBound:
+            role_binding_id: {generated: true}
+            principal_id: input.principal_id
+            tenant_id: input.tenant_id
+
+  # Sketch line 125. Revoking narrows access and is never refused for that. An owner binding is
+  # revoked through RevokeTenantOwner, which keeps the tenant's last owner.
+  - name: weft.accounts.RevokeRole
+    naming:
+      display: Revoke a role binding
+    input:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+    outcomes:
+      - name: no-such-binding
+        unknown_instance: true
+        error: weft.accounts.RoleBindingNotFound
+      # hardening pass 1 D3: the binding is of the caller's tenant and, where it names an account,
+      # of the account the request acts in; another one answers as a missing one before its role
+      # or state is read.
+      - name: not-callers-tenant
+        when_subject: {predicate: tenant_id != caller.tenant_id}
+        error: weft.accounts.RoleBindingNotFound
+      - name: not-callers-account
+        when_subject: {predicate: {all: [defined(account_id), account_id != caller.account_id]}}
+        error: weft.accounts.RoleBindingNotFound
+      - name: owner-binding
+        when_subject: {predicate: role == owner}
+        error: weft.accounts.WrongBindingKind
+      - name: revoked
+        moves: weft.accounts.RoleBinding.revoke
+        instance: role_binding_id
+        emits: [weft.accounts.RoleRevoked]
+        payload:
+          weft.accounts.RoleRevoked:
+            role_binding_id: input.role_binding_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.accounts.RoleBindingRevoked
+
+  # Sketch line 101 (TenantOwner). Refused where it would leave the tenant without an active
+  # owner.
+  - name: weft.accounts.RevokeTenantOwner
+    naming:
+      display: Revoke a tenant owner
+    input:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+    outcomes:
+      # hardening pass 1 D3: the tenant named is the caller's.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.accounts.RoleBindingNotFound
+      - name: no-such-binding
+        unknown_instance: true
+        error: weft.accounts.RoleBindingNotFound
+      # ESS 0.99.2 reads one kind of related row per command, so the addressed binding is read
+      # through the same row set as the tenant's owners, by its identity.
+      # hardening pass 1 disclosure: a binding of another tenant answers as a missing one (was
+      # CrossTenantBinding), before its role is read (was after not-owner-binding).
+      - name: other-tenant
+        when_related:
+          entity: weft.accounts.RoleBinding
+          where:
+            all:
+              - role_binding_id == input.role_binding_id
+              - tenant_id != input.tenant_id
+          exists: true
+        error: weft.accounts.RoleBindingNotFound
+      - name: not-owner-binding
+        when_related:
+          entity: weft.accounts.RoleBinding
+          where:
+            all:
+              - role_binding_id == input.role_binding_id
+              - role != owner
+          exists: true
+        error: weft.accounts.WrongBindingKind
+      - name: last-owner
+        when_related:
+          entity: weft.accounts.RoleBinding
+          where:
+            all:
+              - tenant_id == input.tenant_id
+              - role == owner
+              - state == Active
+          count: {lte: 1}
+        error: weft.accounts.LastTenantOwner
+      - name: revoked
+        moves: weft.accounts.RoleBinding.revoke
+        instance: role_binding_id
+        emits: [weft.accounts.RoleRevoked]
+        payload:
+          weft.accounts.RoleRevoked:
+            role_binding_id: input.role_binding_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.accounts.RoleBindingRevoked
+
+  # Sketch line 127 (quota per account and resource class) and line 99 (ClusterOperator). The
+  # quota of a top-level account, which has no parent quota to draw from.
+  - name: weft.accounts.GrantTopQuota
+    naming:
+      display: Grant a top-level account's quota
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: limit, type: Integer}
+    outcomes:
+      - name: negative-limit
+        when: limit < 0
+        error: weft.accounts.InvalidQuotaAmount
+      - name: no-such-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.accounts.AccountNotFound
+      - name: sub-account
+        when_related: {via: input.account_id, predicate: defined(parent_account_id)}
+        error: weft.accounts.NotTopLevelAccount
+      - name: account-closed
+        when_related: {via: input.account_id, predicate: state == Closed}
+        error: weft.accounts.AccountNotOpen
+      - name: quota-exists
+        when_related:
+          entity: weft.accounts.Quota
+          where:
+            all:
+              - account_id == input.account_id
+              - resource_class == input.resource_class
+          exists: true
+        error: weft.accounts.QuotaExists
+      - name: granted
+        creates: weft.accounts.Quota
+        instance: quota_id
+        sets:
+          account_id: input.account_id
+          tenant_id: {related: {via: input.account_id, field: tenant_id}}
+          parent_quota_id: {cleared: true}
+          resource_class: input.resource_class
+          limit: input.limit
+          remaining: input.limit
+        emits: [weft.accounts.QuotaGranted]
+        payload:
+          weft.accounts.QuotaGranted:
+            quota_id: {generated: true}
+            account_id: input.account_id
+            resource_class: input.resource_class
+            limit: input.limit
+
+  # Sketch line 127 and line 99. The operator raises a top-level quota.
+  - name: weft.accounts.RaiseTopQuota
+    naming:
+      display: Raise a top-level account's quota
+    input:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: by, type: Integer}
+    outcomes:
+      - name: not-positive
+        when: by <= 0
+        error: weft.accounts.InvalidQuotaAmount
+      - name: no-such-quota
+        unknown_instance: true
+        error: weft.accounts.QuotaNotFound
+      - name: drawn-quota
+        when_subject: {predicate: defined(parent_quota_id)}
+        error: weft.accounts.NotTopLevelAccount
+      - name: raised
+        updates: weft.accounts.Quota
+        instance: quota_id
+        sets:
+          limit: {expr: "subject.limit + input.by"}
+          remaining: {expr: "subject.remaining + input.by"}
+        emits: [weft.accounts.QuotaRaised]
+        payload:
+          weft.accounts.QuotaRaised:
+            quota_id: input.quota_id
+            by: input.by
+
+  # Sketch line 127 and line 99. The operator lowers a top-level quota; it never drops below
+  # what sub-accounts drew from it.
+  - name: weft.accounts.LowerTopQuota
+    naming:
+      display: Lower a top-level account's quota
+    input:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: by, type: Integer}
+    outcomes:
+      - name: not-positive
+        when: by <= 0
+        error: weft.accounts.InvalidQuotaAmount
+      - name: no-such-quota
+        unknown_instance: true
+        error: weft.accounts.QuotaNotFound
+      - name: drawn-quota
+        when_subject: {predicate: defined(parent_quota_id)}
+        error: weft.accounts.NotTopLevelAccount
+      - name: below-allocated
+        when_subject: {predicate: remaining < input.by}
+        error: weft.accounts.QuotaBelowAllocated
+      - name: lowered
+        updates: weft.accounts.Quota
+        instance: quota_id
+        sets:
+          limit: {expr: "subject.limit - input.by"}
+          remaining: {expr: "subject.remaining - input.by"}
+        emits: [weft.accounts.QuotaLowered]
+        payload:
+          weft.accounts.QuotaLowered:
+            quota_id: input.quota_id
+            by: input.by
+
+  # Sketch lines 127-128 and line 454 (`weft account create acme/research/gpu-lab --quota
+  # gpu=4`). Opens a sub-account's quota for one class at 0, tied to its parent account's quota
+  # for the same class; DrawQuota then draws from the parent. The CLI line is CreateSubAccount,
+  # AllocateQuota and DrawQuota.
+  # ESS 0.99.2 admits no `affects:` beside `creates:`, so the creating outcome draws nothing and
+  # the parent's remaining quota is untouched until DrawQuota.
+  # `parent_account_id` is the parent both rows must name: the account's parent and the parent
+  # quota's account are each checked against it.
+  - name: weft.accounts.AllocateQuota
+    naming:
+      display: Open a sub-account's quota
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: parent_account_id, type: weft.shared.AccountId}
+      - {name: parent_quota_id, type: weft.shared.QuotaId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+    outcomes:
+      # hardening pass 1 D3 and disclosure (accounts.yaml:1089): the account is the account the
+      # request acts in, so another account answers as a missing one before its state
+      # (TopLevelQuota) is read.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.accounts.AccountNotFound
+      - name: no-such-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.accounts.AccountNotFound
+      - name: no-such-parent-quota
+        when_related: {via: input.parent_quota_id, exists: false}
+        error: weft.accounts.QuotaNotFound
+      - name: top-level-account
+        when_related: {via: input.account_id, predicate: not defined(parent_account_id)}
+        error: weft.accounts.TopLevelQuota
+      - name: other-parent
+        when_related: {via: input.account_id, predicate: parent_account_id != input.parent_account_id}
+        error: weft.accounts.QuotaParentMismatch
+      # hardening pass 1 disclosure (accounts.yaml:1092): a quota of an account other than the
+      # caller's parent account (tied to the caller by other-parent above) answers as a missing
+      # one (was QuotaParentMismatch), before any state of it is read.
+      - name: parent-quota-of-other-account
+        when_related: {via: input.parent_quota_id, predicate: account_id != input.parent_account_id}
+        error: weft.accounts.QuotaNotFound
+      - name: parent-quota-of-other-class
+        when_related: {via: input.parent_quota_id, predicate: resource_class != input.resource_class}
+        error: weft.accounts.QuotaParentMismatch
+      - name: account-closed
+        when_related: {via: input.account_id, predicate: state == Closed}
+        error: weft.accounts.AccountNotOpen
+      - name: quota-exists
+        when_related:
+          entity: weft.accounts.Quota
+          where:
+            all:
+              - account_id == input.account_id
+              - resource_class == input.resource_class
+          exists: true
+        error: weft.accounts.QuotaExists
+      - name: allocated
+        creates: weft.accounts.Quota
+        instance: quota_id
+        sets:
+          account_id: input.account_id
+          tenant_id: {related: {via: input.account_id, field: tenant_id}}
+          parent_quota_id: input.parent_quota_id
+          resource_class: input.resource_class
+          limit: 0
+          remaining: 0
+        emits: [weft.accounts.QuotaAllocated]
+        payload:
+          weft.accounts.QuotaAllocated:
+            quota_id: {generated: true}
+            account_id: input.account_id
+            parent_quota_id: input.parent_quota_id
+            resource_class: input.resource_class
+
+  # Sketch lines 127-128: "A child's quota is at most its parent's remaining quota." The command
+  # addresses the parent's quota: its remaining quota shrinks by the amount, and the sub-account's
+  # quota, at 0 before, gets the amount as its limit in the same outcome. Refused when the parent
+  # has less left.
+  # ESS 0.99.2 computes a value (`{expr: …}`) only for the addressed row, and writes another row
+  # (`affects:`) only from the input or a literal. So the sub-account's quota is drawn from 0 to
+  # its limit in one step and released back to 0 in one step; a change of size is ReleaseQuota
+  # then DrawQuota.
+  # OPEN: a sub-account's quota changed in place (raise or lower by an amount) in one command.
+  # Taken: release and draw again; between the two calls the sub-account's limit is 0, which
+  # widens nothing.
+  - name: weft.accounts.DrawQuota
+    naming:
+      display: Draw a sub-account's quota from its parent
+    input:
+      - {name: parent_quota_id, type: weft.shared.QuotaId}
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: limit, type: Integer}
+    outcomes:
+      - name: not-positive
+        when: limit <= 0
+        error: weft.accounts.InvalidQuotaAmount
+      - name: no-such-parent-quota
+        unknown_instance: true
+        error: weft.accounts.QuotaNotFound
+      # hardening pass 1 D3 and disclosure (accounts.yaml:1162): the parent quota is of the
+      # account the request acts in, so another account's quota answers as a missing one before
+      # its remaining quota is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.accounts.QuotaNotFound
+      - name: exceeds-parent
+        when_subject: {predicate: remaining < input.limit}
+        error: weft.accounts.QuotaExceedsParent
+      - name: no-such-quota
+        when_related: {via: input.quota_id, exists: false}
+        error: weft.accounts.QuotaNotFound
+      # hardening pass 1 disclosure (accounts.yaml:1162): a quota not drawn from this parent
+      # answers as a missing one (was QuotaParentMismatch), before its state (TopLevelQuota,
+      # limit) is read.
+      # hardening pass 3: a top-level quota (no parent) is not drawn from this parent either, so it
+      # answers here as a missing one; ESS 0.99.2 reads `!=` over an absent Optional as Unknown,
+      # and the former `top-level` branch after it disclosed another account's top-level quota.
+      - name: other-parent
+        when_related:
+          via: input.quota_id
+          predicate:
+            any:
+              - not defined(parent_quota_id)
+              - parent_quota_id != input.parent_quota_id
+        error: weft.accounts.QuotaNotFound
+      - name: already-drawn
+        when_related: {via: input.quota_id, predicate: limit != 0}
+        error: weft.accounts.QuotaAlreadyDrawn
+      - name: drawn
+        updates: weft.accounts.Quota
+        instance: parent_quota_id
+        sets:
+          remaining: {expr: "subject.remaining - input.limit"}
+        affects:
+          - entity: weft.accounts.Quota
+            where: quota_id == input.quota_id
+            sets:
+              limit: input.limit
+              remaining: input.limit
+        emits: [weft.accounts.QuotaDrawn]
+        payload:
+          weft.accounts.QuotaDrawn:
+            parent_quota_id: input.parent_quota_id
+            quota_id: input.quota_id
+            limit: input.limit
+
+  # Sketch lines 127-128. Returns a sub-account's whole quota to its parent's remaining quota and
+  # sets it to 0. `limit` is the limit the caller read; a quota changed since is refused. Refused
+  # while sub-accounts of that account drew from it.
+  # OPEN: whether a quota may be released below the account's current usage. Taken: yes; usage is
+  # the metering domain's, and new claims over the limit are refused there.
+  - name: weft.accounts.ReleaseQuota
+    naming:
+      display: Release a sub-account's quota to its parent
+    input:
+      - {name: parent_quota_id, type: weft.shared.QuotaId}
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: limit, type: Integer}
+    outcomes:
+      - name: no-such-parent-quota
+        unknown_instance: true
+        error: weft.accounts.QuotaNotFound
+      # hardening pass 1 D3 and disclosure (accounts.yaml:1208): the parent quota is of the
+      # account the request acts in, so another account's quota answers as a missing one.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.accounts.QuotaNotFound
+      - name: no-such-quota
+        when_related: {via: input.quota_id, exists: false}
+        error: weft.accounts.QuotaNotFound
+      # hardening pass 1 disclosure (accounts.yaml:1208): a quota not drawn from this parent
+      # answers as a missing one (was QuotaParentMismatch), before its state (TopLevelQuota,
+      # limit, remaining) is read.
+      # hardening pass 3: a top-level quota answers here as a missing one, as in DrawQuota.
+      - name: other-parent
+        when_related:
+          via: input.quota_id
+          predicate:
+            any:
+              - not defined(parent_quota_id)
+              - parent_quota_id != input.parent_quota_id
+        error: weft.accounts.QuotaNotFound
+      - name: changed-since-read
+        when_related: {via: input.quota_id, predicate: limit != input.limit}
+        error: weft.accounts.QuotaChanged
+      - name: drawn-by-sub-accounts
+        when_related: {via: input.quota_id, predicate: remaining != input.limit}
+        error: weft.accounts.QuotaBelowAllocated
+      - name: released
+        updates: weft.accounts.Quota
+        instance: parent_quota_id
+        sets:
+          remaining: {expr: "subject.remaining + input.limit"}
+        affects:
+          - entity: weft.accounts.Quota
+            where: quota_id == input.quota_id
+            sets:
+              limit: 0
+              remaining: 0
+        emits: [weft.accounts.QuotaReleased]
+        payload:
+          weft.accounts.QuotaReleased:
+            parent_quota_id: input.parent_quota_id
+            quota_id: input.quota_id
+            limit: input.limit
+
+views:
+  # Sketch lines 120 and 99: the tenants of the cloud.
+  - name: weft.accounts.Tenants
+    source: weft.accounts.Tenant
+    consistency: read_your_writes
+    fields:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: name, type: weft.accounts.Name}
+      - {name: state, type: weft.accounts.Tenant.State}
+
+  # Sketch lines 121-123: the account tree of one tenant. Each row names its parent; a top-level
+  # account has none.
+  - name: weft.accounts.AccountTree
+    source: weft.accounts.Account
+    consistency: read_your_writes
+    params:
+      - {name: tenant_id, type: weft.shared.TenantId}
+    filter: tenant_id == param.tenant_id
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: parent_account_id, type: Optional<weft.shared.AccountId>}
+      - {name: name, type: weft.accounts.Name}
+      - {name: state, type: weft.accounts.Account.State}
+
+  # Sketch line 124: the principals of one tenant.
+  - name: weft.accounts.Principals
+    source: weft.accounts.Principal
+    consistency: read_your_writes
+    params:
+      - {name: tenant_id, type: weft.shared.TenantId}
+    filter: tenant_id == param.tenant_id
+    fields:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: kind, type: weft.accounts.PrincipalKind}
+      - {name: name, type: String}
+      - {name: subject, type: Optional<String>}
+      - {name: workload_identity, type: Optional<weft.shared.WorkloadIdentity>}
+      - {name: state, type: weft.accounts.Principal.State}
+
+  # Sketch line 125 ("what a principal may do on an account and below"): the active bindings of
+  # one principal. A row with an account holds on that account and every account below it; a row
+  # with no account holds on the whole tenant.
+  # UNMAPPED: "effective" over the tree (a binding on `acme/research` also holds on
+  # `acme/research/gpu-lab`) needs a walk up the account tree; a view reads one entity and one
+  # reference hop, so the rows are the bindings as written and the authorizer of the access
+  # domain expands them over AccountTree. Open question for the owner: whether the effective
+  # roles per account are a view of their own, kept by a projection.
+  - name: weft.accounts.EffectiveRoles
+    source: weft.accounts.RoleBinding
+    consistency: read_your_writes
+    params:
+      - {name: principal_id, type: weft.shared.PrincipalId}
+    filter:
+      all:
+        - principal_id == param.principal_id
+        - state == Active
+    fields:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: role, type: weft.shared.Role}
+      - name: account_name
+        type: Optional<weft.accounts.Name>
+        field: {related: {via: account_id, field: name}}
+
+  # Sketch line 125: every binding of one tenant, active and revoked, for its owners and admins.
+  - name: weft.accounts.RoleBindings
+    source: weft.accounts.RoleBinding
+    consistency: read_your_writes
+    params:
+      - {name: tenant_id, type: weft.shared.TenantId}
+    filter: tenant_id == param.tenant_id
+    fields:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: role, type: weft.shared.Role}
+      - {name: state, type: weft.accounts.RoleBinding.State}
+
+  # Sketch line 159 ("Every management call is authorized against RoleBindings"): every binding
+  # of every tenant, the rows the access domain's authorizer reads. Closing a tenant or an
+  # account and disabling a principal revoke bindings as a set; this view is where those rows are
+  # read back.
+  # OPEN: which actor reads it. Taken: none of the human actors; the integrator's actor table
+  # grants it to ManagementApi only, so no tenant reads another tenant's bindings.
+  - name: weft.accounts.RoleBindingIndex
+    source: weft.accounts.RoleBinding
+    consistency: read_your_writes
+    fields:
+      - {name: role_binding_id, type: weft.shared.RoleBindingId}
+      - {name: principal_id, type: weft.shared.PrincipalId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: role, type: weft.shared.Role}
+      - {name: state, type: weft.accounts.RoleBinding.State}
+
+  # Sketch line 482 ("quotas are checked at every level") and lines 127-128: every
+  # quota of every tenant, the rows the metering and scheduling domains read. DrawQuota and
+  # ReleaseQuota write a second quota row; this view is where that row is read back.
+  # OPEN: which actor reads it. Taken: none of the human actors; the integrator's actor table
+  # grants it to the system actors that check quotas.
+  - name: weft.accounts.QuotaIndex
+    source: weft.accounts.Quota
+    consistency: read_your_writes
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: parent_quota_id, type: Optional<weft.shared.QuotaId>}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: limit, type: Integer}
+      - {name: remaining, type: Integer}
+      - {name: state, type: weft.accounts.Quota.State}
+
+  # Sketch lines 127-128: quota usage per account. One row per resource class: the limit, what
+  # sub-accounts drew from it, and what remains to draw.
+  # UNMAPPED: the units an account actually holds or used per class are the metering domain's
+  # UsageRecord (sketch lines 439-440); a view reads entities of its own domain, so the usage
+  # column is left to the integration pass. Open question for the owner: whether this view gains
+  # a `used` column from metering, or metering publishes its own usage-against-quota view.
+  - name: weft.accounts.QuotaUsage
+    source: weft.accounts.Quota
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: parent_quota_id, type: Optional<weft.shared.QuotaId>}
+      - {name: limit, type: Integer}
+      - {name: remaining, type: Integer}
+      - {name: drawn_by_sub_accounts, type: Integer, expr: "limit - remaining"}
+
+  # Sketch lines 11 ("quotas at every level") and 127-128: every quota of one tenant, so the
+  # quota tree can be read beside AccountTree.
+  - name: weft.accounts.TenantQuotas
+    source: weft.accounts.Quota
+    consistency: read_your_writes
+    params:
+      - {name: tenant_id, type: weft.shared.TenantId}
+    filter: tenant_id == param.tenant_id
+    fields:
+      - {name: quota_id, type: weft.shared.QuotaId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: parent_quota_id, type: Optional<weft.shared.QuotaId>}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: limit, type: Integer}
+      - {name: remaining, type: Integer}

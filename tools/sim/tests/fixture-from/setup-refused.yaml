@@ -1,0 +1,13 @@
+format: weft-sim-experiment/1
+name: setup-refused
+summary: A setup step with no expect that the model refuses (no such shelf).
+setup:
+  - label: add-gold
+    command: demo.shelf.AddShelf
+    actor: demo.actors.Keeper
+    input: {label: gold}
+    expect: added
+  - label: polish-nothing
+    command: demo.shelf.Polish
+    actor: demo.actors.Keeper
+    input: {shelf_id: "00000000-0000-4000-8000-00000000abcd"}

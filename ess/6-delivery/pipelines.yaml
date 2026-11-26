@@ -1,0 +1,1914 @@
+domain: weft.pipelines
+
+summary: >-
+  CI/CD on weft: forge connections, runner pools and jobs, build caches, deploy gates and their
+  checks. Design: .engineering/planning/design/ci-cd-support.md.
+
+naming:
+  wire: pipelines
+  display: Pipelines
+
+# Every comment "Design § …" cites .engineering/planning/design/ci-cd-support.md; "sketch § 14"
+# cites docs/domain-sketch.md (reconciliation). Sketch § 17 points to the design.
+
+types:
+  # Design § Goal ("a forge (GitHub, GitLab, Forgejo)") and § Stage 2 `ForgeConnection`.
+  - name: weft.pipelines.ForgeKind
+    kind: enum
+    variants: [GitHub, GitLab, Forgejo]
+
+  # Design § Stage 1.2: the gate kinds `approval`, `signed-artifact`, `provenance`,
+  # `conformance`, `window`.
+  - name: weft.pipelines.GateKind
+    kind: enum
+    variants:
+      - {name: Approval, wire: approval}
+      - {name: SignedArtifact, wire: signed-artifact}
+      - {name: Provenance, wire: provenance}
+      - {name: Conformance, wire: conformance}
+      - {name: Window, wire: window}
+
+  # Design § Stage 2 `RunnerJob`: how the runner reported the job's end (succeeded or failed);
+  # time-out and cancel are their own commands.
+  - name: weft.pipelines.RunnerJobResult
+    kind: enum
+    variants: [Succeeded, Failed]
+
+entities:
+  # Design § Stage 2: "`ForgeConnection`: an account's link to a forge (GitHub App installation,
+  # GitLab group token held as a weft secret). Receives webhooks at the edge: job queued, pull
+  # request closed, push." § Security: "stage 2 uses a GitHub App (short-lived installation
+  # tokens) held as a weft secret."
+  # OPEN: the end of a connection; the design gives none. Taken: Disconnected, refused while an
+  # active runner pool uses it.
+  # OPEN: how a webhook is authenticated (the forge's webhook signature) is the edge's, before any
+  # command here; the edge domain does not exist yet (sketch § 14 OPEN).
+  - name: weft.pipelines.ForgeConnection
+    naming:
+      summary: An account's link to one forge installation, its credential held as a weft secret.
+    identity:
+      name: forge_connection_id
+      type: weft.shared.ForgeConnectionId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: forge
+        type: weft.pipelines.ForgeKind
+      # The forge's base URL (`https://github.com`, a self-hosted GitLab).
+      - name: forge_url
+        type: String
+      # The GitHub App installation id or the GitLab group path.
+      - name: installation
+        type: String
+      # The App key or group token; the value stays in weft.secrets and never appears here.
+      - name: credential_secret_id
+        type: weft.shared.SecretId
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      # One secret per connection; the secret stands on its own (weft.secrets).
+      - name: credential
+        kind: references
+        target: weft.secrets.Secret
+        cardinality: one
+        via: credential_secret_id
+    lifecycle:
+      initial: Active
+      states: [Active, Disconnected]
+      terminal: [Disconnected]
+      transitions:
+        - name: disconnect
+          from: [Active]
+          to: Disconnected
+
+  # Design § Stage 2: "`RunnerPool`: a forge connection, the labels it serves (`runs-on: [weft,
+  # gpu]`), a runner workload (image or Box), the isolation level (default `MicroVm`: CI runs
+  # untrusted code), the resource class, min 0, max N, a per-job time limit (default 10 min, at
+  # most 30 min ...), and a cache." § Security: "egress allow-listed per pool".
+  # UNMAPPED: "a runner workload (image or Box)": no source says whether the pool names an
+  # artifact or a weft.workloads Workload or Box. Taken (open question 3, default "any registered
+  # artifact, signed"): the runner image as an artifact digest; the runner instances are created
+  # by the controller from it.
+  # Contradiction: the design lists "a cache" on the pool and, for `BuildCache`, "a volume per
+  # pool and cache key" (many per pool). Taken: many BuildCache rows name the pool; the pool
+  # stores none.
+  # OPEN: `max_runners` is the controller's bound when it starts runners (QueuedRunnerJobs); ESS
+  # counts rows only against a literal (sketch § 14), and a stored counter would need a two-entity
+  # increment ESS refuses in a set effect.
+  - name: weft.pipelines.RunnerPool
+    naming:
+      summary: Ephemeral CI runners of one forge connection, by label, image, isolation and bounds.
+    identity:
+      name: runner_pool_id
+      type: weft.shared.RunnerPoolId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: forge_connection_id
+        type: weft.shared.ForgeConnectionId
+      - name: name
+        type: String
+      - name: labels
+        type: List<String>
+      - name: runner_artifact
+        type: weft.shared.ArtifactDigest
+      - name: isolation
+        type: weft.shared.IsolationLevel
+      - name: resource_class
+        type: weft.shared.ResourceClassName
+      - name: min_runners
+        type: Integer
+      - name: max_runners
+        type: Integer
+      # Whole seconds: ESS orders no Duration. Default 600 (the CLI sends it), at most 1800.
+      - name: job_time_limit_seconds
+        type: Integer
+      # Hosts a runner may reach; empty: none (default deny).
+      - name: egress_allow
+        type: List<String>
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      # Many pools per connection; DisconnectForge refuses while an active pool names it.
+      - name: forge_connection
+        kind: references
+        target: weft.pipelines.ForgeConnection
+        cardinality: one
+        via: forge_connection_id
+      - name: runner_image
+        kind: references
+        target: weft.artifacts.Artifact
+        cardinality: one
+        via: runner_artifact
+      - name: class
+        kind: references
+        target: weft.inventory.ResourceClass
+        cardinality: one
+        via: resource_class
+    invariants:
+      - min_runners >= 0
+      - max_runners >= 1
+      - max_runners >= min_runners
+      - job_time_limit_seconds > 0
+      - job_time_limit_seconds <= 1800
+    lifecycle:
+      initial: Active
+      states: [Active, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Active]
+          to: Retired
+
+  # Design § Stage 2: "`RunnerJob`: one CI job served by one runner instance. States: queued,
+  # assigned, running, succeeded, failed, timed-out, cancelled. A runner is ephemeral: one job,
+  # then the instance ends and its disk is wiped. The job id of the forge is stored for audit."
+  # The time limit counts from the start, not the wait in the queue (as the slot pool's).
+  # A job's end emits RunnerJobEnded with the instance; ending and wiping the instance is
+  # weft.workloads' and weft.nodes' (a binding in components.yaml, integrator).
+  - name: weft.pipelines.RunnerJob
+    naming:
+      summary: One CI job of a forge, served by one ephemeral runner instance.
+    identity:
+      name: runner_job_id
+      type: weft.shared.RunnerJobId
+    fields:
+      - name: runner_pool_id
+        type: weft.shared.RunnerPoolId
+      - name: forge_job_id
+        type: String
+      - name: forge_run_id
+        type: String
+      - name: repository
+        type: String
+      - name: ref
+        type: String
+      - name: commit
+        type: String
+      # Whether the forge reports the ref as protected. A pull request from a fork never is.
+      # Decides which build cache the job may write (design open question 4, default taken).
+      - name: ref_protected
+        type: Boolean
+      - name: labels
+        type: List<String>
+      - name: instance_id
+        type: Optional<weft.shared.InstanceId>
+      - name: queued_at
+        type: Timestamp
+      - name: started_at
+        type: Optional<Timestamp>
+      # started_at plus the pool's job time limit, minted at start.
+      - name: deadline
+        type: Optional<Timestamp>
+      - name: ended_at
+        type: Optional<Timestamp>
+    relations:
+      # Many jobs per pool. A job is an audit record and outlives the link.
+      - name: runner_pool
+        kind: references
+        target: weft.pipelines.RunnerPool
+        cardinality: one
+        via: runner_pool_id
+      # "one CI job served by one runner instance": AssignRunnerJob refuses an instance that
+      # served a job before.
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+    lifecycle:
+      initial: Queued
+      states: [Queued, Assigned, Running, Succeeded, Failed, TimedOut, Cancelled]
+      terminal: [Succeeded, Failed, TimedOut, Cancelled]
+      transitions:
+        - name: assign
+          from: [Queued]
+          to: Assigned
+        - name: start
+          from: [Assigned]
+          to: Running
+        - name: succeed
+          from: [Running]
+          to: Succeeded
+        - name: fail
+          from: [Assigned, Running]
+          to: Failed
+        - name: time_out
+          from: [Running]
+          to: TimedOut
+        - name: cancel
+          from: [Queued, Assigned, Running]
+          to: Cancelled
+
+  # Design § Stage 2: "`BuildCache`: a volume per pool and cache key (for example the Cargo lock
+  # digest), attached read-write to one job at a time or read-only to many, size cap,
+  # least-recently-used eviction." § Security: "no access to other pools' caches; a cache written
+  # by a pull request from a fork is never read by a `main` build." Open question 4 (default
+  # taken): two caches per key, a protected one written only by protected refs.
+  # A read-only attach holds nothing exclusive; it only stamps last_used_at. The one writer is
+  # writer_job_id, cleared when that job ends (every ending command of RunnerJob).
+  # UNMAPPED: whether evicting the cache deletes its volume (the cache owning the volume) or
+  # leaves it to weft.resources; the volume is another domain's row. Written as references; the
+  # delete is a binding on BuildCacheEvicted (integrator).
+  - name: weft.pipelines.BuildCache
+    naming:
+      summary: A cache volume of one pool and cache key, one writer at a time, protected or not.
+    identity:
+      name: build_cache_id
+      type: weft.shared.BuildCacheId
+    fields:
+      - name: runner_pool_id
+        type: weft.shared.RunnerPoolId
+      - name: cache_key
+        type: String
+      - name: protected
+        type: Boolean
+      - name: volume_id
+        type: weft.shared.VolumeId
+      - name: size_cap_bytes
+        type: Integer
+      - name: writer_job_id
+        type: Optional<weft.shared.RunnerJobId>
+      - name: last_used_at
+        type: Timestamp
+    relations:
+      # UNMAPPED: "per pool" reads as the pool owning its caches (no meaning without it), but no
+      # source says what retiring a pool does to them. Written as references.
+      - name: runner_pool
+        kind: references
+        target: weft.pipelines.RunnerPool
+        cardinality: one
+        via: runner_pool_id
+      - name: volume
+        kind: references
+        target: weft.resources.Volume
+        cardinality: one
+        via: volume_id
+      - name: writer
+        kind: references
+        target: weft.pipelines.RunnerJob
+        cardinality: one
+        via: writer_job_id
+    invariants:
+      - size_cap_bytes > 0
+    lifecycle:
+      initial: Active
+      states: [Active, Evicted]
+      terminal: [Evicted]
+      transitions:
+        - name: evict
+          from: [Active]
+          to: Evicted
+
+  # Design § Stage 1.2: "`DeployGate` on an environment: kinds `approval` (a principal with a role
+  # approves), `signed-artifact` (every artifact signed by a named key), `provenance` (built by a
+  # named builder from a named repository), `conformance` (an ESS conformance report, green, for
+  # the model digest of an ess-system source), `window` (a time window)." Read by deployments
+  # (StartRelease refuses while a gate of the target environment has no passed check).
+  # Each kind's settings are the Optional fields below; AddDeployGate requires those of its kind
+  # and refuses the others.
+  # UNMAPPED: whether an environment owns its gates (removed when it is retired); written as
+  # references. Many gates per environment.
+  # OPEN: a window is one absolute interval (opens_at, closes_at). Whether it recurs (weekdays,
+  # a freeze calendar) is not said.
+  # OPEN: may a gate be changed in place? Taken: no; remove it and add another.
+  - name: weft.pipelines.DeployGate
+    naming:
+      summary: A condition a release into one environment must pass, of one kind.
+    identity:
+      name: deploy_gate_id
+      type: weft.shared.DeployGateId
+    fields:
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: kind
+        type: weft.pipelines.GateKind
+      - name: approver_role
+        type: Optional<weft.shared.Role>
+      - name: signer_key_id
+        type: Optional<String>
+      # Compared exactly with weft.artifacts.Attestation `builder` and `source_repository`.
+      - name: builder
+        type: Optional<String>
+      - name: source_repository
+        type: Optional<String>
+      - name: window_opens_at
+        type: Optional<Timestamp>
+      - name: window_closes_at
+        type: Optional<Timestamp>
+      - name: created_by
+        type: weft.shared.PrincipalId
+    relations:
+      - name: environment
+        kind: references
+        target: weft.formations.Environment
+        cardinality: one
+        via: environment_id
+      - name: creator
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: created_by
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+  # Design § Stage 1.2: "`GateCheck`: one evaluation of one gate for one plan: passed, failed,
+  # waiting (approval)." § Security: "Every ... gate decision and approval is a record with the
+  # principal". A failed check is final; the gate is evaluated again by a new check.
+  # Plan is weft.deployments' (layer 6, the same layer); deployments reads GateCheck back for
+  # StartRelease, so the two domains name each other. check-layers admits the same layer.
+  - name: weft.pipelines.GateCheck
+    naming:
+      summary: One evaluation of one deploy gate for one plan.
+    identity:
+      name: gate_check_id
+      type: weft.shared.GateCheckId
+    fields:
+      - name: deploy_gate_id
+        type: weft.shared.DeployGateId
+      - name: plan_id
+        type: weft.shared.PlanId
+      # The gate's environment, stored so deployments selects the checks of a plan's environment
+      # without a second hop.
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      # What decided it: an attestation id, a conformance report digest, a signature check.
+      - name: evidence
+        type: Optional<String>
+      - name: reason
+        type: Optional<String>
+      # The approving or rejecting principal (approval gates).
+      - name: decided_by
+        type: Optional<weft.shared.PrincipalId>
+      - name: opened_at
+        type: Timestamp
+      - name: decided_at
+        type: Optional<Timestamp>
+    relations:
+      # Many checks per gate and per plan; each check one of each.
+      - name: deploy_gate
+        kind: references
+        target: weft.pipelines.DeployGate
+        cardinality: one
+        via: deploy_gate_id
+      - name: plan
+        kind: references
+        target: weft.deployments.Plan
+        cardinality: one
+        via: plan_id
+      - name: environment
+        kind: references
+        target: weft.formations.Environment
+        cardinality: one
+        via: environment_id
+      - name: decider
+        kind: references
+        target: weft.accounts.Principal
+        cardinality: one
+        via: decided_by
+    lifecycle:
+      initial: Waiting
+      states: [Waiting, Passed, Failed]
+      terminal: [Passed, Failed]
+      transitions:
+        - name: pass
+          from: [Waiting]
+          to: Passed
+        - name: fail
+          from: [Waiting]
+          to: Failed
+
+errors:
+  - name: weft.pipelines.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.pipelines.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.pipelines.AccountUnavailable
+    summary: The account does not exist or is closed.
+  - name: weft.pipelines.SecretUnavailable
+    summary: The credential secret does not exist or belongs to another account.
+  - name: weft.pipelines.ConnectionExists
+    summary: The account already has an active connection to this forge installation.
+  - name: weft.pipelines.ConnectionInUse
+    summary: An active runner pool still uses this forge connection.
+  - name: weft.pipelines.ConnectionUnavailable
+    summary: The forge connection does not exist, is disconnected or belongs to another account.
+  - name: weft.pipelines.InvalidBounds
+    summary: >-
+      A pool bound is out of range: no label, min below 0, max below 1 or below min, or a job time
+      limit outside 1 to 1800 seconds.
+  - name: weft.pipelines.IsolationTooWeak
+    summary: CI runs untrusted code; a runner runs at MicroVm isolation.
+  - name: weft.pipelines.ArtifactUnavailable
+    summary: The runner image is not a registered artifact of the account.
+  - name: weft.pipelines.ResourceClassUnavailable
+    summary: The resource class does not exist or is retired.
+  - name: weft.pipelines.PoolBusy
+    summary: The pool still has queued, assigned or running jobs.
+  - name: weft.pipelines.PoolUnavailable
+    summary: The runner pool does not exist, is retired, or is not on the named connection.
+  - name: weft.pipelines.LabelsNotServed
+    summary: The job asks for a label the pool does not serve.
+  - name: weft.pipelines.JobAlreadyQueued
+    summary: This forge job is already queued on the pool (a repeated webhook).
+  - name: weft.pipelines.JobNotInPool
+    summary: The runner job does not belong to the named pool.
+  - name: weft.pipelines.InstanceUnavailable
+    summary: The instance does not exist or belongs to another account.
+  - name: weft.pipelines.InstanceAlreadyServed
+    summary: The instance has served a job already; a runner is ephemeral, one job per instance.
+  - name: weft.pipelines.NotYetTimedOut
+    summary: The job's deadline has not passed; nothing changed.
+  - name: weft.pipelines.CacheExists
+    summary: The pool already has an active cache for this key and ref class.
+  - name: weft.pipelines.VolumeUnavailable
+    summary: The volume does not exist or belongs to another account.
+  # hardening pass 1 D7.
+  - name: weft.pipelines.VolumeInUse
+    summary: The volume already backs an active build cache; one volume backs one cache.
+  - name: weft.pipelines.CacheBusy
+    summary: Another job writes this cache; one writer at a time.
+  - name: weft.pipelines.ForeignCache
+    summary: The cache belongs to another pool; a job reaches only its own pool's caches.
+  - name: weft.pipelines.CacheProtected
+    summary: The job's ref is not protected; it may not write a protected cache.
+  - name: weft.pipelines.CacheUntrusted
+    summary: A protected ref never reads a cache an unprotected ref may have written.
+  - name: weft.pipelines.JobNotRunning
+    summary: The job is not assigned or running, so it attaches no cache.
+  - name: weft.pipelines.NotWriter
+    summary: The job is not the cache's writer.
+  - name: weft.pipelines.EnvironmentUnavailable
+    summary: The environment does not exist or is retired.
+  - name: weft.pipelines.GateSettingsInvalid
+    summary: >-
+      The gate lacks a setting its kind needs or names one of another kind (an approval names its
+      role, signed-artifact its key, provenance its builder and repository, window its interval).
+  - name: weft.pipelines.GateUnavailable
+    summary: The deploy gate does not exist or is removed.
+  - name: weft.pipelines.PlanUnavailable
+    summary: The plan does not exist or is discarded.
+  - name: weft.pipelines.GateNotForEnvironment
+    summary: The gate or the plan is not of the named environment.
+  - name: weft.pipelines.CheckExists
+    summary: The gate already has a waiting or passed check for this plan.
+  - name: weft.pipelines.GateMismatch
+    summary: The check is not a check of the named gate.
+  - name: weft.pipelines.ApprovalRequired
+    summary: An approval gate passes or fails only by a principal's approval or rejection.
+  - name: weft.pipelines.NotAnApprovalGate
+    summary: Only a check of an approval gate is approved or rejected by a principal.
+  - name: weft.pipelines.NotApprover
+    summary: The caller holds no binding of the gate's approver role on the environment's account.
+  - name: weft.pipelines.OutsideWindow
+    summary: The current time lies outside the window gate's interval.
+  - name: weft.pipelines.EvidenceInsufficient
+    summary: >-
+      The evidence does not satisfy the gate: an artifact unsigned by the named key, no attestation
+      of the named builder and repository, or no green conformance report for the model digest.
+
+events:
+  - name: weft.pipelines.ForgeConnected
+    fields:
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: forge, type: weft.pipelines.ForgeKind}
+
+  - name: weft.pipelines.ForgeDisconnected
+    fields:
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+
+  - name: weft.pipelines.RunnerPoolCreated
+    fields:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+
+  - name: weft.pipelines.RunnerPoolRetired
+    fields:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+
+  # Sketch § 14 edge form: one queued job, one runner. Carries what the controller needs to start
+  # the runner instance.
+  - name: weft.pipelines.RunnerJobQueued
+    fields:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: forge_job_id, type: String}
+
+  - name: weft.pipelines.RunnerJobAssigned
+    fields:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+
+  - name: weft.pipelines.RunnerJobStarted
+    fields:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+
+  # Every end of a job (succeeded, failed, timed out, cancelled). The instance ends and its disk
+  # is wiped (a binding, integrator); metering reads the runner seconds (design § Stage 2
+  # "Metering": runner seconds per resource class).
+  - name: weft.pipelines.RunnerJobEnded
+    fields:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: started_at, type: Optional<Timestamp>}
+      - {name: outcome, type: weft.pipelines.RunnerJob.State}
+
+  - name: weft.pipelines.BuildCacheCreated
+    fields:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: volume_id, type: weft.shared.VolumeId}
+
+  - name: weft.pipelines.BuildCacheAttached
+    fields:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: writable, type: Boolean}
+
+  - name: weft.pipelines.BuildCacheReleased
+    fields:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+
+  - name: weft.pipelines.BuildCacheEvicted
+    fields:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: volume_id, type: weft.shared.VolumeId}
+
+  - name: weft.pipelines.DeployGateAdded
+    fields:
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: kind, type: weft.pipelines.GateKind}
+
+  - name: weft.pipelines.DeployGateRemoved
+    fields:
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+
+  - name: weft.pipelines.GateCheckOpened
+    fields:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: plan_id, type: weft.shared.PlanId}
+
+  # Read by deployments (the plan may start its release once every gate has passed).
+  - name: weft.pipelines.GateCheckPassed
+    fields:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: decided_by, type: Optional<weft.shared.PrincipalId>}
+
+  - name: weft.pipelines.GateCheckFailed
+    fields:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: decided_by, type: Optional<weft.shared.PrincipalId>}
+
+commands:
+  # Design § Stage 2 `ForgeConnection`; § Security: the credential is a weft secret, never a value
+  # here. Default deny: a secret of another account is refused.
+  - name: weft.pipelines.ConnectForge
+    naming:
+      display: Connect a forge installation
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: forge, type: weft.pipelines.ForgeKind}
+      - {name: forge_url, type: String}
+      - {name: installation, type: String}
+      - {name: credential_secret_id, type: weft.shared.SecretId}
+    response:
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+    outcomes:
+      # hardening pass 1 D3: the account is the one the caller acts in; another account answers
+      # as a missing one (account-unavailable).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.pipelines.AccountUnavailable
+      - name: no-such-secret
+        when_related: {via: input.credential_secret_id, exists: false}
+        error: weft.pipelines.SecretUnavailable
+      - name: foreign-secret
+        when_related: {via: input.credential_secret_id, predicate: account_id != input.account_id}
+        error: weft.pipelines.SecretUnavailable
+      - name: exists
+        when_related:
+          entity: weft.pipelines.ForgeConnection
+          where:
+            all:
+              - account_id == input.account_id
+              - forge_url == input.forge_url
+              - installation == input.installation
+              - state == Active
+          exists: true
+        error: weft.pipelines.ConnectionExists
+      # Kept external for the reason weft.access.CreateApiToken gives: synthesis cannot arrange a
+      # weft.accounts.Account yet.
+      - name: account-unavailable
+        external: the account does not exist or is closed
+        error: weft.pipelines.AccountUnavailable
+      - name: connected
+        creates: weft.pipelines.ForgeConnection
+        instance: forge_connection_id
+        returns: true
+        sets:
+          account_id: input.account_id
+          forge: input.forge
+          forge_url: input.forge_url
+          installation: input.installation
+          credential_secret_id: input.credential_secret_id
+        emits: [weft.pipelines.ForgeConnected]
+        payload:
+          weft.pipelines.ForgeConnected:
+            forge_connection_id: {response: forge_connection_id}
+            account_id: input.account_id
+            forge: input.forge
+
+  # Design § Stage 2 `ForgeConnection` (end: OPEN on the entity).
+  - name: weft.pipelines.DisconnectForge
+    naming:
+      display: Disconnect a forge installation
+    input:
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+    outcomes:
+      - name: no-such-connection
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      # OPEN (hardening pass 1 D3): no caller tie; ESS refuses a when_subject guard beside the
+      # row-set guard in-use, and a caller operand in when_related. weft-api holds the account.
+      - name: in-use
+        when_related:
+          entity: weft.pipelines.RunnerPool
+          where:
+            all:
+              - forge_connection_id == input.forge_connection_id
+              - state == Active
+          exists: true
+        error: weft.pipelines.ConnectionInUse
+      - name: disconnected
+        moves: weft.pipelines.ForgeConnection.disconnect
+        instance: forge_connection_id
+        emits: [weft.pipelines.ForgeDisconnected]
+        payload:
+          weft.pipelines.ForgeDisconnected:
+            forge_connection_id: input.forge_connection_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 `RunnerPool` and § Security (MicroVm, egress allow-list).
+  # OPEN: may a pool that runs only trusted code (own repositories, protected refs) run below
+  # MicroVm? Taken: no (default deny); the design says "default".
+  - name: weft.pipelines.CreateRunnerPool
+    naming:
+      display: Create a runner pool
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+      - {name: name, type: String}
+      - {name: labels, type: List<String>}
+      - {name: runner_artifact, type: weft.shared.ArtifactDigest}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: min_runners, type: Integer}
+      - {name: max_runners, type: Integer}
+      - {name: job_time_limit_seconds, type: Integer}
+      - {name: egress_allow, type: List<String>}
+    response:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+    outcomes:
+      # hardening pass 1 D3: the account is the one the caller acts in; another account answers
+      # as a missing one. The connection and artifact are tied to input.account_id below.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.pipelines.AccountUnavailable
+      - name: invalid-bounds
+        when:
+          any:
+            - labels.count < 1
+            - min_runners < 0
+            - max_runners < 1
+            - max_runners < min_runners
+            - job_time_limit_seconds < 1
+            - job_time_limit_seconds > 1800
+        error: weft.pipelines.InvalidBounds
+      - name: isolation-too-weak
+        when: isolation != MicroVm
+        error: weft.pipelines.IsolationTooWeak
+      - name: no-such-connection
+        when_related: {via: input.forge_connection_id, exists: false}
+        error: weft.pipelines.ConnectionUnavailable
+      - name: no-such-artifact
+        when_related: {via: input.runner_artifact, exists: false}
+        error: weft.pipelines.ArtifactUnavailable
+      - name: no-such-class
+        when_related: {via: input.resource_class, exists: false}
+        error: weft.pipelines.ResourceClassUnavailable
+      - name: connection-unavailable
+        when_related:
+          via: input.forge_connection_id
+          predicate:
+            any:
+              - state == Disconnected
+              - account_id != input.account_id
+        error: weft.pipelines.ConnectionUnavailable
+      - name: artifact-unavailable
+        when_related:
+          via: input.runner_artifact
+          predicate:
+            any:
+              - state == Revoked
+              - account_id != input.account_id
+        error: weft.pipelines.ArtifactUnavailable
+      - name: class-retired
+        when_related: {via: input.resource_class, predicate: state == Retired}
+        error: weft.pipelines.ResourceClassUnavailable
+      - name: created
+        creates: weft.pipelines.RunnerPool
+        instance: runner_pool_id
+        returns: true
+        sets:
+          account_id: input.account_id
+          forge_connection_id: input.forge_connection_id
+          name: input.name
+          labels: input.labels
+          runner_artifact: input.runner_artifact
+          isolation: input.isolation
+          resource_class: input.resource_class
+          min_runners: input.min_runners
+          max_runners: input.max_runners
+          job_time_limit_seconds: input.job_time_limit_seconds
+          egress_allow: input.egress_allow
+        emits: [weft.pipelines.RunnerPoolCreated]
+        payload:
+          weft.pipelines.RunnerPoolCreated:
+            runner_pool_id: {response: runner_pool_id}
+            account_id: input.account_id
+            forge_connection_id: input.forge_connection_id
+
+  # Design § Stage 2 `RunnerPool`. Refused while a job is not ended: cancel them first.
+  # OPEN: what retiring a pool does to its caches (UNMAPPED on BuildCache). Taken: nothing here;
+  # the controller evicts them.
+  - name: weft.pipelines.RetireRunnerPool
+    naming:
+      display: Retire a runner pool
+    input:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+    outcomes:
+      - name: no-such-pool
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      # OPEN (hardening pass 1 D3): no caller tie; ESS refuses a when_subject guard beside the
+      # row-set guard busy, and a caller operand in when_related. weft-api holds the account.
+      - name: busy
+        when_related:
+          entity: weft.pipelines.RunnerJob
+          where:
+            all:
+              - runner_pool_id == input.runner_pool_id
+              - any: [state == Queued, state == Assigned, state == Running]
+          exists: true
+        error: weft.pipelines.PoolBusy
+      - name: retired
+        moves: weft.pipelines.RunnerPool.retire
+        instance: runner_pool_id
+        emits: [weft.pipelines.RunnerPoolRetired]
+        payload:
+          weft.pipelines.RunnerPoolRetired:
+            runner_pool_id: input.runner_pool_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 "Scale: a queued-job webhook is the edge trigger (one job, one runner: sketch
+  # § 14, edge form)". The edge verified the webhook and names the connection it came through.
+  # A repeated webhook finds the job queued and is refused (JobAlreadyQueued), so it starts no
+  # second runner.
+  - name: weft.pipelines.QueueRunnerJob
+    naming:
+      display: Queue a CI job on a runner pool
+    input:
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: forge_job_id, type: String}
+      - {name: forge_run_id, type: String}
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: commit, type: String}
+      - {name: ref_protected, type: Boolean}
+      - {name: labels, type: List<String>}
+    response:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+    outcomes:
+      - name: no-such-connection
+        when_related: {via: input.forge_connection_id, exists: false}
+        error: weft.pipelines.ConnectionUnavailable
+      - name: no-such-pool
+        when_related: {via: input.runner_pool_id, exists: false}
+        error: weft.pipelines.PoolUnavailable
+      - name: connection-disconnected
+        when_related: {via: input.forge_connection_id, predicate: state == Disconnected}
+        error: weft.pipelines.ConnectionUnavailable
+      - name: pool-unavailable
+        when_related:
+          via: input.runner_pool_id
+          predicate:
+            any:
+              - state == Retired
+              - forge_connection_id != input.forge_connection_id
+        error: weft.pipelines.PoolUnavailable
+      - name: labels-not-served
+        when_related:
+          via: input.runner_pool_id
+          predicate:
+            not:
+              forall:
+                in: input.labels
+                as: l
+                that:
+                  exists: {in: labels, as: p, that: p == l}
+        error: weft.pipelines.LabelsNotServed
+      - name: already-queued
+        when_related:
+          entity: weft.pipelines.RunnerJob
+          where:
+            all:
+              - runner_pool_id == input.runner_pool_id
+              - forge_job_id == input.forge_job_id
+          exists: true
+        error: weft.pipelines.JobAlreadyQueued
+      - name: queued
+        creates: weft.pipelines.RunnerJob
+        instance: runner_job_id
+        returns: true
+        sets:
+          runner_pool_id: input.runner_pool_id
+          forge_job_id: input.forge_job_id
+          forge_run_id: input.forge_run_id
+          repository: input.repository
+          ref: input.ref
+          commit: input.commit
+          ref_protected: input.ref_protected
+          labels: input.labels
+          queued_at: {generated: true}
+        emits: [weft.pipelines.RunnerJobQueued]
+        payload:
+          weft.pipelines.RunnerJobQueued:
+            runner_job_id: {response: runner_job_id}
+            runner_pool_id: input.runner_pool_id
+            forge_job_id: input.forge_job_id
+
+  # Design § Stage 2 "one CI job served by one runner instance"; the level form (QueuedRunnerJobs)
+  # and the edge form (RunnerJobQueued) both end here once the controller started the instance.
+  # Default deny: the instance is the pool's account's, at MicroVm, and has served no job before.
+  # OPEN: the instance's image is not compared with the pool's runner artifact (a third row);
+  # the controller starts it from that artifact.
+  - name: weft.pipelines.AssignRunnerJob
+    naming:
+      display: Assign a queued CI job to a runner instance
+    input:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-such-job
+        when_related: {via: input.runner_job_id, exists: false}
+        error: weft.pipelines.NotFound
+      - name: no-such-pool
+        when_related: {via: input.runner_pool_id, exists: false}
+        error: weft.pipelines.JobNotInPool
+      - name: no-such-instance
+        when_related: {via: input.instance_id, exists: false}
+        error: weft.pipelines.InstanceUnavailable
+      # The addressed job itself, read by its identity: ESS refuses a `when_subject` guard beside
+      # the row-set guard instance-served below.
+      - name: job-not-in-pool
+        when_related: {via: input.runner_job_id, predicate: runner_pool_id != input.runner_pool_id}
+        error: weft.pipelines.JobNotInPool
+      - name: pool-not-of-account
+        when_related: {via: input.runner_pool_id, predicate: account_id != input.account_id}
+        error: weft.pipelines.JobNotInPool
+      - name: instance-not-of-account
+        when_related: {via: input.instance_id, predicate: account_id != input.account_id}
+        error: weft.pipelines.InstanceUnavailable
+      - name: instance-too-weak
+        when_related: {via: input.instance_id, predicate: minimum_isolation != MicroVm}
+        error: weft.pipelines.IsolationTooWeak
+      - name: instance-served
+        when_related:
+          entity: weft.pipelines.RunnerJob
+          where: instance_id == input.instance_id
+          exists: true
+        error: weft.pipelines.InstanceAlreadyServed
+      # OPEN (hardening pass 1 D6): the pool's egress_allow is not applied to the instance. A guard
+      # needs the instance of an egress weft.claims.Claim as a stored field; its holder is a union,
+      # which ESS predicates cannot select, and Binding has no instance.
+      - name: assigned
+        moves: weft.pipelines.RunnerJob.assign
+        instance: runner_job_id
+        sets:
+          instance_id: input.instance_id
+        emits: [weft.pipelines.RunnerJobAssigned]
+        payload:
+          weft.pipelines.RunnerJobAssigned:
+            runner_job_id: input.runner_job_id
+            instance_id: input.instance_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 `RunnerJob` (running). The runner picked the job up; the time limit starts.
+  # `deadline` is started_at plus the pool's job_time_limit_seconds, minted by the control plane.
+  - name: weft.pipelines.StartRunnerJob
+    naming:
+      display: Mark a CI job running
+    input:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+    outcomes:
+      - name: no-such-job
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: started
+        moves: weft.pipelines.RunnerJob.start
+        instance: runner_job_id
+        sets:
+          started_at: {generated: true, present: true}
+          deadline: {generated: true, present: true}
+        emits: [weft.pipelines.RunnerJobStarted]
+        payload:
+          weft.pipelines.RunnerJobStarted:
+            runner_job_id: input.runner_job_id
+            runner_pool_id: {subject: runner_pool_id}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 `RunnerJob` (succeeded, failed). The runner reports the end. Ending a job
+  # clears it as writer of any build cache in the same step.
+  - name: weft.pipelines.FinishRunnerJob
+    naming:
+      display: Record the end of a CI job
+    input:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: result, type: weft.pipelines.RunnerJobResult}
+    outcomes:
+      - name: no-such-job
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: succeeded
+        when: result == Succeeded
+        moves: weft.pipelines.RunnerJob.succeed
+        instance: runner_job_id
+        sets:
+          ended_at: {generated: true, present: true}
+        affects: &release-cache
+          - entity: weft.pipelines.BuildCache
+            where: writer_job_id == input.runner_job_id
+            sets:
+              writer_job_id: {cleared: true}
+        emits: [weft.pipelines.RunnerJobEnded]
+        payload:
+          weft.pipelines.RunnerJobEnded: &job-ended
+            runner_job_id: input.runner_job_id
+            runner_pool_id: {subject: runner_pool_id}
+            instance_id: {subject: instance_id}
+            started_at: {subject: started_at}
+            outcome: Succeeded
+      - name: failed
+        when: result == Failed
+        moves: weft.pipelines.RunnerJob.fail
+        instance: runner_job_id
+        sets:
+          ended_at: {generated: true, present: true}
+        affects: *release-cache
+        emits: [weft.pipelines.RunnerJobEnded]
+        payload:
+          weft.pipelines.RunnerJobEnded:
+            runner_job_id: input.runner_job_id
+            runner_pool_id: {subject: runner_pool_id}
+            instance_id: {subject: instance_id}
+            started_at: {subject: started_at}
+            outcome: Failed
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 "the job time limit is a time-form command" (sketch § 14 time form): the
+  # clock is the controller's, the rule is the guard on `deadline`. The controller reads
+  # OverdueRunnerJobs and runs this once per row.
+  - name: weft.pipelines.TimeOutRunnerJob
+    naming:
+      display: End a CI job past its time limit
+    input:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+    outcomes:
+      - name: no-such-job
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: not-yet
+        when_subject:
+          predicate: deadline >= now
+        error: weft.pipelines.NotYetTimedOut
+      - name: timed-out
+        moves: weft.pipelines.RunnerJob.time_out
+        instance: runner_job_id
+        sets:
+          ended_at: {generated: true, present: true}
+        affects: *release-cache
+        emits: [weft.pipelines.RunnerJobEnded]
+        payload:
+          weft.pipelines.RunnerJobEnded:
+            runner_job_id: input.runner_job_id
+            runner_pool_id: {subject: runner_pool_id}
+            instance_id: {subject: instance_id}
+            started_at: {subject: started_at}
+            outcome: TimedOut
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 `RunnerJob` (cancelled): the forge cancelled the job (webhook) or a user did.
+  - name: weft.pipelines.CancelRunnerJob
+    naming:
+      display: Cancel a CI job
+    input:
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+    outcomes:
+      - name: no-such-job
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: cancelled
+        moves: weft.pipelines.RunnerJob.cancel
+        instance: runner_job_id
+        sets:
+          ended_at: {generated: true, present: true}
+        affects: *release-cache
+        emits: [weft.pipelines.RunnerJobEnded]
+        payload:
+          weft.pipelines.RunnerJobEnded:
+            runner_job_id: input.runner_job_id
+            runner_pool_id: {subject: runner_pool_id}
+            instance_id: {subject: instance_id}
+            started_at: {subject: started_at}
+            outcome: Cancelled
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 `BuildCache` and open question 4: one cache per pool, key and ref class.
+  # The controller provisioned the volume (weft.resources) first.
+  - name: weft.pipelines.CreateBuildCache
+    naming:
+      display: Create a build cache
+    input:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: cache_key, type: String}
+      - {name: protected, type: Boolean}
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: size_cap_bytes, type: Integer}
+    response:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+    outcomes:
+      # hardening pass 1 D3: the account is the one the caller acts in; another account answers
+      # as a missing one. The pool and volume are tied to input.account_id below.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.pipelines.AccountUnavailable
+      - name: invalid-cap
+        when: size_cap_bytes < 1
+        error: weft.pipelines.InvalidBounds
+      - name: no-such-pool
+        when_related: {via: input.runner_pool_id, exists: false}
+        error: weft.pipelines.PoolUnavailable
+      - name: no-such-volume
+        when_related: {via: input.volume_id, exists: false}
+        error: weft.pipelines.VolumeUnavailable
+      - name: pool-unavailable
+        when_related:
+          via: input.runner_pool_id
+          predicate:
+            any:
+              - state == Retired
+              - account_id != input.account_id
+        error: weft.pipelines.PoolUnavailable
+      - name: foreign-volume
+        when_related: {via: input.volume_id, predicate: account_id != input.account_id}
+        error: weft.pipelines.VolumeUnavailable
+      # hardening pass 1 D7: one volume backs one active cache, so an unprotected cache (a fork's
+      # pull request writes it) never shares bytes with a protected one a `main` build reads.
+      # After foreign-volume: answers only for a volume of the caller's own account.
+      - name: volume-in-use
+        when_related:
+          entity: weft.pipelines.BuildCache
+          where:
+            all:
+              - volume_id == input.volume_id
+              - state == Active
+          exists: true
+        error: weft.pipelines.VolumeInUse
+      - name: exists
+        when_related:
+          entity: weft.pipelines.BuildCache
+          where:
+            all:
+              - runner_pool_id == input.runner_pool_id
+              - cache_key == input.cache_key
+              - protected == input.protected
+              - state == Active
+          exists: true
+        error: weft.pipelines.CacheExists
+      - name: created
+        creates: weft.pipelines.BuildCache
+        instance: build_cache_id
+        returns: true
+        sets:
+          runner_pool_id: input.runner_pool_id
+          cache_key: input.cache_key
+          protected: input.protected
+          volume_id: input.volume_id
+          size_cap_bytes: input.size_cap_bytes
+          last_used_at: {generated: true}
+        emits: [weft.pipelines.BuildCacheCreated]
+        payload:
+          weft.pipelines.BuildCacheCreated:
+            build_cache_id: {response: build_cache_id}
+            runner_pool_id: input.runner_pool_id
+            volume_id: input.volume_id
+
+  # Design § Stage 2 `BuildCache` "attached read-write to one job at a time"; § Security "no
+  # access to other pools' caches"; open question 4: a protected cache is written only by a
+  # protected ref.
+  - name: weft.pipelines.AttachCacheForWrite
+    naming:
+      display: Attach a build cache read-write to a CI job
+    input:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: ref_protected, type: Boolean}
+    outcomes:
+      - name: no-such-cache
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: evicted
+        when_subject:
+          predicate: state == Evicted
+        error: weft.pipelines.StateConflict
+      - name: foreign-cache
+        when_subject:
+          predicate: runner_pool_id != input.runner_pool_id
+        error: weft.pipelines.ForeignCache
+      - name: protected-cache
+        when: ref_protected == false
+        when_subject:
+          predicate: protected == true
+        error: weft.pipelines.CacheProtected
+      - name: busy
+        when_subject:
+          predicate: defined(writer_job_id)
+        error: weft.pipelines.CacheBusy
+      - name: no-such-job
+        when_related: {via: input.runner_job_id, exists: false}
+        error: weft.pipelines.NotFound
+      - name: job-of-other-pool
+        when_related:
+          via: input.runner_job_id
+          predicate:
+            any:
+              - runner_pool_id != input.runner_pool_id
+              - ref_protected != input.ref_protected
+        error: weft.pipelines.ForeignCache
+      - name: job-not-running
+        when_related:
+          via: input.runner_job_id
+          predicate: {not: {any: [state == Assigned, state == Running]}}
+        error: weft.pipelines.JobNotRunning
+      - name: attached
+        updates: weft.pipelines.BuildCache
+        instance: build_cache_id
+        sets:
+          writer_job_id: input.runner_job_id
+          last_used_at: {generated: true}
+        emits: [weft.pipelines.BuildCacheAttached]
+        payload:
+          weft.pipelines.BuildCacheAttached:
+            build_cache_id: input.build_cache_id
+            runner_job_id: input.runner_job_id
+            writable: true
+
+  # Design § Stage 2 `BuildCache` "or read-only to many"; § Security "a cache written by a pull
+  # request from a fork is never read by a `main` build": a protected ref reads only a protected
+  # cache. A read-only attach holds nothing; it stamps last_used_at for eviction.
+  - name: weft.pipelines.AttachCacheForRead
+    naming:
+      display: Attach a build cache read-only to a CI job
+    input:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: ref_protected, type: Boolean}
+    outcomes:
+      - name: no-such-cache
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: evicted
+        when_subject:
+          predicate: state == Evicted
+        error: weft.pipelines.StateConflict
+      - name: foreign-cache
+        when_subject:
+          predicate: runner_pool_id != input.runner_pool_id
+        error: weft.pipelines.ForeignCache
+      - name: untrusted-cache
+        when: ref_protected == true
+        when_subject:
+          predicate: protected == false
+        error: weft.pipelines.CacheUntrusted
+      - name: no-such-job
+        when_related: {via: input.runner_job_id, exists: false}
+        error: weft.pipelines.NotFound
+      - name: job-of-other-pool
+        when_related:
+          via: input.runner_job_id
+          predicate:
+            any:
+              - runner_pool_id != input.runner_pool_id
+              - ref_protected != input.ref_protected
+        error: weft.pipelines.ForeignCache
+      - name: job-not-running
+        when_related:
+          via: input.runner_job_id
+          predicate: {not: {any: [state == Assigned, state == Running]}}
+        error: weft.pipelines.JobNotRunning
+      - name: attached
+        updates: weft.pipelines.BuildCache
+        instance: build_cache_id
+        sets:
+          last_used_at: {generated: true}
+        emits: [weft.pipelines.BuildCacheAttached]
+        payload:
+          weft.pipelines.BuildCacheAttached:
+            build_cache_id: input.build_cache_id
+            runner_job_id: input.runner_job_id
+            writable: false
+
+  # Design § Stage 2 `BuildCache` "one job at a time": the writer releases the cache before its
+  # job ends (a job's end also clears it, FinishRunnerJob and the others).
+  - name: weft.pipelines.ReleaseCacheWrite
+    naming:
+      display: Release a build cache's write attachment
+    input:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+    outcomes:
+      - name: no-such-cache
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: not-writer
+        when_subject:
+          predicate: {not: {all: [defined(writer_job_id), writer_job_id == input.runner_job_id]}}
+        error: weft.pipelines.NotWriter
+      - name: released
+        when_subject_state: Active
+        updates: weft.pipelines.BuildCache
+        instance: build_cache_id
+        sets:
+          writer_job_id: {cleared: true}
+          last_used_at: {generated: true}
+        emits: [weft.pipelines.BuildCacheReleased]
+        payload:
+          weft.pipelines.BuildCacheReleased:
+            build_cache_id: input.build_cache_id
+            runner_job_id: input.runner_job_id
+      - name: evicted
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 2 `BuildCache` "size cap, least-recently-used eviction". The controller picks
+  # the least recently used cache (BuildCachesOfPool, last_used_at); a cache being written is not
+  # evicted.
+  - name: weft.pipelines.EvictBuildCache
+    naming:
+      display: Evict a build cache
+    input:
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+    outcomes:
+      - name: no-such-cache
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: busy
+        when_subject:
+          predicate: defined(writer_job_id)
+        error: weft.pipelines.CacheBusy
+      - name: evicted
+        moves: weft.pipelines.BuildCache.evict
+        instance: build_cache_id
+        emits: [weft.pipelines.BuildCacheEvicted]
+        payload:
+          weft.pipelines.BuildCacheEvicted:
+            build_cache_id: input.build_cache_id
+            volume_id: {subject: volume_id}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 1.2 `DeployGate`. Each kind needs its own settings and no other kind's.
+  # hardening pass 1 D2: the creator is the authenticated caller ({caller: principal_id}), no
+  # longer a request input; no binding maps one.
+  - name: weft.pipelines.AddDeployGate
+    naming:
+      display: Add a deploy gate to an environment
+    input:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: kind, type: weft.pipelines.GateKind}
+      - {name: approver_role, type: Optional<weft.shared.Role>}
+      - {name: signer_key_id, type: Optional<String>}
+      - {name: builder, type: Optional<String>}
+      - {name: source_repository, type: Optional<String>}
+      - {name: window_opens_at, type: Optional<Timestamp>}
+      - {name: window_closes_at, type: Optional<Timestamp>}
+    response:
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+    outcomes:
+      - name: approval-settings
+        when:
+          all:
+            - kind == Approval
+            - any:
+                - not defined(approver_role)
+                - defined(signer_key_id)
+                - defined(builder)
+                - defined(source_repository)
+                - defined(window_opens_at)
+                - defined(window_closes_at)
+        error: weft.pipelines.GateSettingsInvalid
+      - name: signed-artifact-settings
+        when:
+          all:
+            - kind == SignedArtifact
+            - any:
+                - not defined(signer_key_id)
+                - defined(approver_role)
+                - defined(builder)
+                - defined(source_repository)
+                - defined(window_opens_at)
+                - defined(window_closes_at)
+        error: weft.pipelines.GateSettingsInvalid
+      - name: provenance-settings
+        when:
+          all:
+            - kind == Provenance
+            - any:
+                - not defined(builder)
+                - not defined(source_repository)
+                - defined(approver_role)
+                - defined(signer_key_id)
+                - defined(window_opens_at)
+                - defined(window_closes_at)
+        error: weft.pipelines.GateSettingsInvalid
+      - name: conformance-settings
+        when:
+          all:
+            - kind == Conformance
+            - any:
+                - defined(approver_role)
+                - defined(signer_key_id)
+                - defined(builder)
+                - defined(source_repository)
+                - defined(window_opens_at)
+                - defined(window_closes_at)
+        error: weft.pipelines.GateSettingsInvalid
+      - name: window-settings
+        when:
+          all:
+            - kind == Window
+            - any:
+                - not defined(window_opens_at)
+                - not defined(window_closes_at)
+                - defined(approver_role)
+                - defined(signer_key_id)
+                - defined(builder)
+                - defined(source_repository)
+        error: weft.pipelines.GateSettingsInvalid
+      - name: window-empty
+        when:
+          all:
+            - kind == Window
+            - window_closes_at <= window_opens_at
+        error: weft.pipelines.GateSettingsInvalid
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.pipelines.EnvironmentUnavailable
+      - name: environment-retired
+        when_related: {via: input.environment_id, predicate: state == Retired}
+        error: weft.pipelines.EnvironmentUnavailable
+      - name: added
+        creates: weft.pipelines.DeployGate
+        instance: deploy_gate_id
+        returns: true
+        sets:
+          environment_id: input.environment_id
+          kind: input.kind
+          approver_role: input.approver_role
+          signer_key_id: input.signer_key_id
+          builder: input.builder
+          source_repository: input.source_repository
+          window_opens_at: input.window_opens_at
+          window_closes_at: input.window_closes_at
+          created_by: {caller: principal_id}
+        emits: [weft.pipelines.DeployGateAdded]
+        payload:
+          weft.pipelines.DeployGateAdded:
+            deploy_gate_id: {response: deploy_gate_id}
+            environment_id: input.environment_id
+            kind: input.kind
+
+  # Design § Stage 1.2 `DeployGate`. Who may remove a gate is the call's authorization.
+  # OPEN: removing a gate lifts a protection; whether it needs an approval of its own is not said.
+  - name: weft.pipelines.RemoveDeployGate
+    naming:
+      display: Remove a deploy gate
+    input:
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+    outcomes:
+      - name: no-such-gate
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: removed
+        moves: weft.pipelines.DeployGate.remove
+        instance: deploy_gate_id
+        emits: [weft.pipelines.DeployGateRemoved]
+        payload:
+          weft.pipelines.DeployGateRemoved:
+            deploy_gate_id: input.deploy_gate_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 1.2 `GateCheck`: the ReleaseController opens one check per active gate of the
+  # plan's environment. A check waits until it is decided (PassGateCheck, FailGateCheck for the
+  # automatic kinds; ApproveGateCheck, RejectGateCheck for approval).
+  - name: weft.pipelines.OpenGateCheck
+    naming:
+      display: Open a check of a deploy gate for a plan
+    input:
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    response:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+    outcomes:
+      - name: no-such-gate
+        when_related: {via: input.deploy_gate_id, exists: false}
+        error: weft.pipelines.GateUnavailable
+      - name: no-such-plan
+        when_related: {via: input.plan_id, exists: false}
+        error: weft.pipelines.PlanUnavailable
+      - name: gate-removed
+        when_related: {via: input.deploy_gate_id, predicate: state == Removed}
+        error: weft.pipelines.GateUnavailable
+      - name: gate-not-for-environment
+        when_related: {via: input.deploy_gate_id, predicate: environment_id != input.environment_id}
+        error: weft.pipelines.GateNotForEnvironment
+      - name: plan-discarded
+        when_related: {via: input.plan_id, predicate: state == Discarded}
+        error: weft.pipelines.PlanUnavailable
+      - name: plan-not-for-environment
+        when_related: {via: input.plan_id, predicate: environment_id != input.environment_id}
+        error: weft.pipelines.GateNotForEnvironment
+      - name: exists
+        when_related:
+          entity: weft.pipelines.GateCheck
+          where:
+            all:
+              - deploy_gate_id == input.deploy_gate_id
+              - plan_id == input.plan_id
+              - any: [state == Waiting, state == Passed]
+          exists: true
+        error: weft.pipelines.CheckExists
+      - name: opened
+        creates: weft.pipelines.GateCheck
+        instance: gate_check_id
+        returns: true
+        sets:
+          deploy_gate_id: input.deploy_gate_id
+          plan_id: input.plan_id
+          environment_id: input.environment_id
+          opened_at: {generated: true}
+        emits: [weft.pipelines.GateCheckOpened]
+        payload:
+          weft.pipelines.GateCheckOpened:
+            gate_check_id: {response: gate_check_id}
+            deploy_gate_id: input.deploy_gate_id
+            plan_id: input.plan_id
+
+  # Design § Stage 1.2: the ReleaseController passes a check of an automatic kind. An approval
+  # gate is never passed this way. A window gate passes only inside its interval (checked here);
+  # the other kinds read evidence outside this domain, named in the external refusal:
+  # signed-artifact the plan's artifacts and their signer (weft.artifacts), provenance their
+  # attestations (weft.artifacts.AttestationsOfArtifact), conformance the ESS conformance report
+  # for the source's model digest (design § Verification).
+  # OPEN: the plan's artifact digests live in weft.deployments and weft.workloads; with them as a
+  # list on the plan, the signed-artifact and provenance rules become guards over
+  # weft.artifacts rows here, not an external.
+  - name: weft.pipelines.PassGateCheck
+    naming:
+      display: Pass a deploy gate check on its evidence
+    input:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: evidence, type: String}
+    outcomes:
+      - name: no-such-check
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: gate-mismatch
+        when_subject:
+          predicate: deploy_gate_id != input.deploy_gate_id
+        error: weft.pipelines.GateMismatch
+      - name: no-such-gate
+        when_related: {via: input.deploy_gate_id, exists: false}
+        error: weft.pipelines.GateUnavailable
+      - name: approval-gate
+        when_related: {via: input.deploy_gate_id, predicate: kind == Approval}
+        error: weft.pipelines.ApprovalRequired
+      - name: outside-window
+        when_related:
+          via: input.deploy_gate_id
+          predicate:
+            all:
+              - kind == Window
+              - any:
+                  - window_opens_at > now
+                  - window_closes_at <= now
+        error: weft.pipelines.OutsideWindow
+      - name: evidence-insufficient
+        external: >-
+          the evidence does not satisfy the gate: an artifact of the plan not signed by the gate's
+          key, an artifact without an attestation of the gate's builder and repository, or no
+          green conformance report for the model digest of the plan's ess-system source
+        error: weft.pipelines.EvidenceInsufficient
+      - name: passed
+        moves: weft.pipelines.GateCheck.pass
+        instance: gate_check_id
+        sets:
+          evidence: input.evidence
+          decided_at: {generated: true, present: true}
+        emits: [weft.pipelines.GateCheckPassed]
+        payload:
+          weft.pipelines.GateCheckPassed:
+            gate_check_id: input.gate_check_id
+            plan_id: {subject: plan_id}
+            decided_by: {subject: decided_by}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 1.2: the ReleaseController fails a check of an automatic kind, with the reason.
+  - name: weft.pipelines.FailGateCheck
+    naming:
+      display: Fail a deploy gate check
+    input:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-check
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: gate-mismatch
+        when_subject:
+          predicate: deploy_gate_id != input.deploy_gate_id
+        error: weft.pipelines.GateMismatch
+      - name: no-such-gate
+        when_related: {via: input.deploy_gate_id, exists: false}
+        error: weft.pipelines.GateUnavailable
+      - name: approval-gate
+        when_related: {via: input.deploy_gate_id, predicate: kind == Approval}
+        error: weft.pipelines.ApprovalRequired
+      - name: failed
+        moves: weft.pipelines.GateCheck.fail
+        instance: gate_check_id
+        sets:
+          reason: input.reason
+          decided_at: {generated: true, present: true}
+        emits: [weft.pipelines.GateCheckFailed]
+        payload:
+          weft.pipelines.GateCheckFailed:
+            gate_check_id: input.gate_check_id
+            plan_id: {subject: plan_id}
+            decided_by: {subject: decided_by}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 1.2 `approval` ("a principal with a role approves"), § Stage 1.4
+  # `weft gate approve <plan>`, open question 2 (default taken: approvals in weft only).
+  # hardening pass 1 D2: the approver is the authenticated caller ({caller: principal_id}), no
+  # longer a request input, so not-approver judges the principal that sent the request.
+  # OPEN: may the plan's author approve their own plan (four eyes)? Not said. Taken: allowed.
+  - name: weft.pipelines.ApproveGateCheck
+    naming:
+      display: Approve a deploy gate check
+    input:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+    outcomes:
+      - name: no-such-check
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: gate-mismatch
+        when_subject:
+          predicate: deploy_gate_id != input.deploy_gate_id
+        error: weft.pipelines.GateMismatch
+      - name: no-such-gate
+        when_related: {via: input.deploy_gate_id, exists: false}
+        error: weft.pipelines.GateUnavailable
+      - name: not-approval-gate
+        when_related: {via: input.deploy_gate_id, predicate: kind != Approval}
+        error: weft.pipelines.NotAnApprovalGate
+      # The role bindings are weft.accounts' (sketch lines 128-129); the gate's environment's
+      # account is two hops away (environment, formation).
+      - name: not-approver
+        external: >-
+          the caller holds no role binding of the gate's approver role, or a stronger one, on the
+          account of the gate's environment or an account above it
+        error: weft.pipelines.NotApprover
+      - name: approved
+        moves: weft.pipelines.GateCheck.pass
+        instance: gate_check_id
+        sets:
+          decided_by: {caller: principal_id}
+          decided_at: {generated: true, present: true}
+        emits: [weft.pipelines.GateCheckPassed]
+        payload:
+          weft.pipelines.GateCheckPassed:
+            gate_check_id: input.gate_check_id
+            plan_id: {subject: plan_id}
+            decided_by: {caller: principal_id}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+  # Design § Stage 1.2 `approval`: the approver may also refuse; the check fails with the reason.
+  # hardening pass 1 D2: the rejecting principal is the authenticated caller ({caller:
+  # principal_id}), no longer a request input.
+  - name: weft.pipelines.RejectGateCheck
+    naming:
+      display: Reject a deploy gate check
+    input:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-check
+        unknown_instance: true
+        error: weft.pipelines.NotFound
+      - name: gate-mismatch
+        when_subject:
+          predicate: deploy_gate_id != input.deploy_gate_id
+        error: weft.pipelines.GateMismatch
+      - name: no-such-gate
+        when_related: {via: input.deploy_gate_id, exists: false}
+        error: weft.pipelines.GateUnavailable
+      - name: not-approval-gate
+        when_related: {via: input.deploy_gate_id, predicate: kind != Approval}
+        error: weft.pipelines.NotAnApprovalGate
+      - name: not-approver
+        external: >-
+          the caller holds no role binding of the gate's approver role, or a stronger one, on the
+          account of the gate's environment or an account above it
+        error: weft.pipelines.NotApprover
+      - name: rejected
+        moves: weft.pipelines.GateCheck.fail
+        instance: gate_check_id
+        sets:
+          decided_by: {caller: principal_id}
+          reason: input.reason
+          decided_at: {generated: true, present: true}
+        emits: [weft.pipelines.GateCheckFailed]
+        payload:
+          weft.pipelines.GateCheckFailed:
+            gate_check_id: input.gate_check_id
+            plan_id: {subject: plan_id}
+            decided_by: {caller: principal_id}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.pipelines.StateConflict
+
+views:
+  # Design § Stage 2 `ForgeConnection`: an account's connections. No credential value.
+  - name: weft.pipelines.ForgeConnectionsOfAccount
+    source: weft.pipelines.ForgeConnection
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: forge, type: weft.pipelines.ForgeKind}
+      - {name: forge_url, type: String}
+      - {name: installation, type: String}
+      - {name: credential_secret_id, type: weft.shared.SecretId}
+      - {name: state, type: weft.pipelines.ForgeConnection.State}
+
+  # Design § Follow-up S7, `weft runners`: an account's runner pools.
+  - name: weft.pipelines.RunnerPoolsOfAccount
+    source: weft.pipelines.RunnerPool
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields: &pool-fields
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
+      - {name: name, type: String}
+      - {name: labels, type: List<String>}
+      - {name: runner_artifact, type: weft.shared.ArtifactDigest}
+      - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: resource_class, type: weft.shared.ResourceClassName}
+      - {name: min_runners, type: Integer}
+      - {name: max_runners, type: Integer}
+      - {name: job_time_limit_seconds, type: Integer}
+      - {name: egress_allow, type: List<String>}
+      - {name: state, type: weft.pipelines.RunnerPool.State}
+
+  # The pool invariants read its bounds: this view holds every pool in every state.
+  - name: weft.pipelines.RunnerPools
+    source: weft.pipelines.RunnerPool
+    consistency: read_your_writes
+    fields: *pool-fields
+
+  # Design § Follow-up S7, `weft runners jobs <pool>`: the jobs of one pool, for audit (the
+  # forge's job and run ids).
+  - name: weft.pipelines.RunnerJobsOfPool
+    source: weft.pipelines.RunnerJob
+    consistency: read_your_writes
+    params:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+    filter: runner_pool_id == param.runner_pool_id
+    fields: &job-fields
+      - {name: runner_job_id, type: weft.shared.RunnerJobId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: forge_job_id, type: String}
+      - {name: forge_run_id, type: String}
+      - {name: repository, type: String}
+      - {name: ref, type: String}
+      - {name: commit, type: String}
+      - {name: ref_protected, type: Boolean}
+      - {name: labels, type: List<String>}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: queued_at, type: Timestamp}
+      - {name: started_at, type: Optional<Timestamp>}
+      - {name: deadline, type: Optional<Timestamp>}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.pipelines.RunnerJob.State}
+
+  # Design § Stage 2 "a gap view of queued jobs without a runner repairs a missed webhook (level
+  # form)", sketch § 14 level form. Desired: one runner per queued job; observed: no instance.
+  # The controller starts a runner instance per row (within the pool's max_runners) and runs
+  # AssignRunnerJob.
+  - name: weft.pipelines.QueuedRunnerJobs
+    source: weft.pipelines.RunnerJob
+    consistency: read_your_writes
+    filter:
+      all:
+        - state == Queued
+        - not defined(instance_id)
+    fields: *job-fields
+
+  # Design § Stage 2 "the job time limit is a time-form command", sketch § 14 time form: the
+  # running jobs past their deadline. The controller runs TimeOutRunnerJob per row.
+  - name: weft.pipelines.OverdueRunnerJobs
+    source: weft.pipelines.RunnerJob
+    consistency: read_your_writes
+    filter:
+      all:
+        - state == Running
+        - deadline < now
+    fields: *job-fields
+
+  # Design § Stage 2 `BuildCache`: a pool's caches with their last use, for LRU eviction.
+  - name: weft.pipelines.BuildCachesOfPool
+    source: weft.pipelines.BuildCache
+    consistency: read_your_writes
+    params:
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+    filter: runner_pool_id == param.runner_pool_id
+    fields: &cache-fields
+      - {name: build_cache_id, type: weft.shared.BuildCacheId}
+      - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
+      - {name: cache_key, type: String}
+      - {name: protected, type: Boolean}
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: size_cap_bytes, type: Integer}
+      - {name: writer_job_id, type: Optional<weft.shared.RunnerJobId>}
+      - {name: last_used_at, type: Timestamp}
+      - {name: state, type: weft.pipelines.BuildCache.State}
+
+  # The cache invariant reads size_cap_bytes: this view holds every cache in every state.
+  - name: weft.pipelines.BuildCaches
+    source: weft.pipelines.BuildCache
+    consistency: read_your_writes
+    fields: *cache-fields
+
+  # Design § Stage 1.4 and Follow-up S7, `weft gate`: the gates of one environment.
+  - name: weft.pipelines.DeployGatesOfEnvironment
+    source: weft.pipelines.DeployGate
+    consistency: read_your_writes
+    params:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    filter: environment_id == param.environment_id
+    fields:
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: kind, type: weft.pipelines.GateKind}
+      - {name: approver_role, type: Optional<weft.shared.Role>}
+      - {name: signer_key_id, type: Optional<String>}
+      - {name: builder, type: Optional<String>}
+      - {name: source_repository, type: Optional<String>}
+      - {name: window_opens_at, type: Optional<Timestamp>}
+      - {name: window_closes_at, type: Optional<Timestamp>}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: state, type: weft.pipelines.DeployGate.State}
+
+  # Design § Stage 1.4 `weft gate approve <plan>` and § Stage 1.2 (StartRelease reads it): the
+  # checks of one plan, with who decided them.
+  - name: weft.pipelines.GateChecksOfPlan
+    source: weft.pipelines.GateCheck
+    consistency: read_your_writes
+    params:
+      - {name: plan_id, type: weft.shared.PlanId}
+    filter: plan_id == param.plan_id
+    fields:
+      - {name: gate_check_id, type: weft.shared.GateCheckId}
+      - {name: deploy_gate_id, type: weft.shared.DeployGateId}
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - name: kind
+        type: Optional<weft.pipelines.GateKind>
+        field: {related: {via: deploy_gate_id, field: kind}}
+      - {name: evidence, type: Optional<String>}
+      - {name: reason, type: Optional<String>}
+      - {name: decided_by, type: Optional<weft.shared.PrincipalId>}
+      - {name: opened_at, type: Timestamp}
+      - {name: decided_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.pipelines.GateCheck.State}

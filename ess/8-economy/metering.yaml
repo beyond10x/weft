@@ -1,0 +1,2530 @@
+# Metering: what was used, what it costs, and the limits that are consumed.
+# Source: docs/domain-sketch.md "12. Metering" with "Meters" and "Pricing models" (lines 474-506),
+# the Limits classes of "6. Resources" (line 405), "UsageReported" of "11. Node control"
+# (lines 468-471) and "Actors" (lines 98-122). Line numbers are those of the sketch on
+# 2026-11-26; the quoted names are the stable reference.
+domain: weft.metering
+
+summary: >-
+  Usage per meter and period, append-only, rolled up the account tree; the cluster's price per
+  meter unit, in versions; the pricing models an account, formation, product or offering plan is
+  charged by; statements of charges per account and billing period; the cost of usage per account
+  and formation; and the limits that are consumed rather than attached: deadlines, budgets,
+  concurrency and rates.
+
+naming:
+  wire: weft
+  display: Metering
+
+types:
+  # Caller's "Budget (money or resource-seconds)".
+  - name: weft.metering.BudgetMeasure
+    kind: enum
+    variants: [Money, ResourceSeconds]
+
+  # Line 478 "price per resource class per unit".
+  # OPEN: the currency of prices and money budgets. Taken: one currency per price list, an ISO 4217
+  # code; every amount of money in this domain is in the currency of the price list in force.
+  - name: weft.metering.Currency
+    kind: newtype
+    of: String
+    alphabet: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    invariants:
+      - value.count == 3
+
+  # "Meters" (lines 480-492). One variant per meter of the sketch; the network meters are split
+  # into internal (inside the cluster) and external as line 489 says. `unit` is the unit of a
+  # usage amount and of a price. Wire spellings follow the sketch (`cpu-seconds`).
+  - name: weft.metering.Meter
+    kind: enum
+    attributes:
+      - {name: unit, type: String}
+    variants:
+      - {name: cpu-seconds, attributes: {unit: cpu-second}}
+      - {name: memory-gib-seconds, attributes: {unit: GiB-second}}
+      - {name: gpu-seconds, attributes: {unit: gpu-second}}
+      - {name: gpu-slice-seconds, attributes: {unit: slice-second}}
+      - {name: disk-read-bytes, attributes: {unit: byte}}
+      - {name: disk-write-bytes, attributes: {unit: byte}}
+      - {name: disk-read-ops, attributes: {unit: operation}}
+      - {name: disk-write-ops, attributes: {unit: operation}}
+      - {name: network-ingress-internal-bytes, attributes: {unit: byte}}
+      - {name: network-ingress-external-bytes, attributes: {unit: byte}}
+      - {name: network-egress-internal-bytes, attributes: {unit: byte}}
+      - {name: network-egress-external-bytes, attributes: {unit: byte}}
+      - {name: storage-gib-hours, attributes: {unit: GiB-hour}}
+      - {name: requests, attributes: {unit: request}}
+      - {name: invocations, attributes: {unit: invocation}}
+      - {name: offering-units, attributes: {unit: unit}}
+
+  # "Meters": the "per" of a meter: the GPU model of `gpu-seconds` (line 485), the kind of
+  # storage of `storage-gib-hours` (`volume`, `filesystem`, `object-store`, line 490), the unit
+  # kind of `offering-units` (`messages`, `operations`, line 492). Empty where the meter has no
+  # "per". Prices and usage are keyed by meter and qualifier.
+  # OPEN: the qualifiers each meter takes, and who registers a new one (a new GPU model). Taken:
+  # free text in this alphabet; a usage record is priced only where the price list has a price of
+  # the same meter and qualifier.
+  - name: weft.metering.MeterQualifier
+    kind: newtype
+    of: String
+    alphabet: "abcdefghijklmnopqrstuvwxyz0123456789-._"
+    invariants:
+      - value.count <= 63
+
+  # "Pricing models" (lines 494-502): the five models, spelled as the sketch spells them.
+  - name: weft.metering.PricingKind
+    kind: enum
+    variants: [pay-per-use, reserved, subscription, free-tier, spot]
+
+  # "Pricing models": "per period" (lines 497, 499, 500) and Statement's "billing period"
+  # (line 505).
+  # OPEN: the periods a pricing model and a statement may use. Taken: one, the calendar month in
+  # UTC.
+  - name: weft.metering.BillingPeriod
+    kind: enum
+    variants: [month]
+
+  # Line 497 `reserved`: "committed capacity per period at a fixed price; use above it is charged
+  # per use" (at the pay-per-use price of the price list in force).
+  - name: weft.metering.ReservedTerms
+    kind: struct
+    fields:
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: committed_amount, type: Decimal}
+      - {name: price_per_period, type: Decimal}
+    invariants:
+      - committed_amount > 0
+      - price_per_period >= 0
+
+  # Line 499 `subscription`: "a flat price per period for an offering or product plan".
+  - name: weft.metering.SubscriptionTerms
+    kind: struct
+    fields:
+      - {name: price_per_period, type: Decimal}
+    invariants:
+      - price_per_period >= 0
+
+  # Line 500 `free-tier`: "an allowance per meter and period before any charge".
+  - name: weft.metering.Allowance
+    kind: struct
+    fields:
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: amount, type: Decimal}
+    invariants:
+      - amount > 0
+  # A free tier with no allowance charges as pay-per-use. The invariant `allowances.count >= 1`
+  # was dropped in the soundness pass (2026-11-26): ESS 0.99.2 synthesis built the union's
+  # free-tier value with an empty list, so no DefinePricingModel input passed its type and no
+  # pricing model, assignment or retirement had a scenario.
+  # OPEN: refuse a free tier without allowances (a guard over the union member, which ESS does
+  # not read yet, or a required first allowance beside the list)? Taken: allowed.
+  - name: weft.metering.FreeTierTerms
+    kind: struct
+    fields:
+      - {name: allowances, type: List<weft.metering.Allowance>}
+
+  # Line 501 `spot`: "preemptible capacity at a lower rate": the pay-per-use price times a factor
+  # below one.
+  # Decided in the integration pass (2026-11-26): spot is a factor of the list price here, and
+  # also a priority class in `scheduling` (preemption); the two are separate and both stay.
+  - name: weft.metering.SpotTerms
+    kind: struct
+    fields:
+      - {name: rate_factor, type: Decimal}
+    invariants:
+      - rate_factor > 0
+      - rate_factor < 1
+
+  # "Pricing models": each model with its parameters. `pay-per-use` (line 496) has none: its rate
+  # per meter unit is the Price of the price list in force.
+  - name: weft.metering.PricingTerms
+    kind: union
+    tag: kind
+    variants:
+      pay-per-use:
+      reserved: weft.metering.ReservedTerms
+      subscription: weft.metering.SubscriptionTerms
+      free-tier: weft.metering.FreeTierTerms
+      spot: weft.metering.SpotTerms
+
+  # Line 503 `PricingAssignment` "binds an account (or a formation, product or offering plan)".
+  - name: weft.metering.AssignmentTarget
+    kind: enum
+    variants: [account, formation, product, offering-plan]
+
+  # Line 505 `Statement`: one charge of a statement. `pricing` says which model produced it;
+  # usage lines name the meter and the amount used, a subscription line names neither.
+  - name: weft.metering.StatementLine
+    kind: struct
+    fields:
+      - {name: pricing, type: weft.metering.PricingKind}
+      - {name: pricing_model_id, type: Optional<weft.shared.PricingModelId>}
+      - {name: meter, type: Optional<weft.metering.Meter>}
+      - {name: qualifier, type: Optional<weft.metering.MeterQualifier>}
+      - {name: amount, type: Optional<Decimal>}
+      - {name: product_id, type: Optional<weft.shared.ProductId>}
+      - {name: service_instance_id, type: Optional<weft.shared.ServiceInstanceId>}
+      - {name: charge, type: Decimal}
+    invariants:
+      - charge >= 0
+
+entities:
+  # Line 476 `UsageRecord`: account, formation, instance, resource class, amount; "Meters"
+  # (lines 480-492): the meter and its "per". The period is the time span the amount was used
+  # in. Append-only: no command changes or removes a record. Line 483: "The node agent measures
+  # every instance; the control plane aggregates": a record is one aggregate the control plane
+  # writes.
+  # OPEN: usage of a resource that outlives its instance (line 393 `lifetime`: a volume, an object
+  # store) or that no instance reports (requests at weft-edge). Taken: instance_id and node_id are
+  # absent there, and volume_id, endpoint_id or service_instance_id say what was used.
+  - name: weft.metering.UsageRecord
+    naming:
+      summary: One amount of one meter used in one period, as the control plane recorded it.
+    identity:
+      name: usage_record_id
+      type: weft.shared.UsageRecordId
+    fields:
+      # The reporter's identifier of this measurement; a resend carries the same one, so a
+      # measurement is recorded once.
+      - name: report_id
+        type: Uuid
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: account_id
+        type: weft.shared.AccountId
+      # Line 477 "Usage rolls up the account tree": the accounts from the tenant's top-level
+      # account down to `account_id`, both included, as the tree stood when the record was
+      # written. The roll-up view reads it.
+      - name: account_path
+        type: List<weft.shared.AccountId>
+      # Absent for usage of a service instance or volume held by the account itself
+      # (line 533 `ServiceInstance` "in an account or a formation").
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: meter
+        type: weft.metering.Meter
+      - name: qualifier
+        type: weft.metering.MeterQualifier
+      # The class of the claim the meter measures (`gpu`, `volume`); absent for meters no claim
+      # carries (`requests`, `invocations`).
+      - name: resource_class
+        type: Optional<weft.shared.ResourceClassName>
+      - name: instance_id
+        type: Optional<weft.shared.InstanceId>
+      # The node that measured the usage (line 469 `UsageReported`).
+      - name: node_id
+        type: Optional<weft.shared.NodeId>
+      # Line 471 `Assignment`: the assignment the node ran the instance under; present exactly
+      # where instance_id and node_id are.
+      - name: assignment_id
+        type: Optional<weft.shared.AssignmentId>
+      # Line 491 "`invocations` per function": the component invoked.
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      # Line 490 "per volume".
+      - name: volume_id
+        type: Optional<weft.shared.VolumeId>
+      # Line 491 "`requests` per endpoint".
+      - name: endpoint_id
+        type: Optional<weft.shared.EndpointId>
+      # Line 492 "`offering-units` per managed service"; also the usage of the components a
+      # service instance runs as ("weft runs on weft", line 541).
+      - name: service_instance_id
+        type: Optional<weft.shared.ServiceInstanceId>
+      - name: offering_id
+        type: Optional<weft.shared.OfferingId>
+      # The product whose installation the usage belongs to (line 549 `Product`), so that a
+      # PricingAssignment of the product applies.
+      - name: product_id
+        type: Optional<weft.shared.ProductId>
+      # In the meter's unit (Meter.unit).
+      - name: amount
+        type: Decimal
+      - name: period_start
+        type: Timestamp
+      - name: period_end
+        type: Timestamp
+      - name: recorded_at
+        type: Timestamp
+      # The price in force when the record was written (line 478), copied so that a later
+      # version does not change what this usage cost.
+      # OPEN: priced by the version in force when the record is written, or by the version in
+      # force during its period (a late report across a price change). Taken: when written.
+      - name: price_id
+        type: weft.shared.PriceId
+      - name: unit_price
+        type: Decimal
+    relations:
+      - name: price
+        kind: references
+        target: weft.metering.Price
+        cardinality: one
+        via: price_id
+      # A usage record is a fact about what was used; it outlives every entity it names.
+      - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: path_accounts, kind: references, target: weft.accounts.Account, cardinality: many, via: account_path}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: resource_class_entry, kind: references, target: weft.inventory.ResourceClass, cardinality: one, via: resource_class}
+      - {name: instance, kind: references, target: weft.workloads.Instance, cardinality: one, via: instance_id}
+      - {name: node, kind: references, target: weft.infrastructure.Node, cardinality: one, via: node_id}
+      - {name: assignment, kind: references, target: weft.nodes.Assignment, cardinality: one, via: assignment_id}
+      - {name: volume, kind: references, target: weft.resources.Volume, cardinality: one, via: volume_id}
+      - {name: endpoint, kind: references, target: weft.formations.Endpoint, cardinality: one, via: endpoint_id}
+      - {name: service_instance, kind: references, target: weft.catalog.ServiceInstance, cardinality: one, via: service_instance_id}
+      - {name: offering, kind: references, target: weft.catalog.Offering, cardinality: one, via: offering_id}
+      - {name: product, kind: references, target: weft.catalog.Product, cardinality: one, via: product_id}
+    invariants:
+      - amount >= 0
+      - period_end > period_start
+      - any: ["not defined(offering_id)", "defined(service_instance_id)"]
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # Line 478 `PriceList`: the cluster's price per resource class per unit. One list is one version;
+  # a published version is never changed, and publishing the next supersedes it. Line 102: only the
+  # ClusterOperator sets prices.
+  # OPEN: one price list per cluster, or per tenant as well (a negotiated price). Taken: one per
+  # cluster; the control plane's state store is one cluster's, so the list carries no CloudId.
+  - name: weft.metering.PriceList
+    naming:
+      summary: One version of the cluster's prices, drafted, then published, then superseded.
+    identity:
+      name: price_list_id
+      type: weft.shared.PriceListId
+    fields:
+      - name: version
+        type: Integer
+      - name: currency
+        type: weft.metering.Currency
+      - name: created_at
+        type: Timestamp
+      - name: published_at
+        type: Optional<Timestamp>
+    invariants:
+      - version >= 1
+    relations:
+      - name: prices
+        kind: owns
+        target: weft.metering.Price
+        cardinality: many
+        via: price_list_id
+    lifecycle:
+      initial: Draft
+      states: [Draft, Published, Superseded]
+      terminal: [Superseded]
+      transitions:
+        - name: publish
+          from: [Draft]
+          to: Published
+          summary: The version is in force; usage recorded from now on is priced by it.
+        - name: supersede
+          from: [Published]
+          to: Superseded
+          summary: A later version was published; records already priced keep this version's price.
+
+  # Line 478 "price per resource class per unit" and line 496 "`pay-per-use`: a rate per meter
+  # unit": one row of a price list. The sketch keys a price by resource class in line 478 and by
+  # meter in line 496; a price here is keyed by meter and qualifier, since every usage record
+  # names a meter and not every one names a resource class (`requests`).
+  # Decided in the integration pass (2026-11-26): prices are keyed per meter (line 496), not per
+  # resource class (line 478); the sketch is to be aligned.
+  - name: weft.metering.Price
+    naming:
+      summary: The pay-per-use rate of one unit of one meter in one price list.
+    identity:
+      name: price_id
+      type: weft.shared.PriceId
+    fields:
+      - name: price_list_id
+        type: weft.shared.PriceListId
+      - name: meter
+        type: weft.metering.Meter
+      - name: qualifier
+        type: weft.metering.MeterQualifier
+      # In the currency of the price list, per unit of the meter (Meter.unit).
+      - name: unit_price
+        type: Decimal
+    invariants:
+      - unit_price >= 0
+    lifecycle:
+      initial: Set
+      states: [Set]
+      terminal: [Set]
+
+  # Limits (line 405, "Limits (consumed): `deadline`, `budget`, `concurrency`, `rate`"). Each limit
+  # has a scope: an account and everything below it, or one formation in it, or one component of
+  # that formation. Every limit on the account path of a unit of work applies to it; the
+  # strictest decides.
+  # Each limit `references` its account and formation (integration pass, 2026-11-26).
+  # That formation_id lies in account_id is checked by the Set commands (hardening pass 1 W5).
+  # UNMAPPED: that component is a component of that formation is `formations`' record; no guard
+  # checks it.
+  # OPEN: may an admin of an account change or remove a limit that a TenantOwner or the admin of
+  # a parent account set on it (a widening from below)? Taken: no rule here; the actor blocks of
+  # the integration pass decide, and the smallest safe answer is that only the level that set a
+  # limit, or one above it, changes or removes it.
+
+  # Line 405 `deadline`; line 243 "`Invocation`: one call, one result, a deadline". The longest a
+  # unit of work (an invocation, a job run, a session) in the scope may run.
+  # OPEN: which shapes a deadline applies to. Taken: invocations, jobs and sessions; a service,
+  # a box or a daemon has no end and is not admitted against a deadline.
+  - name: weft.metering.Deadline
+    naming:
+      summary: The longest a unit of work in a scope may run before it is stopped.
+    identity:
+      name: deadline_id
+      type: weft.shared.DeadlineId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: max_seconds
+        type: Integer
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - max_seconds >= 1
+      - any: ["not defined(component)", "defined(formation_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+  # Line 405 `budget`; caller's "Budget (money or resource-seconds; when spent, a named refusal for
+  # new work and a stop signal for running work)". `spent` grows with each charge; `remaining` is
+  # amount minus spent and goes below zero when work runs on while it is stopped.
+  # OPEN: does a budget renew per calendar period (a monthly budget)? Taken: no; it counts from
+  # when it is set until it is changed or removed.
+  # OPEN: how long running work gets between the stop signal and its stop. Taken: the stop grace
+  # of `workloads` and `scheduling`; metering only signals.
+  - name: weft.metering.Budget
+    naming:
+      summary: An amount of money or resource-seconds a scope may spend before its work stops.
+    identity:
+      name: budget_id
+      type: weft.shared.BudgetId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: measure
+        type: weft.metering.BudgetMeasure
+      # The seconds meter a ResourceSeconds budget counts (`gpu-seconds`); absent for Money.
+      - name: meter
+        type: Optional<weft.metering.Meter>
+      # Money in the currency of the price lists, or units of the meter.
+      - name: amount
+        type: Decimal
+      - name: spent
+        type: Decimal
+      - name: remaining
+        type: Decimal
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - amount > 0
+      - spent >= 0
+      - any: [measure == Money, "defined(meter)"]
+      - any: [measure == ResourceSeconds, "not defined(meter)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Exhausted, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: exhaust
+          from: [Active]
+          to: Exhausted
+          summary: The budget is spent; new work in its scope is refused and running work stopped.
+        - name: replenish
+          from: [Exhausted]
+          to: Active
+          summary: The amount was raised above what is spent; new work is admitted again.
+        - name: remove
+          from: [Active, Exhausted]
+          to: Removed
+
+  # Line 405 `concurrency`: how many units of work of the scope run at once. The Scheduler
+  # acquires one unit before it places new work and releases it when the work ends.
+  # OPEN: a counter can leak when a release is lost (a node gone). Taken: a counter; the
+  # Scheduler releases for every instance it sees end, gone nodes' included. A lease per holder
+  # is the alternative.
+  # OPEN: is lowering max_concurrent below in_use a stop of running work? Taken: no; new work
+  # waits until in_use is below the new maximum.
+  - name: weft.metering.Concurrency
+    naming:
+      summary: The number of units of work a scope may run at once, and how many run.
+    identity:
+      name: concurrency_id
+      type: weft.shared.ConcurrencyId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: max_concurrent
+        type: Integer
+      - name: in_use
+        type: Integer
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - max_concurrent >= 1
+      - in_use >= 0
+      - any: ["not defined(component)", "defined(formation_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+  # Line 405 `rate`: how many requests per window the scope's endpoints or components take.
+  # UNMAPPED: a rate is enforced per request in the data plane (weft-edge for public endpoints,
+  # the link filter between components, line 62); a request over the rate is refused there, not
+  # by a command of this domain. Metering holds the limit; the refusal belongs to the data
+  # plane's protocol.
+  # OPEN: is a rate per caller, per endpoint, or per scope as a whole? Taken: per scope as a whole.
+  - name: weft.metering.Rate
+    naming:
+      summary: The number of requests a scope takes per window.
+    identity:
+      name: rate_id
+      type: weft.shared.RateId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: max_requests
+        type: Integer
+      - name: window_seconds
+        type: Integer
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - max_requests >= 1
+      - window_seconds >= 1
+      - any: ["not defined(component)", "defined(formation_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+  # "Pricing models" (lines 494-502). A model is immutable: a change of terms is a new model and
+  # a new assignment, so a statement always names the terms it was computed by. Money is in the
+  # currency of the price list in force. Line 102: the ClusterOperator sets prices.
+  # OPEN: may a tenant choose among the models the cluster offers (a self-service plan change)?
+  # Taken: no; only the ClusterOperator defines and assigns pricing.
+  - name: weft.metering.PricingModel
+    naming:
+      summary: A pricing model with its parameters, defined once and retired when no longer offered.
+    identity:
+      name: pricing_model_id
+      type: weft.shared.PricingModelId
+    fields:
+      - name: name
+        type: String
+      - name: period
+        type: weft.metering.BillingPeriod
+      - name: terms
+        type: weft.metering.PricingTerms
+      - name: defined_at
+        type: Timestamp
+    invariants:
+      - name.count >= 1
+      - name.count <= 63
+    lifecycle:
+      initial: Active
+      states: [Active, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Active]
+          to: Retired
+
+  # Line 503 `PricingAssignment`: "binds an account (or a formation, product or offering plan) to
+  # one pricing model; children inherit". Exactly one target field is set, the one target_kind
+  # names. One active assignment per target.
+  # OPEN: which assignment prices a usage record when several apply. Taken, for weft-control's
+  # statement: usage of a service instance by its offering plan's assignment, usage of a product
+  # installation by its product's, then the formation's, then the nearest account's on the
+  # record's account path; with none, pay-per-use.
+  # UNMAPPED: "children inherit" (sub-accounts from accounts, formations from their account) is a
+  # walk up the account tree; no view here selects the nearest assignment on a path.
+  # OPEN: is a product or offering-plan assignment cluster-wide or per account? Taken:
+  # cluster-wide (the product's or plan's pricing for every account).
+  - name: weft.metering.PricingAssignment
+    naming:
+      summary: The pricing model one account, formation, product or offering plan is charged by.
+    identity:
+      name: pricing_assignment_id
+      type: weft.shared.PricingAssignmentId
+    fields:
+      - name: target_kind
+        type: weft.metering.AssignmentTarget
+      - name: account_id
+        type: Optional<weft.shared.AccountId>
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: product_id
+        type: Optional<weft.shared.ProductId>
+      - name: offering_plan_id
+        type: Optional<weft.shared.OfferingPlanId>
+      - name: pricing_model_id
+        type: weft.shared.PricingModelId
+      - name: assigned_at
+        type: Timestamp
+      - name: ended_at
+        type: Optional<Timestamp>
+    relations:
+      - name: pricing_model
+        kind: references
+        target: weft.metering.PricingModel
+        cardinality: one
+        via: pricing_model_id
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: product, kind: references, target: weft.catalog.Product, cardinality: one, via: product_id}
+      - {name: offering_plan, kind: references, target: weft.catalog.OfferingPlan, cardinality: one, via: offering_plan_id}
+    invariants:
+      - any: [target_kind != account, "defined(account_id)"]
+      - any: [target_kind != formation, "defined(formation_id)"]
+      - any: [target_kind != product, "defined(product_id)"]
+      - any: [target_kind != offering-plan, "defined(offering_plan_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Ended]
+      terminal: [Ended]
+      transitions:
+        - name: end
+          from: [Active]
+          to: Ended
+
+  # Line 505 `Statement`: "charges per account and billing period, from usage records and the
+  # pricing in force. Payment collection is out of scope." weft-control (ControlPlane) issues it
+  # once the period has ended. Append-only.
+  # UNMAPPED: the lines and the total are computed by weft-control from the account's usage
+  # records, the price list in force and the pricing assignments (free-tier allowance first,
+  # reserved commitment, spot factor, subscriptions); ESS has no construct that derives a list of
+  # charges from rows, so they are inputs, and that `total` is the sum of the lines' charges is
+  # not checked here.
+  # OPEN: a statement for the account's own usage or for its subtree. Taken: its own usage; a
+  # parent's figure is the sum of its subtree's statements.
+  # OPEN: how a wrong statement is corrected (a void and reissue, a credit line). Taken: not
+  # modelled; one statement per account and period.
+  - name: weft.metering.Statement
+    naming:
+      summary: The charges of one account for one billing period.
+    identity:
+      name: statement_id
+      type: weft.shared.StatementId
+    fields:
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: period
+        type: weft.metering.BillingPeriod
+      - name: period_start
+        type: Timestamp
+      - name: period_end
+        type: Timestamp
+      - name: currency
+        type: weft.metering.Currency
+      - name: lines
+        type: List<weft.metering.StatementLine>
+      - name: total
+        type: Decimal
+      - name: issued_at
+        type: Timestamp
+    relations:
+      - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+    invariants:
+      - period_end > period_start
+      - total >= 0
+    lifecycle:
+      initial: Issued
+      states: [Issued]
+      terminal: [Issued]
+
+errors:
+  - name: weft.metering.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.metering.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+
+  - name: weft.metering.InvalidVersion
+    summary: A price list version is a whole number from 1, and nothing was created.
+  - name: weft.metering.VersionTaken
+    summary: A price list with this version exists already, and nothing was created.
+    fields:
+      - name: version
+        type: Integer
+  - name: weft.metering.PriceListNotDraft
+    summary: The price list is published or superseded, so its prices do not change.
+  - name: weft.metering.NegativePrice
+    summary: A price is zero or more, and nothing was set.
+  - name: weft.metering.MeterAlreadyPriced
+    summary: The price list prices this meter and qualifier already; remove that price first.
+    fields:
+      - name: meter
+        type: weft.metering.Meter
+  - name: weft.metering.PriceNotInList
+    summary: The price belongs to another price list, and nothing was removed.
+  - name: weft.metering.EmptyPriceList
+    summary: The price list prices no meter, so it is not published.
+
+  - name: weft.metering.NegativeAmount
+    summary: A usage amount is zero or more, and nothing was recorded.
+  - name: weft.metering.EmptyPeriod
+    summary: A usage period ends after it starts, and nothing was recorded.
+  - name: weft.metering.FuturePeriod
+    summary: A usage period ends in the future, and nothing was recorded.
+  - name: weft.metering.AccountNotInPath
+    summary: The account path does not hold the charged account, and nothing was recorded.
+  - name: weft.metering.InstanceNotOnNode
+    summary: >-
+      The reporting node holds no assignment of the instance, so its report is not usage of that
+      instance, and nothing was recorded.
+  - name: weft.metering.PriceNotInForce
+    summary: The price list is not the published one, and nothing was recorded.
+  - name: weft.metering.PriceMismatch
+    summary: >-
+      The price is not the price list's price of the reported meter and qualifier, and nothing
+      was recorded.
+  - name: weft.metering.OfferingWithoutServiceInstance
+    summary: Usage of an offering names the service instance that used it, and nothing was recorded.
+  - name: weft.metering.AlreadyRecorded
+    summary: The measurement with this report id is recorded already, and nothing was recorded twice.
+  # hardening pass 1: RecordUsage refuses a unit outside the charged account.
+  - name: weft.metering.UnitOfAnotherAccount
+    summary: >-
+      A unit the usage names (formation, instance, volume, endpoint, service instance) is not the
+      charged account's, or the account is not the tenant's, and nothing was recorded.
+  - name: weft.metering.InvalidLimit
+    summary: A limit's value is 1 or more, and nothing changed.
+  - name: weft.metering.ComponentWithoutFormation
+    summary: A limit scoped to a component names the formation of that component, and nothing changed.
+  - name: weft.metering.LimitRemoved
+    summary: The limit was removed, and nothing changed.
+  - name: weft.metering.InvalidBudget
+    summary: A budget's amount is more than zero, and nothing changed.
+  - name: weft.metering.MeterRequired
+    summary: A budget in resource-seconds names the seconds meter it counts, and nothing was set.
+  - name: weft.metering.MeterNotAllowed
+    summary: A budget in money counts every meter and names none, and nothing was set.
+  - name: weft.metering.NotASecondsMeter
+    summary: A budget in resource-seconds counts a meter measured in seconds, and nothing was set.
+  - name: weft.metering.ConcurrencySpent
+    summary: Every unit of the scope's concurrency is in use, so no new work starts.
+    fields:
+      - name: max_concurrent
+        type: Integer
+  - name: weft.metering.NothingAcquired
+    summary: No unit of the concurrency is in use, so none is released.
+  - name: weft.metering.BudgetExhausted
+    summary: A budget of the work's scope is spent, so no new work starts there.
+  - name: weft.metering.DeadlineTooLong
+    summary: The work asks to run longer than a deadline of its scope allows, so it does not start.
+
+  - name: weft.metering.InvalidPricingModelName
+    summary: A pricing model's name has 1 to 63 characters, and nothing was defined.
+  - name: weft.metering.PricingModelNameTaken
+    summary: An active pricing model has this name already, and nothing was defined.
+  - name: weft.metering.PricingModelInUse
+    summary: An active assignment names the pricing model, so it is not retired.
+  - name: weft.metering.PricingModelNotActive
+    summary: The pricing model is retired, so nothing is assigned to it.
+  - name: weft.metering.TargetMismatch
+    summary: >-
+      An assignment names exactly the one target its target kind says, and nothing was assigned.
+  - name: weft.metering.AlreadyAssigned
+    summary: The target has an active pricing assignment; end it first, and nothing was assigned.
+
+  - name: weft.metering.PeriodNotEnded
+    summary: The billing period has not ended, so no statement is issued for it.
+  - name: weft.metering.NegativeCharge
+    summary: A statement's total is zero or more, and nothing was issued.
+  - name: weft.metering.StatementExists
+    summary: The account has a statement for this period already, and nothing was issued.
+
+events:
+  - name: weft.metering.PriceListCreated
+    fields:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: version, type: Integer}
+      - {name: currency, type: weft.metering.Currency}
+  - name: weft.metering.PriceSet
+    fields:
+      - {name: price_id, type: weft.shared.PriceId}
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: unit_price, type: Decimal}
+  - name: weft.metering.PriceRemoved
+    fields:
+      - {name: price_id, type: weft.shared.PriceId}
+      - {name: price_list_id, type: weft.shared.PriceListId}
+  - name: weft.metering.PriceListPublished
+    fields:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+  - name: weft.metering.DeadlineSet
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_seconds, type: Integer}
+  - name: weft.metering.DeadlineChanged
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: max_seconds, type: Integer}
+  - name: weft.metering.DeadlineRemoved
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+  - name: weft.metering.BudgetSet
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: measure, type: weft.metering.BudgetMeasure}
+      - {name: meter, type: Optional<weft.metering.Meter>}
+      - {name: amount, type: Decimal}
+  - name: weft.metering.BudgetCharged
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: usage_record_id, type: weft.shared.UsageRecordId}
+      - {name: amount, type: Decimal}
+  # The stop signal of the caller's Budget: every running unit of work in the scope is to be
+  # stopped. `scheduling` and `nodes` act on it.
+  - name: weft.metering.BudgetSpent
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+  - name: weft.metering.BudgetReplenished
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: amount, type: Decimal}
+  - name: weft.metering.BudgetChanged
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: amount, type: Decimal}
+  - name: weft.metering.BudgetRemoved
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+  - name: weft.metering.ConcurrencySet
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_concurrent, type: Integer}
+  - name: weft.metering.ConcurrencyChanged
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: max_concurrent, type: Integer}
+  - name: weft.metering.ConcurrencyRemoved
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+  - name: weft.metering.ConcurrencyAcquired
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+  - name: weft.metering.ConcurrencyReleased
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+  - name: weft.metering.RateSet
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+  - name: weft.metering.RateChanged
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+  - name: weft.metering.RateRemoved
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+  - name: weft.metering.PricingModelDefined
+    fields:
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+      - {name: name, type: String}
+      - {name: period, type: weft.metering.BillingPeriod}
+      - {name: terms, type: weft.metering.PricingTerms}
+  - name: weft.metering.PricingModelRetired
+    fields:
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+  - name: weft.metering.PricingAssigned
+    fields:
+      - {name: pricing_assignment_id, type: weft.shared.PricingAssignmentId}
+      - {name: target_kind, type: weft.metering.AssignmentTarget}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: product_id, type: Optional<weft.shared.ProductId>}
+      - {name: offering_plan_id, type: Optional<weft.shared.OfferingPlanId>}
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+  - name: weft.metering.PricingAssignmentEnded
+    fields:
+      - {name: pricing_assignment_id, type: weft.shared.PricingAssignmentId}
+  - name: weft.metering.StatementIssued
+    fields:
+      - {name: statement_id, type: weft.shared.StatementId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: period_start, type: Timestamp}
+      - {name: period_end, type: Timestamp}
+      - {name: currency, type: weft.metering.Currency}
+      - {name: total, type: Decimal}
+  - name: weft.metering.UsageRecorded
+    fields:
+      - {name: usage_record_id, type: weft.shared.UsageRecordId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: amount, type: Decimal}
+      - {name: period_start, type: Timestamp}
+      - {name: period_end, type: Timestamp}
+
+commands:
+  # Line 478 `PriceList`, line 102 (ClusterOperator: price lists). Starts the next version as a
+  # draft.
+  # OPEN: must a new version be higher than every earlier one, or only unused. Taken: only unused.
+  - name: weft.metering.CreatePriceList
+    naming:
+      display: Create a price list
+    input:
+      - {name: version, type: Integer}
+      - {name: currency, type: weft.metering.Currency}
+    outcomes:
+      - name: invalid-version
+        when: version < 1
+        error: weft.metering.InvalidVersion
+      - name: version-taken
+        when_related:
+          entity: weft.metering.PriceList
+          where: version == input.version
+          exists: true
+        error: weft.metering.VersionTaken
+        payload:
+          weft.metering.VersionTaken: {version: input.version}
+      - name: created
+        creates: weft.metering.PriceList
+        instance: price_list_id
+        sets:
+          version: input.version
+          currency: input.currency
+          created_at: {generated: true}
+        emits: [weft.metering.PriceListCreated]
+        payload:
+          weft.metering.PriceListCreated:
+            price_list_id: {generated: true}
+            version: input.version
+            currency: input.currency
+
+  # Line 478 "price per resource class per unit", line 496 "a rate per meter unit"; prices change
+  # only in a draft.
+  - name: weft.metering.SetPrice
+    naming:
+      display: Set a price
+    input:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: unit_price, type: Decimal}
+    outcomes:
+      - name: negative-price
+        when: unit_price < 0
+        error: weft.metering.NegativePrice
+      - name: no-such-price-list
+        when_related: {via: input.price_list_id, exists: false}
+        error: weft.metering.NotFound
+      - name: not-draft
+        when_related: {via: input.price_list_id, predicate: state != Draft}
+        error: weft.metering.PriceListNotDraft
+      - name: already-priced
+        when_related:
+          entity: weft.metering.Price
+          where:
+            all:
+              - price_list_id == input.price_list_id
+              - meter == input.meter
+              - qualifier == input.qualifier
+          exists: true
+        error: weft.metering.MeterAlreadyPriced
+        payload:
+          weft.metering.MeterAlreadyPriced: {meter: input.meter}
+      - name: set
+        creates: weft.metering.Price
+        instance: price_id
+        sets:
+          price_list_id: input.price_list_id
+          meter: input.meter
+          qualifier: input.qualifier
+          unit_price: input.unit_price
+        emits: [weft.metering.PriceSet]
+        payload:
+          weft.metering.PriceSet:
+            price_id: {generated: true}
+            price_list_id: input.price_list_id
+            meter: input.meter
+            qualifier: input.qualifier
+            unit_price: input.unit_price
+
+  # Line 478; a draft's price is removed to be set again.
+  - name: weft.metering.RemovePrice
+    naming:
+      display: Remove a price
+    input:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: price_id, type: weft.shared.PriceId}
+    outcomes:
+      - name: no-such-price
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: not-in-list
+        when_subject:
+          predicate: price_list_id != input.price_list_id
+        error: weft.metering.PriceNotInList
+      - name: no-such-price-list
+        when_related: {via: input.price_list_id, exists: false}
+        error: weft.metering.NotFound
+      - name: not-draft
+        when_related: {via: input.price_list_id, predicate: state != Draft}
+        error: weft.metering.PriceListNotDraft
+      - name: removed
+        deletes: weft.metering.Price
+        instance: price_id
+        emits: [weft.metering.PriceRemoved]
+        payload:
+          weft.metering.PriceRemoved:
+            price_id: input.price_id
+            price_list_id: input.price_list_id
+
+  # Line 478 and the caller's "versions": the draft comes into force and the version in force
+  # before it is superseded. Records already written keep the price they were written with.
+  - name: weft.metering.PublishPriceList
+    naming:
+      display: Publish a price list
+    input:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+    outcomes:
+      - name: no-such-price-list
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: empty
+        when_related:
+          entity: weft.metering.Price
+          where: price_list_id == input.price_list_id
+          exists: false
+        error: weft.metering.EmptyPriceList
+      - name: published
+        moves: weft.metering.PriceList.publish
+        instance: price_list_id
+        sets:
+          published_at: {generated: true}
+        affects:
+          - entity: weft.metering.PriceList
+            where: state == Published
+            moves: weft.metering.PriceList.supersede
+        emits: [weft.metering.PriceListPublished]
+        payload:
+          weft.metering.PriceListPublished:
+            price_list_id: input.price_list_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.StateConflict
+
+  # Line 476 `UsageRecord`; "Meters" line 483 "The node agent measures every instance; the control
+  # plane aggregates"; line 469 `UsageReported`, line 470 "the agent reports what it observed".
+  # Append-only: this is the only command that writes a record. Issued by weft-control
+  # (ControlPlane) for each aggregate of what nodes reported.
+  # UNMAPPED: tenant_id, account_id, account_path, formation_id, product_id and the service
+  # instance's offering_id are inputs here. A node is not trusted to name them: weft-control
+  # fills them from the instance's record (`workloads`), the service instance (`catalog`) and the
+  # account tree (`accounts`); only the meter, qualifier, amount, period and what was measured
+  # come from the node's report. The relations are declared (integration pass, 2026-11-26); the
+  # units are tied to the account and the account to the tenant (hardening pass 1), the check
+  # that the path matches the tree is not written.
+  # UNMAPPED: price_list_id and price_id are inputs; weft-control picks the published list's price
+  # of the meter and qualifier. The guards below refuse any other price.
+  # OPEN: usage of a meter and qualifier the published list does not price. Taken: it is not
+  # recorded until a price exists (no price_id to give); the aggregate waits.
+  # OPEN: two records of one instance and meter for overlapping periods. Taken: not checked; the
+  # report id makes a resend idempotent, and weft-control aggregates disjoint periods.
+  - name: weft.metering.RecordUsage
+    naming:
+      display: Record usage
+    input:
+      - {name: report_id, type: Uuid}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: amount, type: Decimal}
+      - {name: period_start, type: Timestamp}
+      - {name: period_end, type: Timestamp}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: account_path, type: List<weft.shared.AccountId>}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: resource_class, type: Optional<weft.shared.ResourceClassName>}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: assignment_id, type: Optional<weft.shared.AssignmentId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: endpoint_id, type: Optional<weft.shared.EndpointId>}
+      - {name: service_instance_id, type: Optional<weft.shared.ServiceInstanceId>}
+      - {name: offering_id, type: Optional<weft.shared.OfferingId>}
+      - {name: product_id, type: Optional<weft.shared.ProductId>}
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: price_id, type: weft.shared.PriceId}
+    outcomes:
+      - name: negative-amount
+        when: amount < 0
+        error: weft.metering.NegativeAmount
+      - name: empty-period
+        when: period_end <= period_start
+        error: weft.metering.EmptyPeriod
+      # A period that ends in the future, or that started within the last second (and, not being
+      # empty, ended within it too): the second clause changes the answer only for such a
+      # sub-second period, which a resend a second later records. It is there so that synthesis
+      # sends both instants relative to the current time (soundness pass, 2026-11-26): ESS 0.99.2
+      # sent a literal start in 2020 beside an end relative to now and expected EmptyPeriod.
+      - name: future-period
+        when:
+          any: [period_end > now, period_start > now - 1s]
+        error: weft.metering.FuturePeriod
+      - name: account-not-in-path
+        when:
+          not:
+            exists: {in: account_path, as: a, that: a == account_id}
+        error: weft.metering.AccountNotInPath
+      - name: offering-without-service-instance
+        when:
+          all: ["defined(offering_id)", "not defined(service_instance_id)"]
+        error: weft.metering.OfferingWithoutServiceInstance
+      # Line 470; the assignment is `nodes`' record (line 471 `Assignment`). Usage a node measured
+      # of an instance names the assignment it ran the instance under (`weft.nodes.UsageReport`
+      # carries it); default deny: without one, or with one of another node or instance, nothing
+      # is recorded.
+      - name: assignment-missing
+        when:
+          all: ["defined(instance_id)", "defined(node_id)", "not defined(assignment_id)"]
+        error: weft.metering.InstanceNotOnNode
+      - name: assignment-without-instance
+        when:
+          all:
+            - defined(assignment_id)
+            - any: ["not defined(instance_id)", "not defined(node_id)"]
+        error: weft.metering.InstanceNotOnNode
+      - name: no-such-price-list
+        when_related: {via: input.price_list_id, exists: false}
+        error: weft.metering.NotFound
+      - name: no-such-price
+        when_related: {via: input.price_id, exists: false}
+        error: weft.metering.NotFound
+      - name: no-such-assignment
+        when_related: {via: input.assignment_id, exists: false}
+        error: weft.metering.InstanceNotOnNode
+      - name: already-recorded
+        when_related:
+          entity: weft.metering.UsageRecord
+          where: report_id == input.report_id
+          exists: true
+        error: weft.metering.AlreadyRecorded
+      - name: price-list-not-in-force
+        when_related: {via: input.price_list_id, predicate: state != Published}
+        error: weft.metering.PriceNotInForce
+      - name: price-of-another-list
+        when_related: {via: input.price_id, predicate: price_list_id != input.price_list_id}
+        error: weft.metering.PriceMismatch
+      - name: price-of-another-meter
+        when_related: {via: input.price_id, predicate: meter != input.meter}
+        error: weft.metering.PriceMismatch
+      - name: price-of-another-qualifier
+        when_related: {via: input.price_id, predicate: qualifier != input.qualifier}
+        error: weft.metering.PriceMismatch
+      - name: instance-not-on-node
+        when_related: {via: input.assignment_id, predicate: node_id != input.node_id}
+        error: weft.metering.InstanceNotOnNode
+      - name: assignment-of-another-instance
+        when_related: {via: input.assignment_id, predicate: instance_id != input.instance_id}
+        error: weft.metering.InstanceNotOnNode
+      - name: assignment-after-period
+        when_related: {via: input.assignment_id, predicate: assigned_at >= input.period_end}
+        error: weft.metering.InstanceNotOnNode
+      # hardening pass 1 RecordUsage (metering.yaml:1105): every unit the record names is the
+      # charged account's, so usage of one account's unit is not billed to another. The
+      # assignment is tied through its instance (assignment-of-another-instance above). Each
+      # selects the row it ties, so a unit that no longer exists (a usage record outlives what it
+      # names) is still recorded, as before.
+      - name: account-of-another-tenant
+        when_related:
+          entity: weft.accounts.Account
+          where: {all: [account_id == input.account_id, tenant_id != input.tenant_id]}
+          exists: true
+        error: weft.metering.UnitOfAnotherAccount
+      - name: formation-of-another-account
+        when_related:
+          entity: weft.formations.Formation
+          where: {all: [formation_id == input.formation_id, account_id != input.account_id]}
+          exists: true
+        error: weft.metering.UnitOfAnotherAccount
+      # Usage of the components a service instance runs as (line 541) names an instance of the
+      # system formation, which is not the charged account's; that instance is tied to the record
+      # through the service instance instead.
+      # OPEN: is a service instance's component instance in the service instance's account or in
+      # the operator's? Taken: not checked when service_instance_id is present.
+      - name: instance-of-another-account
+        when_related:
+          entity: weft.workloads.Instance
+          where:
+            all:
+              - instance_id == input.instance_id
+              - account_id != input.account_id
+              - not defined(input.service_instance_id)
+          exists: true
+        error: weft.metering.UnitOfAnotherAccount
+      - name: volume-of-another-account
+        when_related:
+          entity: weft.resources.Volume
+          where: {all: [volume_id == input.volume_id, account_id != input.account_id]}
+          exists: true
+        error: weft.metering.UnitOfAnotherAccount
+      # An endpoint lies in one formation; usage of it names that formation.
+      - name: endpoint-of-another-formation
+        when_related:
+          entity: weft.formations.Endpoint
+          where:
+            all:
+              - endpoint_id == input.endpoint_id
+              - any: [not defined(input.formation_id), formation_id != input.formation_id]
+          exists: true
+        error: weft.metering.UnitOfAnotherAccount
+      - name: service-instance-of-another-account
+        when_related:
+          entity: weft.catalog.ServiceInstance
+          where: {all: [service_instance_id == input.service_instance_id, account_id != input.account_id]}
+          exists: true
+        error: weft.metering.UnitOfAnotherAccount
+      - name: recorded
+        creates: weft.metering.UsageRecord
+        instance: usage_record_id
+        sets:
+          report_id: input.report_id
+          tenant_id: input.tenant_id
+          account_id: input.account_id
+          account_path: input.account_path
+          formation_id: input.formation_id
+          meter: input.meter
+          qualifier: input.qualifier
+          resource_class: input.resource_class
+          instance_id: input.instance_id
+          node_id: input.node_id
+          assignment_id: input.assignment_id
+          component: input.component
+          volume_id: input.volume_id
+          endpoint_id: input.endpoint_id
+          service_instance_id: input.service_instance_id
+          offering_id: input.offering_id
+          product_id: input.product_id
+          amount: input.amount
+          period_start: input.period_start
+          period_end: input.period_end
+          recorded_at: {generated: true}
+          price_id: input.price_id
+          unit_price: {related: {via: input.price_id, field: unit_price}}
+        emits: [weft.metering.UsageRecorded]
+        payload:
+          weft.metering.UsageRecorded:
+            usage_record_id: {generated: true}
+            tenant_id: input.tenant_id
+            account_id: input.account_id
+            formation_id: input.formation_id
+            meter: input.meter
+            qualifier: input.qualifier
+            amount: input.amount
+            period_start: input.period_start
+            period_end: input.period_end
+
+  # Line 405 `deadline`.
+  - name: weft.metering.SetDeadline
+    naming:
+      display: Set a deadline
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_seconds, type: Integer}
+    outcomes:
+      # hardening pass 1 D3: the limit's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.metering.NotFound
+      - name: invalid-limit
+        when: max_seconds < 1
+        error: weft.metering.InvalidLimit
+      - name: component-without-formation
+        when:
+          all: ["defined(component)", "not defined(formation_id)"]
+        error: weft.metering.ComponentWithoutFormation
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.metering.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
+        error: weft.metering.NotFound
+      - name: set
+        creates: weft.metering.Deadline
+        instance: deadline_id
+        sets:
+          account_id: input.account_id
+          formation_id: input.formation_id
+          component: input.component
+          max_seconds: input.max_seconds
+          set_at: {generated: true}
+        emits: [weft.metering.DeadlineSet]
+        payload:
+          weft.metering.DeadlineSet:
+            deadline_id: {generated: true}
+            account_id: input.account_id
+            formation_id: input.formation_id
+            component: input.component
+            max_seconds: input.max_seconds
+
+  # Line 405 `deadline`. Work already running keeps the deadline it was admitted with.
+  # OPEN: does a shorter deadline stop running work that is past it. Taken: no; it applies to work
+  # admitted after the change.
+  - name: weft.metering.ChangeDeadline
+    naming:
+      display: Change a deadline
+    input:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: max_seconds, type: Integer}
+    outcomes:
+      - name: invalid-limit
+        when: max_seconds < 1
+        error: weft.metering.InvalidLimit
+      - name: no-such-deadline
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      - name: changed
+        updates: weft.metering.Deadline
+        instance: deadline_id
+        sets:
+          max_seconds: input.max_seconds
+        emits: [weft.metering.DeadlineChanged]
+        payload:
+          weft.metering.DeadlineChanged:
+            deadline_id: input.deadline_id
+            max_seconds: input.max_seconds
+
+  # Line 405 `deadline`.
+  - name: weft.metering.RemoveDeadline
+    naming:
+      display: Remove a deadline
+    input:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+    outcomes:
+      - name: no-such-deadline
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        moves: weft.metering.Deadline.remove
+        instance: deadline_id
+        emits: [weft.metering.DeadlineRemoved]
+        payload:
+          weft.metering.DeadlineRemoved:
+            deadline_id: input.deadline_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.LimitRemoved
+
+  # Line 405 `budget`.
+  - name: weft.metering.SetBudget
+    naming:
+      display: Set a budget
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: measure, type: weft.metering.BudgetMeasure}
+      - {name: meter, type: Optional<weft.metering.Meter>}
+      - {name: amount, type: Decimal}
+    outcomes:
+      # hardening pass 1 D3: the budget's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.metering.NotFound
+      - name: invalid-budget
+        when: amount <= 0
+        error: weft.metering.InvalidBudget
+      - name: meter-required
+        when:
+          all: [measure == ResourceSeconds, "not defined(meter)"]
+        error: weft.metering.MeterRequired
+      - name: meter-not-allowed
+        when:
+          all: [measure == Money, "defined(meter)"]
+        error: weft.metering.MeterNotAllowed
+      - name: not-a-seconds-meter
+        when:
+          all:
+            - measure == ResourceSeconds
+            - meter: {none_of: [cpu-seconds, memory-gib-seconds, gpu-seconds, gpu-slice-seconds]}
+        error: weft.metering.NotASecondsMeter
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.metering.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
+        error: weft.metering.NotFound
+      - name: set
+        creates: weft.metering.Budget
+        instance: budget_id
+        sets:
+          account_id: input.account_id
+          formation_id: input.formation_id
+          measure: input.measure
+          meter: input.meter
+          amount: input.amount
+          spent: 0
+          remaining: input.amount
+          set_at: {generated: true}
+        emits: [weft.metering.BudgetSet]
+        payload:
+          weft.metering.BudgetSet:
+            budget_id: {generated: true}
+            account_id: input.account_id
+            formation_id: input.formation_id
+            measure: input.measure
+            meter: input.meter
+            amount: input.amount
+
+  # Caller's Budget "when spent ... a stop signal for running work": weft-control charges each
+  # usage record to every budget whose scope holds it; the charge that spends the budget emits
+  # BudgetSpent. An exhausted budget is still charged, so `remaining` shows the overrun.
+  # UNMAPPED: that the usage record lies in the budget's scope (its account on the record's
+  # account_path, its formation the record's) and, for ResourceSeconds, is of the budget's
+  # meter, compares two rows; ESS guards here read one row against the input. The
+  # amount (cost for Money, the record's amount for ResourceSeconds) is weft-control's to compute.
+  # OPEN: may one usage record be charged to one budget twice (a retry)? Taken: weft-control
+  # charges each pair once; not checked here.
+  - name: weft.metering.ChargeBudget
+    naming:
+      display: Charge a budget
+    input:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: usage_record_id, type: weft.shared.UsageRecordId}
+      - {name: amount, type: Decimal}
+    outcomes:
+      - name: negative-amount
+        when: amount < 0
+        error: weft.metering.NegativeAmount
+      - name: no-such-budget
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      # UNMAPPED: a `when_related: {via: input.usage_record_id, exists: false}` refusal is refused
+      # here as ESS-COMMAND-004: the precedence order answers the held-state branch `spent` before
+      # a related row's existence, so a charge naming no record would still spend the budget. The
+      # record id is kept for the audit trail only. Open question for ESS.
+      # UNMAPPED (hardening pass 1, metering.yaml:1383): the guard that the record lies in the
+      # budget's scope (a `when_related` row set over UsageRecord with `subject.account_id` on its
+      # account_path) is refused as ESS-COMMAND-009 (ess 0.99.2): a row-set selection beside the
+      # `when_subject` guards above is one related row kind too many in this cut.
+      - name: spent
+        when_subject:
+          predicate:
+            all: [state == Active, remaining <= input.amount]
+        moves: weft.metering.Budget.exhaust
+        instance: budget_id
+        sets:
+          spent: {expr: "subject.spent + input.amount"}
+          remaining: {expr: "subject.remaining - input.amount"}
+        emits: [weft.metering.BudgetCharged, weft.metering.BudgetSpent]
+        payload:
+          weft.metering.BudgetCharged:
+            budget_id: input.budget_id
+            usage_record_id: input.usage_record_id
+            amount: input.amount
+          weft.metering.BudgetSpent:
+            budget_id: input.budget_id
+            account_id: {subject: account_id}
+            formation_id: {subject: formation_id}
+      - name: charged
+        updates: weft.metering.Budget
+        instance: budget_id
+        sets:
+          spent: {expr: "subject.spent + input.amount"}
+          remaining: {expr: "subject.remaining - input.amount"}
+        emits: [weft.metering.BudgetCharged]
+        payload:
+          weft.metering.BudgetCharged:
+            budget_id: input.budget_id
+            usage_record_id: input.usage_record_id
+            amount: input.amount
+
+  # Line 405 `budget`. Raising the amount above what is spent admits work again; lowering it to
+  # what is spent or below stops the scope's work.
+  - name: weft.metering.ChangeBudget
+    naming:
+      display: Change a budget
+    input:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: amount, type: Decimal}
+    outcomes:
+      - name: invalid-budget
+        when: amount <= 0
+        error: weft.metering.InvalidBudget
+      - name: no-such-budget
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      - name: replenished
+        when_subject:
+          predicate:
+            all: [state == Exhausted, spent < input.amount]
+        moves: weft.metering.Budget.replenish
+        instance: budget_id
+        sets:
+          amount: input.amount
+          remaining: {expr: "input.amount - subject.spent"}
+        emits: [weft.metering.BudgetReplenished]
+        payload:
+          weft.metering.BudgetReplenished:
+            budget_id: input.budget_id
+            amount: input.amount
+      - name: spent
+        when_subject:
+          predicate:
+            all: [state == Active, spent >= input.amount]
+        moves: weft.metering.Budget.exhaust
+        instance: budget_id
+        sets:
+          amount: input.amount
+          remaining: {expr: "input.amount - subject.spent"}
+        emits: [weft.metering.BudgetChanged, weft.metering.BudgetSpent]
+        payload:
+          weft.metering.BudgetChanged:
+            budget_id: input.budget_id
+            amount: input.amount
+          weft.metering.BudgetSpent:
+            budget_id: input.budget_id
+            account_id: {subject: account_id}
+            formation_id: {subject: formation_id}
+      - name: changed
+        updates: weft.metering.Budget
+        instance: budget_id
+        sets:
+          amount: input.amount
+          remaining: {expr: "input.amount - subject.spent"}
+        emits: [weft.metering.BudgetChanged]
+        payload:
+          weft.metering.BudgetChanged:
+            budget_id: input.budget_id
+            amount: input.amount
+
+  # Line 405 `budget`. Removing an exhausted budget lifts its refusal of new work.
+  - name: weft.metering.RemoveBudget
+    naming:
+      display: Remove a budget
+    input:
+      - {name: budget_id, type: weft.shared.BudgetId}
+    outcomes:
+      - name: no-such-budget
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        moves: weft.metering.Budget.remove
+        instance: budget_id
+        emits: [weft.metering.BudgetRemoved]
+        payload:
+          weft.metering.BudgetRemoved:
+            budget_id: input.budget_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.LimitRemoved
+
+  # Line 405 `concurrency`.
+  - name: weft.metering.SetConcurrency
+    naming:
+      display: Set a concurrency limit
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_concurrent, type: Integer}
+    outcomes:
+      # hardening pass 1 D3: the limit's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.metering.NotFound
+      - name: invalid-limit
+        when: max_concurrent < 1
+        error: weft.metering.InvalidLimit
+      - name: component-without-formation
+        when:
+          all: ["defined(component)", "not defined(formation_id)"]
+        error: weft.metering.ComponentWithoutFormation
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.metering.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
+        error: weft.metering.NotFound
+      - name: set
+        creates: weft.metering.Concurrency
+        instance: concurrency_id
+        sets:
+          account_id: input.account_id
+          formation_id: input.formation_id
+          component: input.component
+          max_concurrent: input.max_concurrent
+          in_use: 0
+          set_at: {generated: true}
+        emits: [weft.metering.ConcurrencySet]
+        payload:
+          weft.metering.ConcurrencySet:
+            concurrency_id: {generated: true}
+            account_id: input.account_id
+            formation_id: input.formation_id
+            component: input.component
+            max_concurrent: input.max_concurrent
+
+  # Line 405 `concurrency`.
+  - name: weft.metering.ChangeConcurrency
+    naming:
+      display: Change a concurrency limit
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: max_concurrent, type: Integer}
+    outcomes:
+      - name: invalid-limit
+        when: max_concurrent < 1
+        error: weft.metering.InvalidLimit
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      - name: changed
+        updates: weft.metering.Concurrency
+        instance: concurrency_id
+        sets:
+          max_concurrent: input.max_concurrent
+        emits: [weft.metering.ConcurrencyChanged]
+        payload:
+          weft.metering.ConcurrencyChanged:
+            concurrency_id: input.concurrency_id
+            max_concurrent: input.max_concurrent
+
+  # Line 405 `concurrency`.
+  - name: weft.metering.RemoveConcurrency
+    naming:
+      display: Remove a concurrency limit
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+    outcomes:
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        moves: weft.metering.Concurrency.remove
+        instance: concurrency_id
+        emits: [weft.metering.ConcurrencyRemoved]
+        payload:
+          weft.metering.ConcurrencyRemoved:
+            concurrency_id: input.concurrency_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.LimitRemoved
+
+  # Line 405 `concurrency` consumed; line 113 (Scheduler places instances). One unit per
+  # instance, acquired on every concurrency limit of the work's scope before it is placed; a
+  # refusal is the named refusal of new work.
+  # OPEN: the Scheduler acquires on several limits (one per level of the tree) one by one; a
+  # refusal after an earlier acquire must release that one. Taken: the Scheduler releases; no
+  # transaction across limits here.
+  # UNMAPPED (hardening pass 1, metering.yaml:1610): that the instance lies in the limit's scope
+  # is not checked here or in ReleaseConcurrency. The scope is an account and everything below
+  # it, and Instance carries its own account_id only (no account path, no formation), so a guard
+  # cannot tell a sub-account's instance from another tenant's.
+  - name: weft.metering.AcquireConcurrency
+    naming:
+      display: Acquire a unit of concurrency
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      - name: spent
+        when_subject: {predicate: in_use >= max_concurrent}
+        error: weft.metering.ConcurrencySpent
+        payload:
+          weft.metering.ConcurrencySpent: {max_concurrent: {subject: max_concurrent}}
+      - name: acquired
+        updates: weft.metering.Concurrency
+        instance: concurrency_id
+        sets:
+          in_use: {increment: 1}
+        emits: [weft.metering.ConcurrencyAcquired]
+        payload:
+          weft.metering.ConcurrencyAcquired:
+            concurrency_id: input.concurrency_id
+            instance_id: input.instance_id
+
+  # Line 405 `concurrency`: the unit comes back when the work ends. A removed limit takes no
+  # release.
+  - name: weft.metering.ReleaseConcurrency
+    naming:
+      display: Release a unit of concurrency
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      - name: nothing-acquired
+        when_subject: {predicate: in_use <= 0}
+        error: weft.metering.NothingAcquired
+      - name: released
+        updates: weft.metering.Concurrency
+        instance: concurrency_id
+        sets:
+          in_use: {expr: "subject.in_use - 1"}
+        emits: [weft.metering.ConcurrencyReleased]
+        payload:
+          weft.metering.ConcurrencyReleased:
+            concurrency_id: input.concurrency_id
+            instance_id: input.instance_id
+
+  # Line 405 `rate`.
+  - name: weft.metering.SetRate
+    naming:
+      display: Set a rate limit
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+    outcomes:
+      # hardening pass 1 D3: the limit's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.metering.NotFound
+      - name: invalid-requests
+        when: max_requests < 1
+        error: weft.metering.InvalidLimit
+      - name: invalid-window
+        when: window_seconds < 1
+        error: weft.metering.InvalidLimit
+      - name: component-without-formation
+        when:
+          all: ["defined(component)", "not defined(formation_id)"]
+        error: weft.metering.ComponentWithoutFormation
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.metering.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
+        error: weft.metering.NotFound
+      - name: set
+        creates: weft.metering.Rate
+        instance: rate_id
+        sets:
+          account_id: input.account_id
+          formation_id: input.formation_id
+          component: input.component
+          max_requests: input.max_requests
+          window_seconds: input.window_seconds
+          set_at: {generated: true}
+        emits: [weft.metering.RateSet]
+        payload:
+          weft.metering.RateSet:
+            rate_id: {generated: true}
+            account_id: input.account_id
+            formation_id: input.formation_id
+            component: input.component
+            max_requests: input.max_requests
+            window_seconds: input.window_seconds
+
+  # Line 405 `rate`.
+  - name: weft.metering.ChangeRate
+    naming:
+      display: Change a rate limit
+    input:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+    outcomes:
+      - name: invalid-requests
+        when: max_requests < 1
+        error: weft.metering.InvalidLimit
+      - name: invalid-window
+        when: window_seconds < 1
+        error: weft.metering.InvalidLimit
+      - name: no-such-rate
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.metering.LimitRemoved
+      - name: changed
+        updates: weft.metering.Rate
+        instance: rate_id
+        sets:
+          max_requests: input.max_requests
+          window_seconds: input.window_seconds
+        emits: [weft.metering.RateChanged]
+        payload:
+          weft.metering.RateChanged:
+            rate_id: input.rate_id
+            max_requests: input.max_requests
+            window_seconds: input.window_seconds
+
+  # Line 405 `rate`.
+  - name: weft.metering.RemoveRate
+    naming:
+      display: Remove a rate limit
+    input:
+      - {name: rate_id, type: weft.shared.RateId}
+    outcomes:
+      - name: no-such-rate
+        unknown_instance: true
+        error: weft.metering.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.metering.NotFound
+      - name: removed
+        moves: weft.metering.Rate.remove
+        instance: rate_id
+        emits: [weft.metering.RateRemoved]
+        payload:
+          weft.metering.RateRemoved:
+            rate_id: input.rate_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.LimitRemoved
+
+  # Line 405 Limits, caller's "when spent, a named refusal for new work": the Scheduler asks before
+  # it places new work (line 113). Refused while a budget on the work's account path (or of its
+  # formation) is spent, or while a deadline there is shorter than the work asks for. Admits
+  # otherwise and changes nothing; concurrency is acquired with AcquireConcurrency.
+  # OPEN: a deadline limit and work that names no deadline of its own. Taken: max_seconds is the
+  # run time the work asks for (its shape's deadline); work with no end (a service) sends 0 and
+  # is not refused by a deadline; workloads then stops nothing by it.
+  - name: weft.metering.AdmitWork
+    naming:
+      display: Admit new work against the limits
+    input:
+      - {name: account_path, type: List<weft.shared.AccountId>}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: max_seconds, type: Integer}
+    outcomes:
+      - name: budget-spent
+        when_related:
+          entity: weft.metering.Budget
+          where:
+            all:
+              - state == Exhausted
+              - exists: {in: input.account_path, as: a, that: account_id == a}
+              - any: ["not defined(formation_id)", formation_id == input.formation_id]
+          exists: true
+        error: weft.metering.BudgetExhausted
+      - name: deadline-too-long
+        when_related:
+          entity: weft.metering.Deadline
+          where:
+            all:
+              - state == Active
+              - exists: {in: input.account_path, as: a, that: account_id == a}
+              - any: ["not defined(formation_id)", formation_id == input.formation_id]
+              - any: ["not defined(component)", component == input.component]
+              - max_seconds < input.max_seconds
+          exists: true
+        error: weft.metering.DeadlineTooLong
+      - name: admitted
+        accepts: nothing
+
+  # "Pricing models" (lines 494-502); line 102 (ClusterOperator: price lists).
+  - name: weft.metering.DefinePricingModel
+    naming:
+      display: Define a pricing model
+    input:
+      - {name: name, type: String}
+      - {name: period, type: weft.metering.BillingPeriod}
+      - {name: terms, type: weft.metering.PricingTerms}
+    outcomes:
+      - name: name-too-short
+        when: name.count < 1
+        error: weft.metering.InvalidPricingModelName
+      - name: name-too-long
+        when: name.count > 63
+        error: weft.metering.InvalidPricingModelName
+      - name: name-taken
+        when_related:
+          entity: weft.metering.PricingModel
+          where:
+            all: [state == Active, name == input.name]
+          exists: true
+        error: weft.metering.PricingModelNameTaken
+      - name: defined
+        creates: weft.metering.PricingModel
+        instance: pricing_model_id
+        sets:
+          name: input.name
+          period: input.period
+          terms: input.terms
+          defined_at: {generated: true}
+        emits: [weft.metering.PricingModelDefined]
+        payload:
+          weft.metering.PricingModelDefined:
+            pricing_model_id: {generated: true}
+            name: input.name
+            period: input.period
+            terms: input.terms
+
+  # "Pricing models": a model no longer offered. Assignments that name it end first.
+  - name: weft.metering.RetirePricingModel
+    naming:
+      display: Retire a pricing model
+    input:
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+    outcomes:
+      - name: no-such-pricing-model
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: in-use
+        when_related:
+          entity: weft.metering.PricingAssignment
+          where:
+            all: [state == Active, pricing_model_id == input.pricing_model_id]
+          exists: true
+        error: weft.metering.PricingModelInUse
+      - name: retired
+        moves: weft.metering.PricingModel.retire
+        instance: pricing_model_id
+        emits: [weft.metering.PricingModelRetired]
+        payload:
+          weft.metering.PricingModelRetired:
+            pricing_model_id: input.pricing_model_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.StateConflict
+
+  # Line 503 `PricingAssignment`. A change of pricing is EndPricingAssignment, then this.
+  # UNMAPPED: that the account, formation, product or offering plan exists is `accounts`',
+  # `formations`' and `catalog`'s record; the relations are declared (integration pass,
+  # 2026-11-26), and no `when_related` guard reads those rows yet.
+  # OPEN: may a `subscription` model be assigned to an account or formation, or only to a product
+  # or offering plan (line 499 "for an offering or product plan")? Taken: not checked here; the
+  # union's tag is not readable in a guard over a related row.
+  - name: weft.metering.AssignPricing
+    naming:
+      display: Assign a pricing model
+    input:
+      - {name: target_kind, type: weft.metering.AssignmentTarget}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: product_id, type: Optional<weft.shared.ProductId>}
+      - {name: offering_plan_id, type: Optional<weft.shared.OfferingPlanId>}
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+    outcomes:
+      - name: account-target-mismatch
+        when:
+          all:
+            - target_kind == account
+            - any: ["not defined(account_id)", "defined(formation_id)", "defined(product_id)", "defined(offering_plan_id)"]
+        error: weft.metering.TargetMismatch
+      - name: formation-target-mismatch
+        when:
+          all:
+            - target_kind == formation
+            - any: ["not defined(formation_id)", "defined(account_id)", "defined(product_id)", "defined(offering_plan_id)"]
+        error: weft.metering.TargetMismatch
+      - name: product-target-mismatch
+        when:
+          all:
+            - target_kind == product
+            - any: ["not defined(product_id)", "defined(account_id)", "defined(formation_id)", "defined(offering_plan_id)"]
+        error: weft.metering.TargetMismatch
+      - name: offering-plan-target-mismatch
+        when:
+          all:
+            - target_kind == offering-plan
+            - any: ["not defined(offering_plan_id)", "defined(account_id)", "defined(formation_id)", "defined(product_id)"]
+        error: weft.metering.TargetMismatch
+      - name: no-such-pricing-model
+        when_related: {via: input.pricing_model_id, exists: false}
+        error: weft.metering.NotFound
+      - name: pricing-model-retired
+        when_related: {via: input.pricing_model_id, predicate: state == Retired}
+        error: weft.metering.PricingModelNotActive
+      # One active assignment per target: one refusal per target kind, each selecting by the
+      # target's identifier, so an absent identifier never matches another kind's row.
+      - name: already-assigned
+        when_related:
+          entity: weft.metering.PricingAssignment
+          where:
+            all:
+              - account_id == input.account_id
+              - state == Active
+              - target_kind == account
+              - input.target_kind == account
+          exists: true
+        error: weft.metering.AlreadyAssigned
+      - name: formation-already-assigned
+        when_related:
+          entity: weft.metering.PricingAssignment
+          where:
+            all:
+              - formation_id == input.formation_id
+              - state == Active
+              - target_kind == formation
+              - input.target_kind == formation
+          exists: true
+        error: weft.metering.AlreadyAssigned
+      - name: product-already-assigned
+        when_related:
+          entity: weft.metering.PricingAssignment
+          where:
+            all:
+              - product_id == input.product_id
+              - state == Active
+              - target_kind == product
+              - input.target_kind == product
+          exists: true
+        error: weft.metering.AlreadyAssigned
+      - name: offering-plan-already-assigned
+        when_related:
+          entity: weft.metering.PricingAssignment
+          where:
+            all:
+              - offering_plan_id == input.offering_plan_id
+              - state == Active
+              - target_kind == offering-plan
+              - input.target_kind == offering-plan
+          exists: true
+        error: weft.metering.AlreadyAssigned
+      - name: assigned
+        creates: weft.metering.PricingAssignment
+        instance: pricing_assignment_id
+        sets:
+          target_kind: input.target_kind
+          account_id: input.account_id
+          formation_id: input.formation_id
+          product_id: input.product_id
+          offering_plan_id: input.offering_plan_id
+          pricing_model_id: input.pricing_model_id
+          assigned_at: {generated: true}
+        emits: [weft.metering.PricingAssigned]
+        payload:
+          weft.metering.PricingAssigned:
+            pricing_assignment_id: {generated: true}
+            target_kind: input.target_kind
+            account_id: input.account_id
+            formation_id: input.formation_id
+            product_id: input.product_id
+            offering_plan_id: input.offering_plan_id
+            pricing_model_id: input.pricing_model_id
+
+  # Line 503 `PricingAssignment`. The target then inherits from above again (or pays per use).
+  - name: weft.metering.EndPricingAssignment
+    naming:
+      display: End a pricing assignment
+    input:
+      - {name: pricing_assignment_id, type: weft.shared.PricingAssignmentId}
+    outcomes:
+      - name: no-such-assignment
+        unknown_instance: true
+        error: weft.metering.NotFound
+      - name: ended
+        moves: weft.metering.PricingAssignment.end
+        instance: pricing_assignment_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.metering.PricingAssignmentEnded]
+        payload:
+          weft.metering.PricingAssignmentEnded:
+            pricing_assignment_id: input.pricing_assignment_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.metering.StateConflict
+
+  # Line 505 `Statement`. Issued by weft-control (ControlPlane) after the period ends.
+  # OPEN: is the period checked to be one whole calendar month? Taken: no; period_start and
+  # period_end are weft-control's, only their order and that the period has ended are checked.
+  - name: weft.metering.IssueStatement
+    naming:
+      display: Issue a statement
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: period, type: weft.metering.BillingPeriod}
+      - {name: period_start, type: Timestamp}
+      - {name: period_end, type: Timestamp}
+      - {name: currency, type: weft.metering.Currency}
+      - {name: lines, type: List<weft.metering.StatementLine>}
+      - {name: total, type: Decimal}
+    outcomes:
+      - name: empty-period
+        when: period_end <= period_start
+        error: weft.metering.EmptyPeriod
+      # The second clause holds only for a period that started within the last second, which a
+      # billing period that has ended never did; it makes synthesis send both instants relative
+      # to the current time (see RecordUsage `future-period`).
+      - name: period-not-ended
+        when:
+          any: [period_end > now, period_start > now - 1s]
+        error: weft.metering.PeriodNotEnded
+      - name: negative-total
+        when: total < 0
+        error: weft.metering.NegativeCharge
+      - name: statement-exists
+        when_related:
+          entity: weft.metering.Statement
+          where:
+            all:
+              - account_id == input.account_id
+              - period_start == input.period_start
+          exists: true
+        error: weft.metering.StatementExists
+      - name: issued
+        creates: weft.metering.Statement
+        instance: statement_id
+        sets:
+          tenant_id: input.tenant_id
+          account_id: input.account_id
+          period: input.period
+          period_start: input.period_start
+          period_end: input.period_end
+          currency: input.currency
+          lines: input.lines
+          total: input.total
+          issued_at: {generated: true}
+        emits: [weft.metering.StatementIssued]
+        payload:
+          weft.metering.StatementIssued:
+            statement_id: {generated: true}
+            tenant_id: input.tenant_id
+            account_id: input.account_id
+            period_start: input.period_start
+            period_end: input.period_end
+            currency: input.currency
+            total: input.total
+
+views:
+  # Line 476 `UsageRecord`; line 107 (Viewer reads usage). The records of one account itself.
+  - name: weft.metering.UsageRecords
+    source: weft.metering.UsageRecord
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: usage_record_id, type: weft.shared.UsageRecordId}
+      - {name: report_id, type: Uuid}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: resource_class, type: Optional<weft.shared.ResourceClassName>}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: volume_id, type: Optional<weft.shared.VolumeId>}
+      - {name: endpoint_id, type: Optional<weft.shared.EndpointId>}
+      - {name: service_instance_id, type: Optional<weft.shared.ServiceInstanceId>}
+      - {name: offering_id, type: Optional<weft.shared.OfferingId>}
+      - {name: product_id, type: Optional<weft.shared.ProductId>}
+      - {name: amount, type: Decimal}
+      - {name: period_start, type: Timestamp}
+      - {name: period_end, type: Timestamp}
+      - {name: recorded_at, type: Timestamp}
+      - {name: price_id, type: weft.shared.PriceId}
+      - {name: unit_price, type: Decimal}
+      - {name: state, type: weft.metering.UsageRecord.State}
+
+  # Line 477 "Usage rolls up the account tree": the usage of an account and every account below
+  # it, per meter and qualifier, over the records whose period lies in [from, to). A record counts
+  # for each account on its path. Quotas are `accounts`' (line 137) and are checked there; this
+  # view is what such a check reads.
+  # OPEN: is the quota check of line 477 against usage over a period, or against what is held now
+  # (claims)? Taken: quota is `accounts`' and `resources`' concern; metering only offers the sums.
+  - name: weft.metering.UsageRollup
+    source: weft.metering.UsageRecord
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - exists: {in: account_path, as: a, that: a == param.account_id}
+        - period_start >= param.from
+        - period_end <= param.to
+    group_by: [meter, qualifier]
+    fields:
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - name: amount
+        type: Decimal
+        aggregate: {sum: amount}
+      - name: records
+        type: Integer
+        aggregate: {count: {}}
+
+  # Line 477, the top of the tree: each tenant's usage per meter (line 102: the ClusterOperator
+  # runs the cloud and reads no workload's data, but sees what each tenant used).
+  - name: weft.metering.UsageByTenant
+    source: weft.metering.UsageRecord
+    consistency: read_your_writes
+    params:
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - period_start >= param.from
+        - period_end <= param.to
+    group_by: [tenant_id, meter, qualifier]
+    fields:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - name: amount
+        type: Decimal
+        aggregate: {sum: amount}
+
+  # "Meters" lines 491-492: usage of one managed service instance per meter (requests,
+  # offering units, and the usage of the components it runs as).
+  - name: weft.metering.UsageByServiceInstance
+    source: weft.metering.UsageRecord
+    consistency: read_your_writes
+    params:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - service_instance_id == param.service_instance_id
+        - period_start >= param.from
+        - period_end <= param.to
+    group_by: [meter, qualifier]
+    fields:
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - name: amount
+        type: Decimal
+        aggregate: {sum: amount}
+
+  # Caller's "Cost view per account": amount times the pay-per-use price each record was written
+  # with, for an account and every account below it, per meter. This is the cost at list price;
+  # the charges after the pricing models (reserved, subscription, free tier, spot) are the
+  # Statement's.
+  # OPEN: a span that crosses a price change sums two price lists; if they differ in currency the
+  # sum means nothing. Taken: every price list of a cluster has the same currency (not enforced
+  # here).
+  - name: weft.metering.CostRollup
+    source: weft.metering.UsageRecord
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - exists: {in: account_path, as: a, that: a == param.account_id}
+        - period_start >= param.from
+        - period_end <= param.to
+    group_by: [meter, qualifier]
+    fields:
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - name: amount
+        type: Decimal
+        aggregate: {sum: amount}
+      - name: cost
+        type: Decimal
+        aggregate: {sum: {expr: "amount * unit_price"}}
+
+  # Caller's "Cost view per ... formation", at list price as CostRollup.
+  - name: weft.metering.CostByFormation
+    source: weft.metering.UsageRecord
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: from, type: Timestamp}
+      - {name: to, type: Timestamp}
+    filter:
+      all:
+        - formation_id == param.formation_id
+        - period_start >= param.from
+        - period_end <= param.to
+    group_by: [meter, qualifier]
+    fields:
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - name: amount
+        type: Decimal
+        aggregate: {sum: amount}
+      - name: cost
+        type: Decimal
+        aggregate: {sum: {expr: "amount * unit_price"}}
+
+  # Line 478 `PriceList`, every version and its state.
+  - name: weft.metering.PriceLists
+    source: weft.metering.PriceList
+    consistency: read_your_writes
+    fields:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: version, type: Integer}
+      - {name: currency, type: weft.metering.Currency}
+      - {name: created_at, type: Timestamp}
+      - {name: published_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.metering.PriceList.State}
+
+  # Line 478 and line 496, the rows of one version.
+  - name: weft.metering.Prices
+    source: weft.metering.Price
+    consistency: read_your_writes
+    params:
+      - {name: price_list_id, type: weft.shared.PriceListId}
+    filter: price_list_id == param.price_list_id
+    fields:
+      - {name: price_id, type: weft.shared.PriceId}
+      - {name: price_list_id, type: weft.shared.PriceListId}
+      - {name: meter, type: weft.metering.Meter}
+      - {name: qualifier, type: weft.metering.MeterQualifier}
+      - {name: unit_price, type: Decimal}
+      - {name: state, type: weft.metering.Price.State}
+
+  # Line 405 `deadline`: the deadlines set on one account itself (its formations and components
+  # included); the limits on the accounts above it apply as well.
+  - name: weft.metering.Deadlines
+    source: weft.metering.Deadline
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_seconds, type: Integer}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.metering.Deadline.State}
+
+  # Line 405 `budget`, with what is spent and what remains.
+  - name: weft.metering.Budgets
+    source: weft.metering.Budget
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: budget_id, type: weft.shared.BudgetId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: measure, type: weft.metering.BudgetMeasure}
+      - {name: meter, type: Optional<weft.metering.Meter>}
+      - {name: amount, type: Decimal}
+      - {name: spent, type: Decimal}
+      - {name: remaining, type: Decimal}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.metering.Budget.State}
+
+  # Line 405 `concurrency`, with how many units are in use.
+  - name: weft.metering.Concurrencies
+    source: weft.metering.Concurrency
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_concurrent, type: Integer}
+      - {name: in_use, type: Integer}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.metering.Concurrency.State}
+
+  # Line 405 `rate`. weft-edge and the link filter read it to enforce the rate.
+  - name: weft.metering.Rates
+    source: weft.metering.Rate
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.metering.Rate.State}
+
+  # "Pricing models" (lines 494-502), every model with its terms.
+  - name: weft.metering.PricingModels
+    source: weft.metering.PricingModel
+    consistency: read_your_writes
+    fields:
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+      - {name: name, type: String}
+      - {name: period, type: weft.metering.BillingPeriod}
+      - {name: terms, type: weft.metering.PricingTerms}
+      - {name: defined_at, type: Timestamp}
+      - {name: state, type: weft.metering.PricingModel.State}
+
+  # Line 503 `PricingAssignment`, every assignment. The Scheduler reads it for `spot` (line 501:
+  # "the scheduler may evict it first"); weft-control reads it for statements.
+  - name: weft.metering.PricingAssignments
+    source: weft.metering.PricingAssignment
+    consistency: read_your_writes
+    fields:
+      - {name: pricing_assignment_id, type: weft.shared.PricingAssignmentId}
+      - {name: target_kind, type: weft.metering.AssignmentTarget}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: product_id, type: Optional<weft.shared.ProductId>}
+      - {name: offering_plan_id, type: Optional<weft.shared.OfferingPlanId>}
+      - {name: pricing_model_id, type: weft.shared.PricingModelId}
+      - {name: assigned_at, type: Timestamp}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.metering.PricingAssignment.State}
+
+  # Line 505 `Statement`: the statements of one account.
+  - name: weft.metering.Statements
+    source: weft.metering.Statement
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: statement_id, type: weft.shared.StatementId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: period, type: weft.metering.BillingPeriod}
+      - {name: period_start, type: Timestamp}
+      - {name: period_end, type: Timestamp}
+      - {name: currency, type: weft.metering.Currency}
+      - {name: lines, type: List<weft.metering.StatementLine>}
+      - {name: total, type: Decimal}
+      - {name: issued_at, type: Timestamp}
+      - {name: state, type: weft.metering.Statement.State}

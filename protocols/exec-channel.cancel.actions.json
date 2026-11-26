@@ -1,0 +1,14 @@
+[
+  {"kind":"input","participant":"cli","name":"exec","payload":{}},
+  {"kind":"deliver","transmission":1},
+  {"kind":"input","participant":"api","name":"allow","payload":{}},
+  {"kind":"deliver","transmission":2},
+  {"kind":"input","participant":"node","name":"started","payload":{}},
+  {"kind":"deliver","transmission":3},
+  {"kind":"deliver","transmission":4},
+  {"kind":"input","participant":"cli","name":"cancel","payload":{}},
+  {"kind":"deliver","transmission":5},
+  {"kind":"deliver","transmission":6},
+  {"kind":"deliver","transmission":7},
+  {"kind":"deliver","transmission":8}
+]

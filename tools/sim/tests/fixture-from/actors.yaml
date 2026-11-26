@@ -1,0 +1,18 @@
+domain: demo.actors
+
+summary: The one actor of the demo.
+
+naming:
+  wire: actors
+  display: Actors
+
+actors:
+  - name: demo.actors.Keeper
+    naming:
+      wire: keeper
+      display: Keeper
+    may:
+      - demo.shelf.AddShelf
+      - demo.shelf.Polish
+      - demo.shelf.Relabel
+      - demo.shelf.Jam

@@ -1,0 +1,1818 @@
+# Components and reconciliation bindings of weft. docs/domain-sketch.md § Structure "Planes"
+# (lines 59-68), "Components" (lines 70-78), "Channels" (lines 93-101) and § 14 "Reconciliation"
+# (lines 569-618).
+#
+# ESS gives every command one handler, the component that owns its domain (ESS-COMPONENT-004), and
+# refuses a component that owns, accepts and publishes nothing (ESS-COMPONENT-007). So a domain
+# sits with exactly one component, and that component accepts every command and publishes every
+# event of it.
+#
+# Rule used to place a domain (the sketch names planes, not domains):
+#   - weft-control: every domain with a command the node agent sends over its session (line 96,
+#     "weft-node -> weft-control") or one of weft-control's own actors issues (Scheduler,
+#     ReleaseController, ControlPlane; lines 63 and 73: "state store, scheduler, translators,
+#     identity issuer, secret delivery"), as granted in ess/9-actors/actors.yaml.
+#   - weft-api: every other domain. Line 61 names "Tenants, accounts, formations"; access is
+#     weft-api's own (ManagementApi, line 122). The Translator writes formation rows as a client of
+#     weft-api, the way a Deployer does.
+#
+# OPEN: the sketch's management plane also names "secrets, deploys" (line 62), while line 73 gives
+# "secret delivery" and "translators" to weft-control. One domain has one owner, so `secrets` and
+# `deployments` sit whole with weft-control here. Split them (custody and sources in weft-api;
+# delivery, translation and releases in weft-control), or keep them whole in weft-control?
+#
+# OPEN: the user API (surfaces/http/weft-api.yaml, ess-http/1, line 83) routes the commands and
+# views of one `reached_by: network` component. With this placement the user commands of the
+# weft-control domains (DefineWorkload, CreateSecret, SubmitDeploymentSource, CreateVolume, ...)
+# are served by weft-control, not weft-api: ESS has no gateway component that accepts a command
+# on behalf of the owner of its domain. Either weft-control gets an HTTP binding of its own behind
+# weft-api, or those domains move to weft-api and the node agent's reports then land on weft-api
+# (against line 96). Which?
+#
+# UNMAPPED: weft-node (line 74, the node agent, worker plane) and weft-edge (line 75, the gateway
+# in front of public endpoints, data plane) are not declared. No domain of the sketch is theirs:
+# `nodes` is "the control plane's record of each node session" (line 47), a worker "holds no state
+# the control plane does not know" (line 66), and endpoints, routes and the border are desired
+# state of `formations`. ESS refuses a component that owns nothing ("`edge` owns nothing, accepts
+# nothing and publishes nothing", ESS-COMPONENT-007, probed on ess 0.99.2). In the model the node
+# agent is the actor weft.actors.NodeAgent, a client of weft-control as the CLI is of weft-api.
+# Settled by a node-local domain (the process restart of R9, the local endpoint for identity and
+# secrets of line 100) and an edge domain (the ready backends of each route, § 15 line 626).
+#
+# weft.shared (types only) and weft.actors (actors only) have no command and no event; no
+# component owns them.
+
+# Hardening pass 4 (2026-11-26): binding cluster-create-node-pool carries the cluster pool's id into
+# the infrastructure pool it creates (`requested_for`), the one crossing below.
+conversions:
+  - from: weft.shared.ClusterNodePoolId
+    to: Optional<Uuid>
+    because: >-
+      weft.infrastructure (layer 1) names no identifier of weft.cluster (layer 3), so it keeps the
+      cluster pool a pool was made for as an opaque Uuid; only weft.cluster reads it back, to refuse
+      an infrastructure pool made for another cluster pool.
+
+components:
+  # Line 72: "the user API (management plane)". Line 95: the CLI and CI reach it over HTTP.
+  - component: weft-api
+    summary: >-
+      The user API: logins, API tokens and the authorization of every management call; tenants,
+      accounts and principals; formations; the artifacts an account registers.
+    owns:
+      domains:
+        - weft.access
+        - weft.accounts
+        - weft.artifacts
+        - weft.formations
+    accepts:
+      commands:
+        - weft.access.CreateFederationRule
+        - weft.access.ExchangeFederatedToken
+        - weft.access.RegisterTrustedIssuer
+        - weft.access.WithdrawFederationRule
+        - weft.access.WithdrawTrustedIssuer
+        - weft.artifacts.RecordAttestation
+        # commands of weft.access
+        - weft.access.ApproveLogin
+        - weft.access.CollectLoginToken
+        - weft.access.ConfigureAccess
+        - weft.access.CreateApiToken
+        - weft.access.DenyLogin
+        - weft.access.ExpireApiToken
+        - weft.access.ExpireLogin
+        - weft.access.RecordAuthorization
+        - weft.access.RevokeAccountApiTokens
+        - weft.access.RevokeApiToken
+        - weft.access.RevokeLogin
+        - weft.access.StartLogin
+        # commands of weft.accounts
+        - weft.accounts.AddServiceAccount
+        - weft.accounts.AddUser
+        - weft.accounts.AddWorkloadPrincipal
+        - weft.accounts.AllocateQuota
+        - weft.accounts.BindRole
+        - weft.accounts.BindTenantOwner
+        - weft.accounts.CloseAccount
+        - weft.accounts.CloseTenant
+        - weft.accounts.CreateAccount
+        - weft.accounts.CreateSubAccount
+        - weft.accounts.CreateTenant
+        - weft.accounts.DisablePrincipal
+        - weft.accounts.DrawQuota
+        - weft.accounts.GrantTopQuota
+        - weft.accounts.LowerTopQuota
+        - weft.accounts.RaiseTopQuota
+        - weft.accounts.ReleaseQuota
+        - weft.accounts.RevokeRole
+        - weft.accounts.RevokeTenantOwner
+        # commands of weft.artifacts
+        - weft.artifacts.RegisterArtifact
+        - weft.artifacts.RevokeArtifact
+        # commands of weft.formations
+        - weft.formations.AddComponent
+        - weft.formations.AddEndpoint
+        - weft.formations.AddLink
+        - weft.formations.AddRoute
+        - weft.formations.AddToBorder
+        - weft.formations.ChangeConfig
+        - weft.formations.ChangeConfigOverride
+        - weft.formations.ChangeScale
+        - weft.formations.CommitRevision
+        - weft.formations.CreateConfig
+        - weft.formations.CreateEnvironment
+        - weft.formations.CreatePreviewEnvironment
+        - weft.formations.ExpirePreviewEnvironment
+        - weft.formations.CreateExport
+        - weft.formations.CreateFormation
+        - weft.formations.MountConfig
+        - weft.formations.RemoveComponent
+        - weft.formations.RemoveConfig
+        - weft.formations.RemoveConfigOverride
+        - weft.formations.RemoveEndpoint
+        - weft.formations.RemoveFromBorder
+        - weft.formations.RemoveLink
+        - weft.formations.RemoveRoute
+        - weft.formations.RemoveScale
+        - weft.formations.RetireEnvironment
+        - weft.formations.RetireFormation
+        - weft.formations.RevokeAccountExports
+        - weft.formations.RevokeExport
+        - weft.formations.SetConfigOverride
+        - weft.formations.SetEnvironmentQuota
+        - weft.formations.SetFormationQuota
+        - weft.formations.SetScale
+        - weft.formations.UnmountConfig
+    publishes:
+      events:
+        - weft.access.FederatedTokenExchanged
+        - weft.access.FederationRuleCreated
+        - weft.access.FederationRuleWithdrawn
+        - weft.access.TrustedIssuerRegistered
+        - weft.access.TrustedIssuerWithdrawn
+        - weft.artifacts.AttestationRecorded
+        # events of weft.access
+        - weft.access.AccessConfigured
+        - weft.access.AccountApiTokensRevoked
+        - weft.access.ApiTokenCreated
+        - weft.access.ApiTokenExpired
+        - weft.access.ApiTokenRevoked
+        - weft.access.CallAuthorized
+        - weft.access.LoginApproved
+        - weft.access.LoginDenied
+        - weft.access.LoginExpired
+        - weft.access.LoginRevoked
+        - weft.access.LoginStarted
+        - weft.access.LoginTokenIssued
+        # events of weft.accounts
+        - weft.accounts.AccountClosed
+        - weft.accounts.AccountCreated
+        - weft.accounts.PrincipalAdded
+        - weft.accounts.PrincipalDisabled
+        - weft.accounts.QuotaAllocated
+        - weft.accounts.QuotaDrawn
+        - weft.accounts.QuotaGranted
+        - weft.accounts.QuotaLowered
+        - weft.accounts.QuotaRaised
+        - weft.accounts.QuotaReleased
+        - weft.accounts.RoleBound
+        - weft.accounts.RoleRevoked
+        - weft.accounts.SubAccountCreated
+        - weft.accounts.TenantClosed
+        - weft.accounts.TenantCreated
+        - weft.accounts.TenantOwnerBound
+        # events of weft.artifacts
+        - weft.artifacts.ArtifactRegistered
+        - weft.artifacts.ArtifactRevoked
+        # events of weft.formations
+        - weft.formations.AccountExportsRevoked
+        - weft.formations.ComponentAdded
+        - weft.formations.ComponentBordered
+        - weft.formations.ComponentRemoved
+        - weft.formations.ComponentUnbordered
+        - weft.formations.ConfigChanged
+        - weft.formations.ConfigCreated
+        - weft.formations.ConfigMounted
+        - weft.formations.ConfigOverrideChanged
+        - weft.formations.ConfigOverrideRemoved
+        - weft.formations.ConfigOverrideSet
+        - weft.formations.ConfigRemoved
+        - weft.formations.ConfigUnmounted
+        - weft.formations.EndpointAdded
+        - weft.formations.EndpointRemoved
+        - weft.formations.EnvironmentCreated
+        - weft.formations.EnvironmentQuotaSet
+        - weft.formations.EnvironmentRetired
+        - weft.formations.ExportCreated
+        - weft.formations.ExportRevoked
+        - weft.formations.FormationCreated
+        - weft.formations.FormationQuotaSet
+        - weft.formations.FormationRetired
+        - weft.formations.LinkAdded
+        - weft.formations.LinkRemoved
+        - weft.formations.RevisionCommitted
+        - weft.formations.RouteAdded
+        - weft.formations.RouteRemoved
+        - weft.formations.ScaleChanged
+        - weft.formations.ScaleRemoved
+        - weft.formations.ScaleSet
+    reached_by: network
+
+  # Line 73: "scheduler, translators, identity issuer, secret delivery"; line 63: "state store ...
+  # Decides; runs no workload". Line 96: every node's session ends here.
+  - component: weft-control
+    summary: >-
+      The control plane: the cluster and its inventory, tenant storage, workloads and their
+      instances, claims, scheduling, the record of each node session, workload identity, secret
+      custody and delivery, telemetry, deployments and releases, the catalog and metering.
+    owns:
+      domains:
+        - weft.cluster
+        - weft.pipelines
+        - weft.infrastructure
+        - weft.inventory
+        - weft.resources
+        - weft.workloads
+        - weft.claims
+        - weft.scheduling
+        - weft.nodes
+        - weft.identity
+        - weft.secrets
+        # § 16 (lines 613-642): stored logs, series, alert rules and alerts are decided centrally.
+        # OPEN: the node-local endpoint that takes OTLP from instances (lines 628 and 634) runs on
+        # weft-node; with weft-node undeclared (above), its intake is a NodeAgent command here.
+        - weft.observability
+        - weft.deployments
+        - weft.catalog
+        - weft.metering
+    accepts:
+      commands:
+        - weft.cluster.AddClusterNodePool
+        - weft.cluster.AddTopologyGroup
+        - weft.cluster.CreateCluster
+        - weft.cluster.CreateClusterTopology
+        - weft.cluster.CreateDefaultCluster
+        - weft.cluster.DeclareTopologyLink
+        - weft.cluster.DeleteCluster
+        - weft.cluster.RecordClusterNodePoolReady
+        - weft.cluster.RecordRemovedClusterNodePool
+        - weft.cluster.RemoveClusterNodePool
+        - weft.cluster.RemoveClusterTopology
+        - weft.cluster.RemoveTopologyGroup
+        - weft.cluster.RemoveTopologyLink
+        - weft.cluster.SetClusterPolicy
+        - weft.pipelines.AddDeployGate
+        - weft.pipelines.ApproveGateCheck
+        - weft.pipelines.AssignRunnerJob
+        - weft.pipelines.AttachCacheForRead
+        - weft.pipelines.AttachCacheForWrite
+        - weft.pipelines.CancelRunnerJob
+        - weft.pipelines.ConnectForge
+        - weft.pipelines.CreateBuildCache
+        - weft.pipelines.CreateRunnerPool
+        - weft.pipelines.DisconnectForge
+        - weft.pipelines.EvictBuildCache
+        - weft.pipelines.FailGateCheck
+        - weft.pipelines.FinishRunnerJob
+        - weft.pipelines.OpenGateCheck
+        - weft.pipelines.PassGateCheck
+        - weft.pipelines.QueueRunnerJob
+        - weft.pipelines.RejectGateCheck
+        - weft.pipelines.ReleaseCacheWrite
+        - weft.pipelines.RemoveDeployGate
+        - weft.pipelines.RetireRunnerPool
+        - weft.pipelines.StartRunnerJob
+        - weft.pipelines.TimeOutRunnerJob
+        # commands of weft.catalog
+        - weft.catalog.AddOfferingPlan
+        - weft.catalog.BackupServiceInstance
+        - weft.catalog.BindService
+        - weft.catalog.ChangeServicePlan
+        - weft.catalog.CheckServiceAccess
+        - weft.catalog.DeprovisionServiceInstance
+        - weft.catalog.InstallProduct
+        - weft.catalog.MoveServiceInstanceEngine
+        - weft.catalog.ProvisionServiceInstance
+        - weft.catalog.PublishOffering
+        - weft.catalog.PublishProduct
+        - weft.catalog.PublishProductVersion
+        - weft.catalog.RegisterEngine
+        - weft.catalog.RegisterPublisher
+        - weft.catalog.ReportBackupCompleted
+        - weft.catalog.ReportBackupFailed
+        - weft.catalog.ReportInstallationFailed
+        - weft.catalog.ReportInstallationInstalled
+        - weft.catalog.ReportInstallationUninstalled
+        - weft.catalog.ReportRestoreCompleted
+        - weft.catalog.ReportRestoreFailed
+        - weft.catalog.ReportServiceInstanceDegraded
+        - weft.catalog.ReportServiceInstanceGone
+        - weft.catalog.ReportServiceInstanceReady
+        - weft.catalog.RestoreServiceInstance
+        - weft.catalog.RetireEngine
+        - weft.catalog.RetireOffering
+        - weft.catalog.RetireOfferingPlan
+        - weft.catalog.RetirePublisher
+        - weft.catalog.SetInstallationSleepPolicy
+        - weft.catalog.SetServiceSleepPolicy
+        - weft.catalog.SwapOfferingEngine
+        - weft.catalog.UnbindService
+        - weft.catalog.UninstallProduct
+        - weft.catalog.UpgradeInstallation
+        - weft.catalog.WithdrawProduct
+        - weft.catalog.WithdrawProductVersion
+        # commands of weft.claims
+        - weft.claims.BindClaim
+        - weft.claims.CommitBinding
+        - weft.claims.CommitVolumeWriter
+        - weft.claims.DeclareClaim
+        - weft.claims.ReleaseBinding
+        - weft.claims.ReleaseClaim
+        - weft.claims.ReleaseClaimBindings
+        # commands of weft.infrastructure
+        - weft.infrastructure.CordonNode
+        - weft.infrastructure.CreateCloud
+        - weft.infrastructure.CreateNodePool
+        - weft.infrastructure.DeclareZone
+        - weft.infrastructure.DefinePriorityClass
+        - weft.infrastructure.DeleteNodePool
+        - weft.infrastructure.DrainNodePool
+        - weft.infrastructure.DrainNode
+        - weft.infrastructure.IssueJoinToken
+        - weft.infrastructure.JoinNode
+        - weft.infrastructure.ProvisionNode
+        - weft.infrastructure.ProvisionPoolNode
+        - weft.infrastructure.RecordNodeObservation
+        - weft.infrastructure.RemoveNode
+        - weft.infrastructure.RequestNodePoolScaleDown
+        - weft.infrastructure.RequestNodePoolScaleUp
+        - weft.infrastructure.RetirePriorityClass
+        - weft.infrastructure.RetireZone
+        - weft.infrastructure.ScaleControlPlane
+        - weft.infrastructure.SetCloudPolicy
+        - weft.infrastructure.UncordonNode
+        - weft.infrastructure.UpdateNodePool
+        # commands of weft.deployments
+        - weft.deployments.AddReleaseStep
+        - weft.deployments.ApplyPlan
+        - weft.deployments.CompleteReleaseStep
+        - weft.deployments.CompleteRolloutStep
+        - weft.deployments.CompleteTranslation
+        - weft.deployments.CreatePlan
+        - weft.deployments.DiscardPlan
+        - weft.deployments.EscalateDrift
+        - weft.deployments.FailReleaseStep
+        - weft.deployments.FailTranslation
+        - weft.deployments.MarkReleaseLive
+        - weft.deployments.MarkRollbackLive
+        - weft.deployments.PlanRollback
+        - weft.deployments.ReapplyDrift
+        - weft.deployments.RecordCoverageEntry
+        - weft.deployments.RecordDrift
+        - weft.deployments.RecordPlanResult
+        - weft.deployments.RefuseTranslation
+        - weft.deployments.RegisterTranslator
+        - weft.deployments.ResolveDrift
+        - weft.deployments.RetireTranslator
+        - weft.deployments.StartRelease
+        - weft.deployments.StartReleaseStep
+        - weft.deployments.SubmitDeploymentSource
+        - weft.deployments.TranslateSource
+        - weft.deployments.WithdrawDeploymentSource
+        # commands of weft.identity
+        - weft.identity.CreateExchangePolicy
+        - weft.identity.CreateTrustDomain
+        - weft.identity.ExchangeToken
+        - weft.identity.ExpireIdentityDocument
+        - weft.identity.FinishKeyRotation
+        - weft.identity.IssueIdentityDocument
+        - weft.identity.RenewIdentityDocument
+        - weft.identity.RetireTrustDomain
+        - weft.identity.RevokeIdentityDocument
+        - weft.identity.RotateSigningKey
+        - weft.identity.WithdrawExchangePolicy
+        # commands of weft.inventory
+        - weft.inventory.DefineResourceClass
+        - weft.inventory.ReportDevice
+        - weft.inventory.ReportDeviceFault
+        - weft.inventory.ReportDeviceRemoved
+        - weft.inventory.ReportDeviceSliced
+        - weft.inventory.ReportDeviceWiped
+        - weft.inventory.ResetDevice
+        - weft.inventory.RetireResourceClass
+        # commands of weft.metering
+        - weft.metering.AcquireConcurrency
+        - weft.metering.AdmitWork
+        - weft.metering.AssignPricing
+        - weft.metering.ChangeBudget
+        - weft.metering.ChangeConcurrency
+        - weft.metering.ChangeDeadline
+        - weft.metering.ChangeRate
+        - weft.metering.ChargeBudget
+        - weft.metering.CreatePriceList
+        - weft.metering.DefinePricingModel
+        - weft.metering.EndPricingAssignment
+        - weft.metering.IssueStatement
+        - weft.metering.PublishPriceList
+        - weft.metering.RecordUsage
+        - weft.metering.ReleaseConcurrency
+        - weft.metering.RemoveBudget
+        - weft.metering.RemoveConcurrency
+        - weft.metering.RemoveDeadline
+        - weft.metering.RemovePrice
+        - weft.metering.RemoveRate
+        - weft.metering.RetirePricingModel
+        - weft.metering.SetBudget
+        - weft.metering.SetConcurrency
+        - weft.metering.SetDeadline
+        - weft.metering.SetPrice
+        - weft.metering.SetRate
+        # commands of weft.nodes
+        - weft.nodes.Assign
+        - weft.nodes.Attach
+        - weft.nodes.CancelDrain
+        - weft.nodes.CloseExecSession
+        - weft.nodes.CloseNodeSession
+        - weft.nodes.CompleteDrain
+        - weft.nodes.Detach
+        - weft.nodes.Drain
+        - weft.nodes.EndAssignment
+        - weft.nodes.ExecEnded
+        - weft.nodes.Heartbeat
+        - weft.nodes.InstanceObserved
+        - weft.nodes.LoseNodeSession
+        - weft.nodes.NodeObserved
+        - weft.nodes.OpenExecSession
+        - weft.nodes.OpenNodeSession
+        - weft.nodes.Pause
+        - weft.nodes.ReleaseAssignment
+        - weft.nodes.RenewLease
+        - weft.nodes.Resume
+        - weft.nodes.Snapshot
+        - weft.nodes.Stop
+        - weft.nodes.SupersedeNodeSession
+        - weft.nodes.UsageReported
+        # commands of weft.observability
+        - weft.observability.AddNotificationTarget
+        - weft.observability.CloseInstanceLogStreams
+        - weft.observability.CloseLogStream
+        - weft.observability.ConfigureBucketSink
+        - weft.observability.ConfigureTelemetrySink
+        - weft.observability.CreateAlertRule
+        - weft.observability.DeleteAccountAlertRules
+        - weft.observability.DeleteAlertRule
+        - weft.observability.ExpireLogStream
+        - weft.observability.FireAlert
+        - weft.observability.OpenLogStream
+        - weft.observability.RecordAlertNotification
+        - weft.observability.RecordSinkDelivered
+        - weft.observability.RecordSinkFailing
+        - weft.observability.RegisterInstanceSeries
+        - weft.observability.RegisterNodeSeries
+        - weft.observability.RemoveAccountNotificationTargets
+        - weft.observability.RemoveAccountTelemetryPolicies
+        - weft.observability.RemoveAccountTelemetrySinks
+        - weft.observability.RemoveNotificationTarget
+        - weft.observability.RemoveTelemetryPolicy
+        - weft.observability.RemoveTelemetrySink
+        - weft.observability.ResolveAlert
+        - weft.observability.ResolveDeletedRuleAlerts
+        - weft.observability.RetireInstanceMetricSeries
+        - weft.observability.RetireMetricSeries
+        - weft.observability.SetTelemetryPolicy
+        # commands of weft.resources
+        - weft.resources.CreateBucket
+        - weft.resources.CreateFilesystem
+        - weft.resources.CreateVolume
+        - weft.resources.RestoreVolume
+        - weft.resources.DeleteBucket
+        - weft.resources.DeleteFilesystem
+        - weft.resources.DeleteVolume
+        - weft.resources.DeleteVolumeSnapshot
+        - weft.resources.ReportBucketProvisioned
+        - weft.resources.ReportFilesystemProvisioned
+        - weft.resources.ReportVolumeProvisioned
+        - weft.resources.ReportVolumeSnapshotTaken
+        - weft.resources.SnapshotVolume
+        # commands of weft.scheduling
+        - weft.scheduling.AbandonGang
+        - weft.scheduling.BindGang
+        - weft.scheduling.BindPlacement
+        - weft.scheduling.DeclareUnschedulable
+        - weft.scheduling.PlaceInstance
+        - weft.scheduling.PreemptPlacement
+        - weft.scheduling.RecordPlacementAssigned
+        - weft.scheduling.RecordScaleFulfilled
+        - weft.scheduling.RecordScaleRefused
+        - weft.scheduling.RegisterGang
+        - weft.scheduling.ReleasePlacement
+        - weft.scheduling.RequestScaleDown
+        - weft.scheduling.RequestScaleUp
+        - weft.scheduling.RetrySchedulingRequest
+        - weft.scheduling.SubmitSchedulingRequest
+        - weft.scheduling.WithdrawSchedulingRequest
+        # commands of weft.secrets
+        - weft.secrets.AddSecretVersion
+        - weft.secrets.CreateSecret
+        - weft.secrets.DeliverSecret
+        - weft.secrets.DisableSecretVersion
+        - weft.secrets.GrantSecret
+        - weft.secrets.RegisterSecretBackend
+        - weft.secrets.RevokeSecretGrant
+        # commands of weft.workloads
+        - weft.workloads.AcquireBoxLease
+        - weft.workloads.AttachSession
+        - weft.workloads.AutoscaleService
+        - weft.workloads.BeginSleep
+        - weft.workloads.CancelJob
+        - weft.workloads.CloseSession
+        - weft.workloads.CompleteInvocation
+        - weft.workloads.CompleteJob
+        - weft.workloads.CordonBox
+        - weft.workloads.CreateBox
+        - weft.workloads.CreateInstance
+        - weft.workloads.CreateSchedule
+        - weft.workloads.CreateTrigger
+        - weft.workloads.CreateWarmPool
+        - weft.workloads.DefineService
+        - weft.workloads.DefineWorkload
+        - weft.workloads.DeleteSchedule
+        - weft.workloads.DeleteSnapshot
+        - weft.workloads.DeleteTrigger
+        - weft.workloads.DeleteWarmPool
+        - weft.workloads.DestroyBox
+        - weft.workloads.DetachSession
+        - weft.workloads.DisableTrigger
+        - weft.workloads.EnableTrigger
+        - weft.workloads.EndReplicaBackoff
+        - weft.workloads.EvictInstance
+        - weft.workloads.ExpireInvocation
+        - weft.workloads.FailInvocation
+        - weft.workloads.FailJob
+        - weft.workloads.Invoke
+        - weft.workloads.MissWake
+        - weft.workloads.OpenExec
+        - weft.workloads.OpenSession
+        - weft.workloads.PauseInstance
+        - weft.workloads.PauseSchedule
+        - weft.workloads.RecordArtifactRejected
+        - weft.workloads.RecordArtifactVerified
+        - weft.workloads.RecordBoxStarted
+        - weft.workloads.RecordBoxStopped
+        - weft.workloads.RecordCheckResult
+        - weft.workloads.RecordInstanceExited
+        - weft.workloads.RecordInstanceFailed
+        - weft.workloads.RecordInstancePaused
+        - weft.workloads.RecordInstanceResumed
+        - weft.workloads.RecordInstanceRunning
+        - weft.workloads.RecordInvocationStarted
+        - weft.workloads.RecordProcessRestarted
+        - weft.workloads.RecordProcessStarted
+        - weft.workloads.RecordReplicaEnded
+        - weft.workloads.RecordScheduleFired
+        - weft.workloads.RecordServiceAsleep
+        - weft.workloads.RecordServiceAwake
+        - weft.workloads.RecordSnapshotFailed
+        - weft.workloads.RecordSnapshotTaken
+        - weft.workloads.RecordTaskSucceeded
+        - weft.workloads.RegisterRuntime
+        - weft.workloads.ReleaseBoxLease
+        - weft.workloads.RequestReplica
+        - weft.workloads.ResizeBox
+        - weft.workloads.ResizeWarmPool
+        - weft.workloads.RestoreSnapshot
+        - weft.workloads.ResumeInstance
+        - weft.workloads.ResumeSchedule
+        - weft.workloads.RetireAccountServices
+        - weft.workloads.RetireRuntime
+        - weft.workloads.RetireWorkload
+        - weft.workloads.RetryTask
+        - weft.workloads.ScaleService
+        - weft.workloads.ScheduleInstance
+        - weft.workloads.SetDisruptionBudget
+        - weft.workloads.SetScaleRule
+        - weft.workloads.SetSleepPolicy
+        - weft.workloads.SetWorkloadReplicas
+        - weft.workloads.StartBox
+        - weft.workloads.StartJob
+        - weft.workloads.StartWaking
+        - weft.workloads.StopAccountInstances
+        - weft.workloads.StopBox
+        - weft.workloads.StopInstance
+        - weft.workloads.SubmitJob
+        - weft.workloads.SuspendBox
+        - weft.workloads.TakeSnapshot
+        - weft.workloads.UncordonBox
+        - weft.workloads.WakeService
+    publishes:
+      events:
+        - weft.cluster.ClusterCreated
+        - weft.cluster.ClusterDeleted
+        - weft.cluster.ClusterNodePoolReady
+        - weft.cluster.ClusterNodePoolRemoved
+        - weft.cluster.ClusterNodePoolRequested
+        - weft.cluster.ClusterPolicySet
+        - weft.cluster.ClusterTopologyCreated
+        - weft.cluster.ClusterTopologyRemoved
+        - weft.cluster.DefaultClusterCreated
+        - weft.cluster.TopologyGroupAdded
+        - weft.cluster.TopologyGroupRemoved
+        - weft.cluster.TopologyLinkDeclared
+        - weft.cluster.TopologyLinkRemoved
+        - weft.pipelines.BuildCacheAttached
+        - weft.pipelines.BuildCacheCreated
+        - weft.pipelines.BuildCacheEvicted
+        - weft.pipelines.BuildCacheReleased
+        - weft.pipelines.DeployGateAdded
+        - weft.pipelines.DeployGateRemoved
+        - weft.pipelines.ForgeConnected
+        - weft.pipelines.ForgeDisconnected
+        - weft.pipelines.GateCheckFailed
+        - weft.pipelines.GateCheckOpened
+        - weft.pipelines.GateCheckPassed
+        - weft.pipelines.RunnerJobAssigned
+        - weft.pipelines.RunnerJobEnded
+        - weft.pipelines.RunnerJobQueued
+        - weft.pipelines.RunnerJobStarted
+        - weft.pipelines.RunnerPoolCreated
+        - weft.pipelines.RunnerPoolRetired
+        # events of weft.catalog
+        - weft.catalog.BackupCompleted
+        - weft.catalog.BackupFailed
+        - weft.catalog.BackupStarted
+        - weft.catalog.EngineRegistered
+        - weft.catalog.EngineRetired
+        - weft.catalog.InstallationFailed
+        - weft.catalog.InstallationInstalled
+        - weft.catalog.InstallationSleepPolicySet
+        - weft.catalog.InstallationStarted
+        - weft.catalog.InstallationUninstalled
+        - weft.catalog.InstallationUninstalling
+        - weft.catalog.InstallationUpgrading
+        - weft.catalog.OfferingEngineSwapped
+        - weft.catalog.OfferingPublished
+        - weft.catalog.OfferingRetired
+        - weft.catalog.PlanAdded
+        - weft.catalog.PlanRetired
+        - weft.catalog.ProductPublished
+        - weft.catalog.ProductVersionPublished
+        - weft.catalog.ProductVersionWithdrawn
+        - weft.catalog.ProductWithdrawn
+        - weft.catalog.PublisherRegistered
+        - weft.catalog.PublisherRetired
+        - weft.catalog.RestoreCompleted
+        - weft.catalog.RestoreFailed
+        - weft.catalog.RestoreStarted
+        - weft.catalog.ServiceBound
+        - weft.catalog.ServiceInstanceDegraded
+        - weft.catalog.ServiceInstanceDeprovisioning
+        - weft.catalog.ServiceInstanceEngineMoved
+        - weft.catalog.ServiceInstanceGone
+        - weft.catalog.ServiceInstanceProvisioning
+        - weft.catalog.ServiceInstanceReady
+        - weft.catalog.ServiceInstanceUpdating
+        - weft.catalog.ServiceSleepPolicySet
+        - weft.catalog.ServiceUnbound
+        # events of weft.claims
+        - weft.claims.BindingReleased
+        - weft.claims.BindingReserved
+        - weft.claims.ClaimBindingsReleased
+        - weft.claims.ClaimBound
+        - weft.claims.ClaimDeclared
+        - weft.claims.ClaimReleased
+        # events of weft.cluster
+        - weft.infrastructure.CloudCreated
+        - weft.infrastructure.CloudPolicySet
+        - weft.infrastructure.ControlPlaneScaled
+        - weft.infrastructure.JoinTokenIssued
+        - weft.infrastructure.NodeCordoned
+        - weft.infrastructure.NodeDrainStarted
+        - weft.infrastructure.NodeGone
+        - weft.infrastructure.NodeJoined
+        - weft.infrastructure.NodeObserved
+        - weft.infrastructure.NodePoolCreated
+        - weft.infrastructure.NodePoolDeleted
+        - weft.infrastructure.NodePoolDrainStarted
+        - weft.infrastructure.NodePoolScaleDownRequested
+        - weft.infrastructure.NodePoolScaleUpRequested
+        - weft.infrastructure.NodePoolUpdated
+        - weft.infrastructure.NodeProvisioned
+        - weft.infrastructure.NodeReady
+        - weft.infrastructure.NodeUncordoned
+        - weft.infrastructure.PoolNodeProvisioned
+        - weft.infrastructure.PriorityClassDefined
+        - weft.infrastructure.PriorityClassRetired
+        - weft.infrastructure.ZoneDeclared
+        - weft.infrastructure.ZoneRetired
+        # events of weft.deployments
+        - weft.deployments.CoverageEntryRecorded
+        - weft.deployments.DriftDetected
+        - weft.deployments.DriftEscalated
+        - weft.deployments.DriftReapplying
+        - weft.deployments.DriftResolved
+        - weft.deployments.PlanBlocked
+        - weft.deployments.PlanCreated
+        - weft.deployments.PlanDiscarded
+        - weft.deployments.PlanSimulated
+        - weft.deployments.ReleaseCreated
+        - weft.deployments.ReleaseLive
+        - weft.deployments.ReleaseStarted
+        - weft.deployments.ReleaseStepAdded
+        - weft.deployments.ReleaseStepFailed
+        - weft.deployments.ReleaseStepStarted
+        - weft.deployments.ReleaseStepSucceeded
+        - weft.deployments.RollbackPlanned
+        - weft.deployments.RolloutStepSucceeded
+        - weft.deployments.SourceSubmitted
+        - weft.deployments.SourceTranslated
+        - weft.deployments.SourceWithdrawn
+        - weft.deployments.TranslationFailed
+        - weft.deployments.TranslationRefused
+        - weft.deployments.TranslationRequested
+        - weft.deployments.TranslatorRegistered
+        - weft.deployments.TranslatorRetired
+        # events of weft.identity
+        - weft.identity.ExchangePolicyCreated
+        - weft.identity.ExchangePolicyWithdrawn
+        - weft.identity.IdentityDocumentExpired
+        - weft.identity.IdentityDocumentIssued
+        - weft.identity.IdentityDocumentRenewed
+        - weft.identity.IdentityDocumentRevoked
+        - weft.identity.KeyRotationFinished
+        - weft.identity.SigningKeyRotated
+        - weft.identity.TokenExchanged
+        - weft.identity.TrustDomainCreated
+        - weft.identity.TrustDomainRetired
+        # events of weft.inventory
+        - weft.inventory.DeviceFaulted
+        - weft.inventory.DeviceRemoved
+        - weft.inventory.DeviceReported
+        - weft.inventory.DeviceReset
+        - weft.inventory.DeviceSliced
+        - weft.inventory.DeviceWiped
+        - weft.inventory.ResourceClassDefined
+        - weft.inventory.ResourceClassRetired
+        # events of weft.metering
+        - weft.metering.BudgetChanged
+        - weft.metering.BudgetCharged
+        - weft.metering.BudgetRemoved
+        - weft.metering.BudgetReplenished
+        - weft.metering.BudgetSet
+        - weft.metering.BudgetSpent
+        - weft.metering.ConcurrencyAcquired
+        - weft.metering.ConcurrencyChanged
+        - weft.metering.ConcurrencyReleased
+        - weft.metering.ConcurrencyRemoved
+        - weft.metering.ConcurrencySet
+        - weft.metering.DeadlineChanged
+        - weft.metering.DeadlineRemoved
+        - weft.metering.DeadlineSet
+        - weft.metering.PriceListCreated
+        - weft.metering.PriceListPublished
+        - weft.metering.PriceRemoved
+        - weft.metering.PriceSet
+        - weft.metering.PricingAssigned
+        - weft.metering.PricingAssignmentEnded
+        - weft.metering.PricingModelDefined
+        - weft.metering.PricingModelRetired
+        - weft.metering.RateChanged
+        - weft.metering.RateRemoved
+        - weft.metering.RateSet
+        - weft.metering.StatementIssued
+        - weft.metering.UsageRecorded
+        # events of weft.nodes
+        - weft.nodes.AssignmentDesiredStateSet
+        - weft.nodes.AssignmentEnded
+        - weft.nodes.AssignmentLeaseRenewed
+        - weft.nodes.AssignmentReleased
+        - weft.nodes.BindingAttached
+        - weft.nodes.BindingDetached
+        - weft.nodes.ExecSessionEnded
+        - weft.nodes.ExecSessionOpened
+        - weft.nodes.InstanceAssigned
+        - weft.nodes.InstanceObservationRecorded
+        - weft.nodes.NodeDrainCancelled
+        - weft.nodes.NodeDrainStarted
+        - weft.nodes.NodeDrained
+        - weft.nodes.NodeHeartbeatReceived
+        - weft.nodes.NodeObservationRecorded
+        - weft.nodes.NodeSessionClosed
+        - weft.nodes.NodeSessionLost
+        - weft.nodes.NodeSessionOpened
+        - weft.nodes.NodeSessionSuperseded
+        - weft.nodes.UsageReportRecorded
+        # events of weft.observability
+        - weft.observability.AccountAlertRulesDeleted
+        - weft.observability.AccountNotificationTargetsRemoved
+        - weft.observability.AccountTelemetryPoliciesRemoved
+        - weft.observability.AccountTelemetrySinksRemoved
+        - weft.observability.AlertFired
+        - weft.observability.AlertNotificationFailed
+        - weft.observability.AlertNotified
+        - weft.observability.AlertResolved
+        - weft.observability.AlertRuleCreated
+        - weft.observability.AlertRuleDeleted
+        - weft.observability.InstanceLogStreamsClosed
+        - weft.observability.InstanceMetricSeriesRetired
+        - weft.observability.LogStreamClosed
+        - weft.observability.LogStreamExpired
+        - weft.observability.LogStreamOpened
+        - weft.observability.MetricSeriesRegistered
+        - weft.observability.MetricSeriesRetired
+        - weft.observability.NotificationTargetAdded
+        - weft.observability.NotificationTargetRemoved
+        - weft.observability.TelemetryPolicyRemoved
+        - weft.observability.TelemetryPolicySet
+        - weft.observability.TelemetrySinkConfigured
+        - weft.observability.TelemetrySinkDelivered
+        - weft.observability.TelemetrySinkFailing
+        - weft.observability.TelemetrySinkRemoved
+        # events of weft.resources
+        - weft.resources.BucketCreated
+        - weft.resources.BucketDeleted
+        - weft.resources.BucketFailed
+        - weft.resources.BucketProvisioned
+        - weft.resources.FilesystemCreated
+        - weft.resources.FilesystemDeleted
+        - weft.resources.FilesystemFailed
+        - weft.resources.FilesystemProvisioned
+        - weft.resources.VolumeCreated
+        - weft.resources.VolumeRestored
+        - weft.resources.VolumeDeleted
+        - weft.resources.VolumeFailed
+        - weft.resources.VolumeProvisioned
+        - weft.resources.VolumeSnapshotDeleted
+        - weft.resources.VolumeSnapshotFailed
+        - weft.resources.VolumeSnapshotReady
+        - weft.resources.VolumeSnapshotRequested
+        # events of weft.scheduling
+        - weft.scheduling.GangAbandoned
+        - weft.scheduling.GangBound
+        - weft.scheduling.GangRegistered
+        - weft.scheduling.InstancePlaced
+        - weft.scheduling.InstanceUnschedulable
+        - weft.scheduling.PlacementAssigned
+        - weft.scheduling.PlacementBound
+        - weft.scheduling.PlacementReleased
+        - weft.scheduling.PreemptionStarted
+        - weft.scheduling.ScaleDownRequested
+        - weft.scheduling.ScaleFulfilled
+        - weft.scheduling.ScaleRefused
+        - weft.scheduling.ScaleUpRequested
+        - weft.scheduling.SchedulingRequested
+        - weft.scheduling.SchedulingRetried
+        - weft.scheduling.SchedulingWithdrawn
+        - weft.scheduling.UnassignedPlacementReleased
+        # events of weft.secrets
+        - weft.secrets.SecretBackendRegistered
+        - weft.secrets.SecretCreated
+        - weft.secrets.SecretDelivered
+        - weft.secrets.SecretGrantRevoked
+        - weft.secrets.SecretGranted
+        - weft.secrets.SecretVersionAdded
+        - weft.secrets.SecretVersionDisabled
+        # events of weft.workloads
+        - weft.workloads.AccountInstancesStopped
+        - weft.workloads.AccountServicesRetired
+        - weft.workloads.AliveCheckFailed
+        - weft.workloads.BoxCordoned
+        - weft.workloads.BoxCreated
+        - weft.workloads.BoxDestroyed
+        - weft.workloads.BoxLeaseAcquired
+        - weft.workloads.BoxLeaseReleased
+        - weft.workloads.BoxResized
+        - weft.workloads.BoxStarted
+        - weft.workloads.BoxStarting
+        - weft.workloads.BoxStopped
+        - weft.workloads.BoxStopping
+        - weft.workloads.BoxSuspended
+        - weft.workloads.BoxUncordoned
+        - weft.workloads.CheckObserved
+        - weft.workloads.DisruptionBudgetSet
+        - weft.workloads.ExecOpened
+        - weft.workloads.InstanceBackingOff
+        - weft.workloads.InstanceBackoffEnded
+        - weft.workloads.InstanceCreated
+        - weft.workloads.InstanceDesiredSet
+        - weft.workloads.InstanceEvicted
+        - weft.workloads.InstanceExited
+        - weft.workloads.InstanceFailed
+        - weft.workloads.InstanceHealthStarting
+        - weft.workloads.InstanceNotReady
+        - weft.workloads.InstancePaused
+        - weft.workloads.InstanceReady
+        - weft.workloads.InstanceResumed
+        - weft.workloads.InstanceRunning
+        - weft.workloads.InstanceScheduled
+        - weft.workloads.InstanceStarting
+        - weft.workloads.InstanceWithdrawn
+        - weft.workloads.InvocationAccepted
+        - weft.workloads.InvocationFailed
+        - weft.workloads.InvocationStarted
+        - weft.workloads.InvocationSucceeded
+        - weft.workloads.InvocationTimedOut
+        - weft.workloads.JobCancelled
+        - weft.workloads.JobFailed
+        - weft.workloads.JobStarted
+        - weft.workloads.JobSubmitted
+        - weft.workloads.JobSucceeded
+        - weft.workloads.ProcessRestarted
+        - weft.workloads.ProcessStarted
+        - weft.workloads.ReplicaBackoffEnded
+        - weft.workloads.ReplicaEnded
+        - weft.workloads.ReplicaRequested
+        - weft.workloads.RuntimeRegistered
+        - weft.workloads.RuntimeRetired
+        - weft.workloads.ScaleRuleSet
+        - weft.workloads.ScheduleCreated
+        - weft.workloads.ScheduleDeleted
+        - weft.workloads.ScheduleFired
+        - weft.workloads.SchedulePaused
+        - weft.workloads.ScheduleResumed
+        - weft.workloads.ServiceAsleep
+        - weft.workloads.ServiceAwake
+        - weft.workloads.ServiceDefined
+        - weft.workloads.ServiceDrainingToSleep
+        - weft.workloads.ServiceScaled
+        - weft.workloads.ServiceSleepCancelled
+        - weft.workloads.ServiceWaking
+        - weft.workloads.SessionAttached
+        - weft.workloads.SessionClosed
+        - weft.workloads.SessionDetached
+        - weft.workloads.SessionOpened
+        - weft.workloads.SleepPolicySet
+        - weft.workloads.SnapshotDeleted
+        - weft.workloads.SnapshotFailed
+        - weft.workloads.SnapshotReady
+        - weft.workloads.SnapshotRequested
+        - weft.workloads.SnapshotRestored
+        - weft.workloads.StartupCheckFailed
+        - weft.workloads.TaskRetried
+        - weft.workloads.TaskSucceeded
+        - weft.workloads.TriggerCreated
+        - weft.workloads.TriggerDeleted
+        - weft.workloads.TriggerDisabled
+        - weft.workloads.TriggerEnabled
+        - weft.workloads.WakeMissed
+        - weft.workloads.WakeRequested
+        - weft.workloads.WarmPoolCreated
+        - weft.workloads.WarmPoolDeleted
+        - weft.workloads.WarmPoolResized
+        - weft.workloads.WorkloadDefined
+        - weft.workloads.WorkloadRetired
+
+# Reconciliation loops, § 14 lines 584-618, in the four forms of lines 594-606 (edge, level, time,
+# many rows) the domains support since wave 4 (docs/open-questions.md, wave 4 sections; their
+# decisions are taken as final here).
+#
+# Every edge step and every many-rows step is one binding below (lines 595-596 and 605-606).
+# Level and time steps are not bindings: a controller actor reads a gap view and runs one command
+# per row (lines 597-604). They are listed in the block at the top of `bindings:`, so all of R1-R9
+# reads in one place.
+#
+# Every binding is `delivery: at_least_once`: an edge can be delivered twice, and a lost one is
+# repaired by the level step of the same loop where one exists. `on_failure` names each refusal
+# of the invoked command:
+#   - `drop` only for a refusal named harmless at the binding, with the reason beside it (most
+#     often: a repeated delivery, or the row already moved on by another step);
+#   - `escalate` where the domain declares an escalation event (only deployments.DriftEscalated);
+#   - `retry` for a transient refusal, for a refusal the event rules out ("cannot follow"), and
+#     for a transport failure (the `except:` fallback).
+#
+# OPEN: apart from DriftEscalated no domain declares an escalation event, so a refusal that is
+# neither harmless nor transient is retried unbounded, which is loud but never ends. Each is named
+# at its binding with the event its domain would add.
+#
+# The node agent's Record* call is the one source of an observation (line 607): no binding below
+# records an observation, and no binding invokes a NodeAgent command.
+
+bindings:
+  # ---------------------------------------------------------------------------------------------
+  # Level and time steps (lines 597-604): gap view -> command -> actor. The actor reads the view
+  # (granted in ess/9-actors/actors.yaml) and runs the command once per row; the command's guard
+  # holds the rule, the actor's clock or read is the trigger.
+  #
+  #   R1 level  workloads.ServicesBelowScale      -> workloads.RequestReplica       -> Scheduler
+  #             (the row's service_id; the replica index is the lowest index below `replicas` that
+  #             workloads.InstanceList shows no live instance for)
+  #   R1 level  workloads.ServicesAboveScale      -> workloads.StopInstance         -> Scheduler
+  #             (scale-in and draining to sleep: the live instance of the highest replica index)
+  #   R1 level  deployments.RunningRolloutSteps   -> deployments.CompleteRolloutStep -> ReleaseController
+  #             (ready_replicas: the row count of workloads.ReadyInstances(workload_id))
+  #   R2 level  nodes.StoppedActiveAssignments    -> nodes.EndAssignment            -> Scheduler
+  #             (repairs a lost r2-end-assignment-on-stopped delivery)
+  #   R2 time   workloads.ServiceBackoffsDue      -> workloads.EndReplicaBackoff    -> Scheduler
+  #   R3 time   nodes.SilentNodeSessions          -> nodes.LoseNodeSession          -> ControlPlane
+  #   R3 time   nodes.ExpiredLeases               -> nodes.ReleaseAssignment        -> ControlPlane
+  #   R3 time   scheduling.OverdueUnassignedPlacements -> scheduling.ReleasePlacement -> Scheduler
+  #             (a Bound placement no node took within 120 s; `released-unassigned` evicts its
+  #             instance through r3-evict-on-unassigned-release; read-granted to the Scheduler)
+  #   R4 level  scheduling.UnassignedPlacements   -> nodes.Assign                   -> Scheduler
+  #             (repairs a lost or dropped r4-assign delivery, `assigned_at` from the
+  #             Scheduler's clock; an `already-assigned` answer is followed by
+  #             scheduling.RecordPlacementAssigned for the row)
+  #   R6 level  workloads.PendingStopsToWithdraw  -> workloads.StopInstance         -> Scheduler
+  #   R7 level  deployments.OpenDrifts            -> deployments.ReapplyDrift (row with step_id)
+  #                                                  or deployments.EscalateDrift   -> ReleaseController
+  #   R8 level  workloads.ServicesBelowScale (Waking rows) -> workloads.RequestReplica -> Scheduler
+  #   R8 time   workloads.WakesOverdue            -> workloads.MissWake             -> Scheduler
+  #   (§ 16)    observability.LogStreamsPastRetention -> observability.ExpireLogStream -> ControlPlane
+  #   (clusters) cluster.UnlinkedClusterNodePools + infrastructure.TenantNodePools
+  #                                               -> cluster.RecordClusterNodePoolReady (Requested rows)
+  #                                                  or RecordRemovedClusterNodePool (Removed rows) -> ControlPlane
+  #   (clusters) cluster.RemovedClusterNodePools  -> infrastructure.DrainNodePool    -> ControlPlane
+  #   (clusters) infrastructure.DrainingPoolNodes -> infrastructure.DrainNode or RemoveNode -> ControlPlane
+  #   (clusters) infrastructure.DrainingNodePools -> infrastructure.DeleteNodePool   -> ControlPlane
+  #             (block "Tenant clusters" below, hardening pass 4)
+  #
+  # R9 (line 593) is node-local: workloads.AliveCheckFailed (`restart: true`) reaches weft-node,
+  # which restarts the process and records it with workloads.RecordProcessRestarted (NodeAgent).
+  # weft-node is no component here (see the top), so that step is neither a binding nor a level
+  # step of weft-control; RecordProcessRestarted is the record line 593 asks for.
+  #
+  # OPEN: the time commands of system actors without a gap view, so the actor has no row to
+  # read: access.ExpireLogin, access.ExpireApiToken (ManagementApi), identity.ExpireIdentityDocument
+  # (ControlPlane), workloads.ExpireInvocation (Scheduler). None is a step of R1-R9.
+
+  # ---------------------------------------------------------------------------------------------
+  # R1 (line 585): rollout step started -> the workload's desired replica count set; the Scheduler
+  # fills the gap.
+  # Edge 1: a rollout step started sets the desired replica count of its workload's Service
+  # (workloads.SetWorkloadReplicas, addressed by workload_id: a workload has at most one Service).
+  # deployments.AddReleaseStep requires `replicas` on a rollout step and StartReleaseStep requires
+  # `workload_id`, so a Rollout event carries both; the `defined` conjuncts keep the mapping total.
+  - id: r1-set-workload-replicas
+    summary: Set the desired replica count of the workload a rollout step started.
+    when:
+      event: weft.deployments.ReleaseStepStarted
+      where: [event.kind == Rollout, defined(event.workload_id), defined(event.replicas)]
+    invoke:
+      command: weft.workloads.SetWorkloadReplicas
+    mapping:
+      workload_id: event.workload_id
+      replicas: event.replicas
+    delivery: at_least_once
+    on_failure:
+      # workload-retired: harmless; a retired workload's release was replaced by a newer
+      # revision's, whose own rollout step sets its count (as r1-create-replica drops it).
+      # not-a-service: harmless; only a Service holds a desired replica count. OPEN: a Rollout
+      # step of another shape (a Daemon, deployments.yaml OPEN on ReleaseStep.replicas) reaches
+      # its instances by no loop yet.
+      drop: [workload-retired, not-a-service]
+      # no-service and not-awake are transient: the Service is defined by its caller after the
+      # workload (DefineService), and a draining or waking service returns to Awake. OPEN: an
+      # Asleep service stays Asleep until a wake, so its rollout step is retried until then; and
+      # below-bounds and above-bounds (the release's count outside the Service's ScaleRule) are
+      # not transient and have no escalation event: workloads.yaml would add
+      # `WorkloadReplicasRefused(workload_id, replicas)`, or deployments.AddReleaseStep would read
+      # the bounds. negative-replicas cannot follow (AddReleaseStep refuses a negative count).
+      # OPEN: no-workload is retried, unbounded if the step names a workload that never exists;
+      # deployments.StartReleaseStep does not check the workload. A transport failure is retried.
+      retry: {except: [workload-retired, not-a-service]}
+  #
+  # Level: ServicesBelowScale -> RequestReplica (block above). Edge: the requested replica becomes
+  # an instance.
+  - id: r1-create-replica
+    summary: Create the instance of a replica the Scheduler requested.
+    when:
+      event: weft.workloads.ReplicaRequested
+    invoke:
+      command: weft.workloads.CreateInstance
+    mapping:
+      workload_id: event.workload_id
+      service_id: event.service_id
+      replica_index: event.replica_index
+    delivery: at_least_once
+    on_failure:
+      # replica-live: harmless; a repeated delivery of this ReplicaRequested, whose first delivery
+      # created the instance (workloads.yaml CreateInstance: "the binding drops this answer").
+      # workload-retired: harmless; a retired workload takes no new instance, and its service is
+      # retired with it or replaced by the new revision's.
+      drop: [replica-live, workload-retired]
+      # over-quota is transient (a quota raised or freed admits it). no-workload, no-service and
+      # the foreign-* refusals cannot follow (RequestReplica read the service, which names the
+      # workload); no-job, no-invocation, no-box, no-session and no-warm-pool read inputs this
+      # binding leaves absent. A transport failure is retried.
+      retry: {except: [replica-live, workload-retired]}
+
+  # Edge: a created instance is submitted to the scheduler (line 596; scheduling.yaml
+  # SubmitSchedulingRequest). A Job's instances are skipped: a gang member must carry its gang,
+  # which workloads does not know (docs/open-questions.md "scheduling and claims", taken: skip until
+  # gangs get their own loop); the control plane submits them with gang_id.
+  # OPEN: a Job instance outside a gang is skipped too (the event cannot tell the two apart), so
+  # it is submitted by the control plane like a gang member. Settled by the gang id on
+  # workloads.Instance and InstanceCreated, or by a loop of its own for Job tasks.
+  - id: r1-submit-scheduling-request
+    summary: Ask the scheduler to place an instance as soon as it is created.
+    when:
+      event: weft.workloads.InstanceCreated
+      where: [not defined(event.job_id)]
+    invoke:
+      command: weft.scheduling.SubmitSchedulingRequest
+    mapping:
+      instance_id: event.instance_id
+      account_id: event.account_id
+      formation_id: event.formation_id
+      claims: event.claims
+      min_isolation: event.minimum_isolation
+      zones: event.zones
+      priority: event.priority
+    delivery: at_least_once
+    on_failure:
+      # already-requested: harmless; a repeated delivery of this InstanceCreated.
+      drop: [already-requested]
+      # unknown-priority and retired-priority are retried until the operator defines the class
+      # (cluster.DefinePriorityClass); the workload references it (workloads.yaml
+      # Workload.priority_class) but DefineWorkload does not check it (OPEN there). OPEN: no-claims (a workload defined with no claim) is not
+      # transient and has no escalation event: scheduling.yaml would add
+      # `SchedulingRequestRefused(instance_id, reason)`, or workloads.DefineWorkload would refuse
+      # an empty claim list. unknown-account cannot follow (the workload names an existing
+      # account); unknown-gang, gang-closed and gang-of-other-tenant read a gang_id this binding
+      # leaves absent. A transport failure is retried.
+      retry: {except: [already-requested]}
+  # The Scheduler's choice of a node (scheduling.PlaceInstance) is a decision, not a reaction; it
+  # stays a command the Scheduler runs for each pending request. R1 continues at R4.
+  # The release goes live once its rollout steps saw ready instances: level step
+  # RunningRolloutSteps -> CompleteRolloutStep (block above).
+
+  # ---------------------------------------------------------------------------------------------
+  # R4 (line 588): placement bound -> assignment sent to the node.
+  # Edge 1: a placement the Scheduler made is bound (scheduling.yaml BindPlacement: "a single
+  # instance's reservation is committed and its request answered").
+  - id: r4-bind-placement
+    summary: Bind a single instance's placement as soon as the Scheduler made it.
+    when:
+      event: weft.scheduling.InstancePlaced
+    invoke:
+      command: weft.scheduling.BindPlacement
+    mapping:
+      decision_id: event.decision_id
+      request_id: event.request_id
+    delivery: at_least_once
+    on_failure:
+      # gang-member: harmless; a gang member is bound only by BindGang with its whole gang (§ 10
+      # line 458). wrong-state: harmless; the placement was already bound, or released or preempted
+      # before the binding ran, and its request is answered by that move.
+      drop: [gang-member, wrong-state]
+      # no-such-placement and other-request cannot follow from this event (same decision, same
+      # request); a transport failure is retried.
+      retry: {except: [gang-member, wrong-state]}
+  # OPEN: a gang's members get no PlacementBound (scheduling BindGang emits only GangBound;
+  # docs/open-questions.md "nodes", TODO), so edges 2 and 3 do not reach them; the level step on
+  # UnassignedPlacements does (block above), as their decisions are Bound and unassigned.
+
+  # Edge 2: the bound placement becomes an assignment on its node (nodes.yaml Assign finds the
+  # node's open session itself).
+  - id: r4-assign
+    summary: Send a bound placement to its node as an assignment.
+    when:
+      event: weft.scheduling.PlacementBound
+    invoke:
+      command: weft.nodes.Assign
+    mapping:
+      instance_id: event.instance_id
+      node_id: event.node_id
+      placement_decision_id: event.decision_id
+      # The lease starts at the decision instant the Scheduler stamped (scheduling PlaceInstance
+      # `decided_at`); a binding has no clock of its own, and a later delivery only shortens the
+      # first lease (weft-sim full setup, 2026-11-26).
+      assigned_at: event.decided_at
+    delivery: at_least_once
+    on_failure:
+      # already-assigned: harmless; a repeated delivery, the first created the assignment.
+      # placement-not-bound: harmless; the placement was released or preempted before the
+      # assignment was sent, and that move answers its request.
+      # no-open-session: PlaceInstance refuses a node with no open session (`node-not-connected`),
+      # so this answer follows only a session lost between the placement and this delivery.
+      # Retrying it ran without bound (weft-sim full setup, 2026-11-26: one PlaceInstance over
+      # 250 s); dropped, the placement stays Bound and unassigned in
+      # scheduling.UnassignedPlacements, whose level step assigns it once the node redials. A
+      # node that never redials: the time step on scheduling.OverdueUnassignedPlacements releases
+      # the placement 120 s after the decision, and r3-evict-on-unassigned-release evicts its
+      # instance so R1 requests the replica again (weft-sim stuck-placement, 2026-11-26).
+      drop: [already-assigned, placement-not-bound, no-open-session]
+      # node-not-ready is transient (a cordon or drain ends; § 11). OPEN:
+      # isolation-unavailable (the node no longer offers the placement's isolation) is not
+      # transient and has no escalation event: nodes.yaml would add
+      # `AssignmentRefused(placement_decision_id, reason)` for the Scheduler to release and
+      # re-place. no-such-placement and placement-mismatch cannot follow (the event is the bound
+      # decision); assigned-in-future cannot follow (decided_at was not after `now` when placed). A
+      # transport failure is retried.
+      retry: {except: [already-assigned, placement-not-bound, no-open-session]}
+
+  # Edge 3: the instance records where it runs (workloads.yaml ScheduleInstance; it moves from
+  # Pending to Scheduled, the state the node's first report starts from).
+  - id: r4-schedule-instance
+    summary: Record on the instance the node and isolation its placement chose.
+    when:
+      event: weft.scheduling.PlacementBound
+    invoke:
+      command: weft.workloads.ScheduleInstance
+    mapping:
+      instance_id: event.instance_id
+      node_id: event.node_id
+      isolation: event.isolation
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; a repeated delivery (already Scheduled), or the instance was
+      # stopped and withdrawn while pending.
+      drop: [wrong-state]
+      # below-minimum-isolation cannot follow (PlaceInstance chose at least the request's minimum,
+      # which is the instance's); no-such-instance cannot follow. A transport failure is retried.
+      retry: {except: [wrong-state]}
+
+  # Edge 4: the assignment exists; the decision leaves UnassignedPlacements (scheduling.yaml
+  # RecordPlacementAssigned).
+  - id: r4-record-placement-assigned
+    summary: Mark a placement assigned once its node holds the assignment.
+    when:
+      event: weft.nodes.InstanceAssigned
+    invoke:
+      command: weft.scheduling.RecordPlacementAssigned
+    mapping:
+      decision_id: event.placement_decision_id
+    delivery: at_least_once
+    on_failure:
+      # not-bound: harmless; the placement was released or preempted after the assignment was
+      # made, and the assignment ends by R2 or R3.
+      drop: [not-bound]
+      # no-such-placement cannot follow (Assign checked the placement); a transport failure is
+      # retried.
+      retry: {except: [not-bound]}
+
+  # ---------------------------------------------------------------------------------------------
+  # R2 (line 586): instance exited or failed under a restart policy -> a new instance, with backoff.
+  # The node records the end itself (workloads.RecordInstanceExited / RecordInstanceFailed,
+  # NodeAgent; line 607). Edge 1: the node observed the instance stopped; its assignment ends
+  # (nodes.yaml EndAssignment: "An assignment ends only once the node reported the instance
+  # stopped"). Also serves R6 (an instance stopped) and a Job or Invocation that ran to completion.
+  - id: r2-end-assignment-on-stopped
+    summary: End an assignment once its node observed the instance stopped.
+    when:
+      event: weft.nodes.InstanceObservationRecorded
+      where: [event.observed == Stopped]
+    invoke:
+      command: weft.nodes.EndAssignment
+    mapping:
+      assignment_id: event.assignment_id
+    delivery: at_least_once
+    on_failure:
+      # not-active: harmless; the assignment already ended (a repeated observation) or was released
+      # when its lease ended (R3), and either move freed it.
+      drop: [not-active]
+      # no-such-assignment and stop-not-observed cannot follow from this event (InstanceObserved
+      # checked the assignment; the event is the stop observation); a transport failure is retried.
+      retry: {except: [not-active]}
+
+  # Edge 2: the ended assignment frees its placement's units (scheduling.yaml ReleasePlacement).
+  - id: r2-release-placement-on-end
+    summary: Release the placement of an assignment that ended.
+    when:
+      event: weft.nodes.AssignmentEnded
+    invoke:
+      command: weft.scheduling.ReleasePlacement
+    mapping:
+      decision_id: event.placement_decision_id
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; the placement was already released (a repeated delivery) or
+      # preempted, and that move freed its units.
+      drop: [wrong-state]
+      # no-such-placement cannot follow (the assignment names its decision). assignment-pending
+      # follows only while the delivery of r4-record-placement-assigned is outstanding, and is
+      # transient (that delivery, or the decision's 120 s, ends it). A transport failure is
+      # retried.
+      retry: {except: [wrong-state]}
+
+  # Edge 3: an ended replica leaves its service's live count (workloads.yaml RecordReplicaEnded);
+  # the level step on ServicesBelowScale then requests its replacement once the backoff ended
+  # (time step on ServiceBackoffsDue). An exit backs off when the restart policy restarts it
+  # (`backoff: event.restart`).
+  - id: r2-replica-ended-on-exit
+    summary: Take an exited replica out of its service's live count.
+    when:
+      event: weft.workloads.InstanceExited
+      where: [defined(event.service_id)]
+    invoke:
+      command: weft.workloads.RecordReplicaEnded
+    mapping:
+      service_id: event.service_id
+      instance_id: event.instance_id
+      backoff: event.restart
+    delivery: at_least_once
+    on_failure: &replica-ended-failure
+      # already-counted: harmless; a repeated delivery, the instance is already counted out.
+      drop: [already-counted]
+      # no-such-service, no-instance, other-service and instance-live cannot follow (the event is
+      # the end of this service's instance). OPEN: count-empty (the count is already 0) means the
+      # count drifted from the live instances; it is not transient and workloads.yaml has no
+      # escalation event (it would add `ReplicaCountDrifted(service_id)`). A transport failure is
+      # retried.
+      retry: {except: [already-counted]}
+
+  # Edge 3 for a failure: every failure backs off, so a replica whose artifact the node rejected
+  # does not loop without a wait (docs/open-questions.md "workloads loops", decided).
+  - id: r2-replica-ended-on-failure
+    summary: Take a failed replica out of its service's live count, with backoff.
+    when:
+      event: weft.workloads.InstanceFailed
+      where: [defined(event.service_id)]
+    invoke:
+      command: weft.workloads.RecordReplicaEnded
+    mapping:
+      service_id: event.service_id
+      instance_id: event.instance_id
+      backoff: true
+    delivery: at_least_once
+    on_failure: *replica-ended-failure
+
+  # ---------------------------------------------------------------------------------------------
+  # R3 (line 587): node session lost, lease ended -> its instances evicted and rescheduled.
+  # Time steps: SilentNodeSessions -> LoseNodeSession, ExpiredLeases -> ReleaseAssignment (block
+  # above; ESS refuses `now` in an `affects:` filter, so each lease ends once per row).
+  # Edge 1: an assignment released because its lease ended evicts its instance (§ 11 line 476:
+  # "a lost node's instances are rescheduled after the lease ends"; ReleaseAssignment refuses while
+  # the lease holds, so the reason is NodeLost).
+  - id: r3-evict-on-lease-end
+    summary: Evict the instance of an assignment released because its lease ended.
+    when:
+      event: weft.nodes.AssignmentReleased
+    invoke:
+      command: weft.workloads.EvictInstance
+    mapping:
+      instance_id: event.instance_id
+      reason: NodeLost
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; the instance already left its live states (exited, failed, stopped
+      # or evicted before the lease ended), so there is nothing to evict.
+      drop: [wrong-state]
+      # over-budget cannot follow: its check speaks of a drain, and a lost node is no voluntary
+      # disruption (OPEN below). no-such-instance cannot follow (the assignment names an instance
+      # workloads created). A transport failure is retried.
+      retry: {except: [wrong-state]}
+  # OPEN: EvictInstance's `over-budget` refusal does not name the reason; the bindings take it as
+  # never answered for reason NodeLost (docs/open-questions.md "components and bindings", taken).
+  # Should workloads.yaml guard it on `input.reason != NodeLost`?
+
+  # Edge 2: the released assignment frees its placement's units.
+  - id: r3-release-placement-on-lease-end
+    summary: Release the placement of an assignment released because its lease ended.
+    when:
+      event: weft.nodes.AssignmentReleased
+    invoke:
+      command: weft.scheduling.ReleasePlacement
+    mapping:
+      decision_id: event.placement_decision_id
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; the placement was already released or preempted.
+      drop: [wrong-state]
+      # no-such-placement cannot follow; assignment-pending is transient (as at
+      # r2-release-placement-on-end). A transport failure is retried.
+      retry: {except: [wrong-state]}
+
+  # Edge 1 for a placement no lease covers: a Bound placement its node never took was released
+  # on time (scheduling.ReleasePlacement `released-unassigned`, time step on
+  # OverdueUnassignedPlacements); its instance, Scheduled on that node, is evicted for NodeLost,
+  # and edge 3 (r3-replica-ended-on-eviction) lets R1 request the replica again.
+  - id: r3-evict-on-unassigned-release
+    summary: Evict the instance of a placement released because its node never took it.
+    when:
+      event: weft.scheduling.UnassignedPlacementReleased
+    invoke:
+      command: weft.workloads.EvictInstance
+    mapping:
+      instance_id: event.instance_id
+      reason: NodeLost
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; the instance already left its live states (stopped and withdrawn
+      # while placed), so there is nothing to evict.
+      drop: [wrong-state]
+      # over-budget cannot follow for NodeLost (OPEN at r3-evict-on-lease-end); no-such-instance
+      # cannot follow (the decision names an instance workloads created). A transport failure is
+      # retried.
+      retry: {except: [wrong-state]}
+
+  # Edge 3, the reschedule: an evicted replica leaves its service's count without backoff, and R1
+  # creates a new instance whose InstanceCreated is submitted to the scheduler
+  # (docs/open-questions.md "workloads loops", decided). Also serves a preempted or drained replica.
+  - id: r3-replica-ended-on-eviction
+    summary: Take an evicted replica out of its service's live count.
+    when:
+      event: weft.workloads.InstanceEvicted
+      where: [defined(event.service_id)]
+    invoke:
+      command: weft.workloads.RecordReplicaEnded
+    mapping:
+      service_id: event.service_id
+      instance_id: event.instance_id
+      backoff: false
+    delivery: at_least_once
+    on_failure: *replica-ended-failure
+
+  # ---------------------------------------------------------------------------------------------
+  # R5 (line 589): claim released -> its bindings released, devices wiped. Many rows: every
+  # still-Reserved binding of the claim is released in one outcome (claims.yaml
+  # ReleaseClaimBindings). Devices wiped: an Active binding's devices go to Wiping in
+  # ReleaseBinding, which runs before a claim can be released, and the node reports the wipe
+  # (inventory.ReportDeviceWiped, NodeAgent); a Reserved binding holds no device.
+  - id: r5-release-claim-bindings
+    summary: Release the bindings a released claim still reserves.
+    when:
+      event: weft.claims.ClaimReleased
+    invoke:
+      command: weft.claims.ReleaseClaimBindings
+    mapping:
+      claim_id: event.claim_id
+    delivery: at_least_once
+    # no-such-claim and claim-not-released cannot follow (the event is the claim's release); a
+    # repeated delivery releases nothing and succeeds. A transport failure is retried.
+    on_failure: retry
+  # OPEN: ReleaseClaim on a Bound claim is refused (docs/open-questions.md "scheduling and claims",
+  # taken), so R5 relies on ReleaseBinding having wiped the devices first (claims.yaml).
+
+  # ---------------------------------------------------------------------------------------------
+  # R6 (line 590): account closed -> its exports revoked, tokens expired, instances stopped. Many
+  # rows: one command per domain and entity moves every matching row (ESS-COMMAND-009), each
+  # invoked by one binding on accounts.AccountClosed (docs/open-questions.md "account close",
+  # decided). Each command refuses while the account is open (deny by default); that refusal and
+  # a missing account cannot follow from this event, so every binding retries only transport
+  # failures, except the two observability bindings named below. A repeated delivery moves no row
+  # and succeeds.
+  - id: r6-revoke-account-exports
+    summary: Revoke the exports from and to a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.formations.RevokeAccountExports
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: r6-revoke-account-api-tokens
+    summary: Revoke the live API tokens of a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.access.RevokeAccountApiTokens
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # Instances stopped: every live instance is asked to stop; a node stops its running ones and
+  # reports each end (R2), and a pending one no node holds is withdrawn by the level step on
+  # PendingStopsToWithdraw (block above).
+  - id: r6-stop-account-instances
+    summary: Ask every live instance of a closed account to stop.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.workloads.StopAccountInstances
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # With R1: the closed account's services retire, so the level step requests none of their
+  # replicas again.
+  - id: r6-retire-account-services
+    summary: Retire every service of a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.workloads.RetireAccountServices
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # A withdrawn replica (a pending one stopped before any node held it) leaves its service's count
+  # like any other end (workloads.yaml RecordReplicaEnded: "InstanceWithdrawn ... `backoff: false`").
+  - id: r6-replica-ended-on-withdrawal
+    summary: Take a withdrawn replica out of its service's live count.
+    when:
+      event: weft.workloads.InstanceWithdrawn
+      where: [defined(event.service_id)]
+    invoke:
+      command: weft.workloads.RecordReplicaEnded
+    mapping:
+      service_id: event.service_id
+      instance_id: event.instance_id
+      backoff: false
+    delivery: at_least_once
+    on_failure: *replica-ended-failure
+
+  # Telemetry configuration of the closed account (§ 16; docs/open-questions.md "account close").
+  - id: r6-delete-account-alert-rules
+    summary: Delete the alert rules of a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.observability.DeleteAccountAlertRules
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: r6-remove-account-telemetry-policies
+    summary: Remove the telemetry policies of a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.observability.RemoveAccountTelemetryPolicies
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # in-use: transient; a sink stays while a policy of the account names it, and
+  # r6-remove-account-telemetry-policies removes those (docs/open-questions.md "account close":
+  # "sinks and targets retry until policies and rules are gone").
+  - id: r6-remove-account-telemetry-sinks
+    summary: Remove the telemetry sinks of a closed account once no policy names them.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.observability.RemoveAccountTelemetrySinks
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # in-use: transient; a target stays while an alert rule names it, and
+  # r6-delete-account-alert-rules deletes those.
+  - id: r6-remove-account-notification-targets
+    summary: Remove the notification targets of a closed account once no rule names them.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.observability.RemoveAccountNotificationTargets
+    mapping:
+      account_id: event.account_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # A deleted rule's open alerts resolve (observability.yaml ResolveDeletedRuleAlerts). Serves a
+  # rule deleted by hand as well as one deleted by the account cascade.
+  - id: r6-resolve-deleted-rule-alerts
+    summary: Resolve the open alerts of an alert rule that was deleted.
+    when:
+      event: weft.observability.AlertRuleDeleted
+    invoke:
+      command: weft.observability.ResolveDeletedRuleAlerts
+    mapping:
+      alert_rule_id: event.alert_rule_id
+    delivery: at_least_once
+    # no-such-rule and rule-active cannot follow (the event is the rule's deletion); a repeated
+    # delivery resolves nothing and succeeds. A transport failure is retried.
+    on_failure: retry
+  # OPEN: tokens are revoked (RevokeAccountApiTokens), not expired as line 590 says; the CLI
+  # logins of the account's principals and the account's boxes, sessions, jobs, schedules,
+  # triggers and warm pools have no step (docs/open-questions.md "workloads loops", OPEN).
+
+  # ---------------------------------------------------------------------------------------------
+  # An ended instance's telemetry (§ 16; docs/open-questions.md "account close": "Instance ended
+  # (InstanceExited/Failed/Evicted) -> CloseInstanceLogStreams, RetireInstanceMetricSeries").
+  # Serves R2, R3 and R6. unknown-instance and instance-live cannot follow (the event is the end
+  # of a known instance); a repeated delivery moves no row and succeeds. A transport failure is
+  # retried.
+  - id: telemetry-close-log-streams-on-exit
+    summary: Close the log streams of an instance that exited.
+    when:
+      event: weft.workloads.InstanceExited
+    invoke:
+      command: weft.observability.CloseInstanceLogStreams
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: telemetry-close-log-streams-on-failure
+    summary: Close the log streams of an instance that failed.
+    when:
+      event: weft.workloads.InstanceFailed
+    invoke:
+      command: weft.observability.CloseInstanceLogStreams
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: telemetry-close-log-streams-on-eviction
+    summary: Close the log streams of an instance that was evicted.
+    when:
+      event: weft.workloads.InstanceEvicted
+    invoke:
+      command: weft.observability.CloseInstanceLogStreams
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: telemetry-retire-series-on-exit
+    summary: Retire the metric series of an instance that exited.
+    when:
+      event: weft.workloads.InstanceExited
+    invoke:
+      command: weft.observability.RetireInstanceMetricSeries
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: telemetry-retire-series-on-failure
+    summary: Retire the metric series of an instance that failed.
+    when:
+      event: weft.workloads.InstanceFailed
+    invoke:
+      command: weft.observability.RetireInstanceMetricSeries
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: retry
+
+  - id: telemetry-retire-series-on-eviction
+    summary: Retire the metric series of an instance that was evicted.
+    when:
+      event: weft.workloads.InstanceEvicted
+    invoke:
+      command: weft.observability.RetireInstanceMetricSeries
+    mapping:
+      instance_id: event.instance_id
+    delivery: at_least_once
+    on_failure: retry
+
+  # ---------------------------------------------------------------------------------------------
+  # R7 (line 591): drift recorded -> the release step re-applied or the drift escalated
+  # (deployments.yaml ReapplyDrift, EscalateDrift). Edge 1: a drift with a step re-applies it; a
+  # refusal that leaves the drift unrepaired is the escalation.
+  - id: r7-reapply-drift
+    summary: Re-apply the rollout step a drift names, or escalate the drift.
+    when:
+      event: weft.deployments.DriftDetected
+      where: [defined(event.step_id)]
+    invoke:
+      command: weft.deployments.ReapplyDrift
+    mapping:
+      drift_id: event.drift_id
+      release_id: event.release_id
+      step_id: event.step_id
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; the drift is no longer Open (a repeated delivery, or the level step
+      # acted on it first).
+      drop: [wrong-state]
+      # release-not-live and step-not-reappliable: the step cannot run again, so a person is told.
+      # The missing-row and mismatch refusals cannot follow (the event names a recorded drift,
+      # its release and its step) and would be a defect, so they escalate too.
+      escalate:
+        emits: weft.deployments.DriftEscalated
+        outcomes:
+          - release-not-live
+          - step-not-reappliable
+          - no-such-drift
+          - no-such-release
+          - no-such-step
+          - drift-mismatch
+      # A transport failure is retried.
+      retry:
+        except:
+          - wrong-state
+          - release-not-live
+          - step-not-reappliable
+          - no-such-drift
+          - no-such-release
+          - no-such-step
+          - drift-mismatch
+
+  # Edge 2: a drift no step covers is escalated at once.
+  - id: r7-escalate-drift
+    summary: Escalate a drift no release step covers.
+    when:
+      event: weft.deployments.DriftDetected
+      where: [not defined(event.step_id)]
+    invoke:
+      command: weft.deployments.EscalateDrift
+    mapping:
+      drift_id: event.drift_id
+      release_id: event.release_id
+    delivery: at_least_once
+    on_failure: &escalate-drift-failure
+      # wrong-state: harmless; the drift is already escalated, reapplying or resolved.
+      drop: [wrong-state]
+      # no-such-drift and drift-mismatch cannot follow (the event names the drift and its
+      # release); a transport failure is retried.
+      retry: {except: [wrong-state]}
+
+  # Edge 3: the escalation r7-reapply-drift emits moves no row (ESS's `escalate` emits an event and
+  # invokes no command), so the drift would stay Open and the level step would re-apply it again.
+  # This binding records the escalation on the drift; the DriftEscalated that EscalateDrift emits
+  # in turn meets an Escalated drift and is dropped. Takes the smallest answer of the OPEN on
+  # EscalateDrift in deployments.yaml.
+  # OPEN: confirm that an escalated drift leaves OpenDrifts (this binding) rather than staying Open.
+  - id: r7-record-drift-escalation
+    summary: Record on the drift that it was escalated.
+    when:
+      event: weft.deployments.DriftEscalated
+    invoke:
+      command: weft.deployments.EscalateDrift
+    mapping:
+      drift_id: event.drift_id
+      release_id: event.release_id
+    delivery: at_least_once
+    on_failure: *escalate-drift-failure
+
+  # ---------------------------------------------------------------------------------------------
+  # R8 (line 592): wake requested -> an instance scheduled; deadline missed -> named failure.
+  # Edge: a recorded wake turns an asleep service into a waking one (workloads.yaml StartWaking:
+  # "An asleep service starts waking; a service draining to sleep stays awake"). Then the level
+  # step requests the replicas of the Waking service (ServicesBelowScale, block above) and R1 and
+  # R4 schedule them; the time step on WakesOverdue gives a wake past its deadline the named
+  # answer WakeMissed.
+  - id: r8-start-waking
+    summary: Start waking the service a wake request names.
+    when:
+      event: weft.workloads.WakeRequested
+    invoke:
+      command: weft.workloads.StartWaking
+    mapping:
+      service_id: event.service_id
+    delivery: at_least_once
+    on_failure:
+      # retired, over-quota and cannot-run (a service whose bounds admit no replica): harmless
+      # here; the service stays at its size and its held wakes miss their deadline with the named
+      # answer WakeMissed (sketch lines 291-294: "past it, the request fails with a named answer,
+      # never silence"; time step WakesOverdue -> MissWake).
+      drop: [retired, over-quota, cannot-run]
+      # no-such-service cannot follow (WakeService checked the service); a transport failure is
+      # retried.
+      retry: {except: [retired, over-quota, cannot-run]}
+  # OPEN: which actor records the service awake (workloads.RecordServiceAwake): NodeAgent, as
+  # granted, or Scheduler (docs/open-questions.md "actors", OPEN).
+
+  # ---------------------------------------------------------------------------------------------
+  # R9 (line 593): alive check failed past its threshold -> process restart (node-local,
+  # recorded). No binding: see the block at the top of `bindings:`.
+
+  # ---------------------------------------------------------------------------------------------
+  # Tenant clusters (design:tenant-clusters step 2, integrator 2026-11-26): a dedicated pool an
+  # account requests becomes an infrastructure node pool; a removed one is deleted. Tenants never
+  # call weft.infrastructure commands.
+  # Hardening pass 4 (2026-11-26), the lifecycle as loops (level steps of the ControlPlane, read
+  # and invoke granted in ess/9-actors/actors.yaml):
+  #   ready   cluster.UnlinkedClusterNodePools joined with infrastructure.TenantNodePools on
+  #           cluster_node_pool_id == requested_for -> cluster.RecordClusterNodePoolReady (a
+  #           Requested row) or cluster.RecordRemovedClusterNodePool (a row removed while
+  #           Requested, so its pool is deleted too)
+  #   drain   cluster.RemovedClusterNodePools     -> infrastructure.DrainNodePool
+  #   nodes   infrastructure.DrainingPoolNodes    -> infrastructure.DrainNode (Ready, Cordoned)
+  #                                                  or infrastructure.RemoveNode (Provisioning,
+  #                                                  Joining, Draining)
+  #   delete  infrastructure.DrainingNodePools    -> infrastructure.DeleteNodePool (pool-has-nodes
+  #                                                  until the nodes step is done)
+  # Each view empties when its step succeeds, so the loop converges (sim/experiments/
+  # cluster-pool-lifecycle.yaml). No edge records Ready: NodePoolCreated carries requested_for
+  # now, so one could; the level step alone is taken.
+  # OPEN: RemoveNode answers not-empty while an instance is still assigned to the draining node
+  # (`external:`); nothing here moves those instances, R3's lease end does (line 470).
+  - id: cluster-create-node-pool
+    summary: Create the infrastructure node pool for a dedicated pool a tenant cluster requested.
+    when:
+      event: weft.cluster.ClusterNodePoolRequested
+    invoke:
+      command: weft.infrastructure.CreateNodePool
+    mapping:
+      name: event.name
+      zone: event.zone
+      machine_type: event.machine_type
+      image: event.image
+      min_size: event.min_size
+      max_size: event.max_size
+      requested_for: event.cluster_node_pool_id
+    delivery: at_least_once
+    on_failure:
+      # negative-size and min-above-max cannot follow: weft.cluster.AddClusterNodePool refuses
+      # them. OPEN: unknown-zone and zone-retired (the zone retired between the request and this
+      # step) have no escalation event; weft.cluster would add `ClusterNodePoolRefused`.
+      drop: [unknown-zone, zone-retired, negative-size, min-above-max]
+      retry: {except: [unknown-zone, zone-retired, negative-size, min-above-max]}
+  - id: cluster-delete-node-pool
+    summary: Delete the infrastructure node pool of a removed dedicated pool.
+    when:
+      event: weft.cluster.ClusterNodePoolRemoved
+      where: [defined(event.node_pool_id)]
+    invoke:
+      command: weft.infrastructure.DeleteNodePool
+    mapping:
+      node_pool_id: event.node_pool_id
+    delivery: at_least_once
+    on_failure:
+      # no-such-pool and wrong-state: harmless, already deleted. pool-has-nodes: the pool's
+      # nodes do not go inside this step, so a retry here cannot succeed (hardening pass 4: 1126
+      # unbounded retries from the full setup); the drain level step (above) drains the pool and
+      # deletes it once empty. An empty pool is deleted here at once.
+      drop: [no-such-pool, wrong-state, pool-has-nodes]
+      retry: {except: [no-such-pool, wrong-state, pool-has-nodes]}

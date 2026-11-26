@@ -1,0 +1,31 @@
+format: ess/37
+system: weft
+version: v1
+
+summary: >-
+  A compute cloud a team deploys itself: a control plane and worker nodes that run confined
+  workloads, from a code snippet to an agent or an ESS system, with claims on GPUs, disks,
+  network and secrets, for tenants and their nested accounts.
+
+domains:
+  - weft.shared
+  - weft.infrastructure
+  - weft.inventory
+  - weft.accounts
+  - weft.access
+  - weft.resources
+  - weft.artifacts
+  - weft.cluster
+  - weft.formations
+  - weft.workloads
+  - weft.claims
+  - weft.scheduling
+  - weft.nodes
+  - weft.identity
+  - weft.secrets
+  - weft.observability
+  - weft.deployments
+  - weft.pipelines
+  - weft.catalog
+  - weft.metering
+  - weft.actors

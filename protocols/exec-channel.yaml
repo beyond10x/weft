@@ -1,0 +1,489 @@
+# One exec into one instance: weft CLI -> weft-api -> weft-node.
+# Source: docs/domain-sketch.md "Surfaces" (Exec channel), "Channels"
+# (weft-api -> weft-node for exec: carried inside the node's session, never a
+# direct connection to the node), "Components" (weft, weft-api, weft-node),
+# "Box" under "4. Workload" (the user execs into it).
+#
+# The api_node and node_api channels stand for the exec stream multiplexed into
+# the node's existing session (protocols/node-channel.yaml). The api never
+# dials a node; it only writes into that session. Session loss is an api input,
+# not channel loss: the session is a reliable ordered stream until it is gone.
+#
+# UNMAPPED: OPEN: the sketch puts exec, attach, logs and port forward on this
+# channel. Only exec is modelled. Are attach, logs and port forward separate
+# protocols, or variants of this one?
+# UNMAPPED: OPEN: how does weft-api learn that a node session is lost
+# (weft-control tells it, or the carried stream breaks)? Modelled as the api
+# input session_lost.
+# UNMAPPED: OPEN: what does weft-node do with a running exec process when its
+# session is lost (kill it, or keep it for a reconnect)? Not modelled: the
+# node is not told, and the api absorbs its later messages.
+# UNMAPPED: OPEN: the authorization rule (sketch "Actors": Deployer execs) is
+# decided outside this protocol. Modelled as the api inputs allow and refuse;
+# exploration takes both.
+# UNMAPPED: OPEN: after a cancel, does the api answer cancelled at once, or
+# only after the node confirms the kill? Modelled: after the node's killed.
+# An end the node already reported (exited, failed) wins over cancelled.
+format: ess-protospec/1
+name: weft-exec-channel
+bounds: {max_steps: 40, max_states: 20000, max_time_ms: 1000}
+participants:
+  - name: cli
+    initial: idle
+    # Terminal outcomes, exactly one per exec: refused, failed, exited,
+    # cancelled, lost.
+    states: [idle, requested, open, cancelling, refused, failed, exited, cancelled, lost]
+    fields:
+      - {name: typed, type: Boolean, initial: false}
+    inputs:
+      - {name: exec, fields: []}
+      - {name: type, fields: []}
+      - {name: cancel, fields: []}
+    transitions:
+      - name: request-exec
+        from: idle
+        to: requested
+        trigger: {kind: input, name: exec}
+        effects:
+          - kind: send
+            channel: cli_api
+            message: exec
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-request}
+            payload: {instance: {kind: literal, value: instance-1}}
+      - name: see-opened
+        from: requested
+        to: open
+        trigger: {kind: receive, channel: api_cli, message: opened}
+        effects: [{kind: emit, name: opened}]
+      - name: see-refused
+        from: requested
+        to: refused
+        trigger: {kind: receive, channel: api_cli, message: refused}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: refused}]
+      - name: see-failed
+        from: requested
+        to: failed
+        trigger: {kind: receive, channel: api_cli, message: failed}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: failed}]
+      - name: see-lost-before-open
+        from: requested
+        to: lost
+        trigger: {kind: receive, channel: api_cli, message: lost}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: lost}]
+      - name: cancel-before-open
+        from: requested
+        to: cancelling
+        trigger: {kind: input, name: cancel}
+        effects:
+          - kind: send
+            channel: cli_api
+            message: cancel
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-cancel}
+            payload: {}
+      # UNMAPPED: OPEN: does exec carry a tty flag and window resize? Not
+      # modelled; stdin is at most one chunk.
+      - name: send-stdin
+        from: open
+        to: open
+        trigger: {kind: input, name: type}
+        guards:
+          - {left: {kind: local, field: typed}, right: {kind: literal, value: false}}
+        effects:
+          - {kind: set, field: typed, value: {kind: literal, value: true}}
+          - kind: send
+            channel: cli_api
+            message: stdin
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: stdin-1}
+            payload: {}
+      - name: see-output
+        from: open
+        to: open
+        trigger: {kind: receive, channel: api_cli, message: data}
+        effects: [{kind: emit, name: output}]
+      - name: see-exited
+        from: open
+        to: exited
+        trigger: {kind: receive, channel: api_cli, message: exited}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: exited}]
+      - name: see-lost
+        from: open
+        to: lost
+        trigger: {kind: receive, channel: api_cli, message: lost}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: lost}]
+      - name: cancel-open
+        from: open
+        to: cancelling
+        trigger: {kind: input, name: cancel}
+        effects:
+          - kind: send
+            channel: cli_api
+            message: cancel
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-cancel}
+            payload: {}
+      # After a cancel the cli takes whichever final outcome the api sends;
+      # an outcome already on its way (refused, failed, exited, lost) wins
+      # over cancelled.
+      - name: ignore-opened-after-cancel
+        from: cancelling
+        to: cancelling
+        trigger: {kind: receive, channel: api_cli, message: opened}
+      - name: ignore-output-after-cancel
+        from: cancelling
+        to: cancelling
+        trigger: {kind: receive, channel: api_cli, message: data}
+      - name: see-cancelled
+        from: cancelling
+        to: cancelled
+        trigger: {kind: receive, channel: api_cli, message: cancelled}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: cancelled}]
+      - name: see-refused-after-cancel
+        from: cancelling
+        to: refused
+        trigger: {kind: receive, channel: api_cli, message: refused}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: refused}]
+      - name: see-failed-after-cancel
+        from: cancelling
+        to: failed
+        trigger: {kind: receive, channel: api_cli, message: failed}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: failed}]
+      - name: see-exited-after-cancel
+        from: cancelling
+        to: exited
+        trigger: {kind: receive, channel: api_cli, message: exited}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: exited}]
+      - name: see-lost-after-cancel
+        from: cancelling
+        to: lost
+        trigger: {kind: receive, channel: api_cli, message: lost}
+        effects: [{kind: emit, name: outcome}, {kind: emit, name: lost}]
+
+  - name: api
+    initial: idle
+    states: [idle, authorizing, forwarding, streaming, cancelling, done]
+    fields:
+      - {name: instance, type: String, initial: ""}
+    inputs:
+      - {name: allow, fields: []}
+      - {name: refuse, fields: []}
+      - {name: session_lost, fields: []}
+    transitions:
+      # A cancel that arrives while authorizing waits in the channel until
+      # the decision is taken.
+      - name: take-exec
+        from: idle
+        to: authorizing
+        trigger: {kind: receive, channel: cli_api, message: exec}
+        effects:
+          - {kind: set, field: instance, value: {kind: input, field: instance}}
+      - name: authorize-allowed
+        from: authorizing
+        to: forwarding
+        trigger: {kind: input, name: allow}
+        effects:
+          - kind: send
+            channel: api_node
+            message: open
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-open}
+            payload: {instance: {kind: local, field: instance}}
+      - name: authorize-refused
+        from: authorizing
+        to: done
+        trigger: {kind: input, name: refuse}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: refused
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      - name: relay-opened
+        from: forwarding
+        to: streaming
+        trigger: {kind: receive, channel: node_api, message: opened}
+        effects:
+          - kind: send
+            channel: api_cli
+            message: opened
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-opened}
+            payload: {}
+      - name: relay-failed
+        from: forwarding
+        to: done
+        trigger: {kind: receive, channel: node_api, message: failed}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: failed
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      - name: relay-stdin
+        from: streaming
+        to: streaming
+        trigger: {kind: receive, channel: cli_api, message: stdin}
+        effects:
+          - kind: send
+            channel: api_node
+            message: stdin
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: stdin-1}
+            payload: {}
+      - name: relay-output
+        from: streaming
+        to: streaming
+        trigger: {kind: receive, channel: node_api, message: data}
+        effects:
+          - kind: send
+            channel: api_cli
+            message: data
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: input, field: chunk}
+            payload: {chunk: {kind: input, field: chunk}}
+      - name: relay-exited
+        from: streaming
+        to: done
+        trigger: {kind: receive, channel: node_api, message: exited}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: exited
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {code: {kind: input, field: code}}
+      - name: forward-cancel-before-open
+        from: forwarding
+        to: cancelling
+        trigger: {kind: receive, channel: cli_api, message: cancel}
+        effects:
+          - kind: send
+            channel: api_node
+            message: cancel
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-cancel}
+            payload: {}
+      - name: forward-cancel
+        from: streaming
+        to: cancelling
+        trigger: {kind: receive, channel: cli_api, message: cancel}
+        effects:
+          - kind: send
+            channel: api_node
+            message: cancel
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-cancel}
+            payload: {}
+      # UNMAPPED: OPEN: is output that arrives after a cancel still relayed
+      # to the cli? Modelled: dropped at the api.
+      - name: drop-opened-after-cancel
+        from: cancelling
+        to: cancelling
+        trigger: {kind: receive, channel: node_api, message: opened}
+      - name: drop-output-after-cancel
+        from: cancelling
+        to: cancelling
+        trigger: {kind: receive, channel: node_api, message: data}
+      - name: confirm-cancelled
+        from: cancelling
+        to: done
+        trigger: {kind: receive, channel: node_api, message: killed}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: cancelled
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      - name: exited-during-cancel
+        from: cancelling
+        to: done
+        trigger: {kind: receive, channel: node_api, message: exited}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: exited
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {code: {kind: input, field: code}}
+      - name: failed-during-cancel
+        from: cancelling
+        to: done
+        trigger: {kind: receive, channel: node_api, message: failed}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: failed
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      # Session loss: the cli gets lost, never silence.
+      - name: lost-while-forwarding
+        from: forwarding
+        to: done
+        trigger: {kind: input, name: session_lost}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: lost
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      - name: lost-while-streaming
+        from: streaming
+        to: done
+        trigger: {kind: input, name: session_lost}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: lost
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      - name: lost-while-cancelling
+        from: cancelling
+        to: done
+        trigger: {kind: input, name: session_lost}
+        effects:
+          - {kind: emit, name: final}
+          - kind: send
+            channel: api_cli
+            message: lost
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      # After the final outcome the api absorbs everything still in flight.
+      - {name: absorb-stdin, from: done, to: done, trigger: {kind: receive, channel: cli_api, message: stdin}}
+      - {name: absorb-cancel, from: done, to: done, trigger: {kind: receive, channel: cli_api, message: cancel}}
+      - {name: absorb-opened, from: done, to: done, trigger: {kind: receive, channel: node_api, message: opened}}
+      - {name: absorb-output, from: done, to: done, trigger: {kind: receive, channel: node_api, message: data}}
+      - {name: absorb-exited, from: done, to: done, trigger: {kind: receive, channel: node_api, message: exited}}
+      - {name: absorb-failed, from: done, to: done, trigger: {kind: receive, channel: node_api, message: failed}}
+      - {name: absorb-killed, from: done, to: done, trigger: {kind: receive, channel: node_api, message: killed}}
+
+  - name: node
+    initial: idle
+    states: [idle, opening, running, done]
+    fields:
+      - {name: written, type: Integer, initial: 0}
+    inputs:
+      - {name: started, fields: []}
+      - {name: start_failed, fields: []}
+      - {name: write, fields: []}
+      - {name: exit, fields: []}
+    transitions:
+      # A cancel that arrives while opening waits in the channel until the
+      # process started or failed.
+      - name: take-open
+        from: idle
+        to: opening
+        trigger: {kind: receive, channel: api_node, message: open}
+      - name: open-process
+        from: opening
+        to: running
+        trigger: {kind: input, name: started}
+        effects:
+          - kind: send
+            channel: node_api
+            message: opened
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-opened}
+            payload: {}
+      # UNMAPPED: OPEN: which reasons does failed carry (instance not
+      # running, command not found, isolation refusal)? Modelled: none.
+      - name: open-failed
+        from: opening
+        to: done
+        trigger: {kind: input, name: start_failed}
+        effects:
+          - kind: send
+            channel: node_api
+            message: failed
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      # Output abstracted as at most one chunk (the guard keeps the bound;
+      # two chunks exhausted 20000 explored states).
+      - name: write-first-chunk
+        from: running
+        to: running
+        trigger: {kind: input, name: write}
+        guards:
+          - {left: {kind: local, field: written}, right: {kind: literal, value: 0}}
+        effects:
+          - {kind: set, field: written, value: {kind: literal, value: 1}}
+          - kind: send
+            channel: node_api
+            message: data
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: output-1}
+            payload: {chunk: {kind: literal, value: output-1}}
+      - name: take-stdin
+        from: running
+        to: running
+        trigger: {kind: receive, channel: api_node, message: stdin}
+      # One exit code (0) stands for every code; the api relays the typed
+      # field unchanged.
+      - name: process-exits
+        from: running
+        to: done
+        trigger: {kind: input, name: exit}
+        effects:
+          - kind: send
+            channel: node_api
+            message: exited
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {code: {kind: literal, value: 0}}
+      - name: kill-process
+        from: running
+        to: done
+        trigger: {kind: receive, channel: api_node, message: cancel}
+        effects:
+          - kind: send
+            channel: node_api
+            message: killed
+            exchange: {kind: literal, value: exec-1}
+            logical: {kind: literal, value: exec-final}
+            payload: {}
+      - {name: absorb-stdin, from: done, to: done, trigger: {kind: receive, channel: api_node, message: stdin}}
+      - {name: absorb-cancel, from: done, to: done, trigger: {kind: receive, channel: api_node, message: cancel}}
+
+messages:
+  - {name: exec, fields: [{name: instance, type: String}]}
+  - {name: open, fields: [{name: instance, type: String}]}
+  - {name: opened, fields: []}
+  - {name: refused, fields: []}
+  - {name: failed, fields: []}
+  - {name: stdin, fields: []}
+  - {name: data, fields: [{name: chunk, type: String}]}
+  - {name: exited, fields: [{name: code, type: Integer}]}
+  - {name: cancel, fields: []}
+  - {name: killed, fields: []}
+  - {name: cancelled, fields: []}
+  - {name: lost, fields: []}
+
+channels:
+  - {name: cli_api, from: cli, to: api, ordering: fifo, capacity: 4, loss: false, duplication: false}
+  - {name: api_cli, from: api, to: cli, ordering: fifo, capacity: 4, loss: false, duplication: false}
+  - {name: api_node, from: api, to: node, ordering: fifo, capacity: 4, loss: false, duplication: false}
+  - {name: node_api, from: node, to: api, ordering: fifo, capacity: 4, loss: false, duplication: false}
+
+properties:
+  - {kind: event_count, name: one-outcome-at-cli, participant: cli, event: outcome, max: 1}
+  - {kind: event_count, name: one-final-from-api, participant: api, event: final, max: 1}
+  - {kind: state_implication, name: exited-only-after-api-done, participant: cli, state: exited, other: api, other_state: done}
+  - {kind: state_implication, name: lost-only-after-api-done, participant: cli, state: lost, other: api, other_state: done}
+  - {kind: state_implication, name: cancelled-only-after-node-done, participant: cli, state: cancelled, other: node, other_state: done}

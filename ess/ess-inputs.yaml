@@ -1,0 +1,27 @@
+format: ess-inputs/2
+requires: ess 0.99.2
+specification:
+  - system.yaml
+  - components.yaml
+  - 0-foundation/shared.yaml
+  - 1-infrastructure/infrastructure.yaml
+  - 1-infrastructure/inventory.yaml
+  - 2-tenancy/accounts.yaml
+  - 2-tenancy/access.yaml
+  - 3-resources/resources.yaml
+  - 3-resources/artifacts.yaml
+  - 3-resources/cluster.yaml
+  - 4-applications/formations.yaml
+  - 4-applications/workloads.yaml
+  - 5-runtime/claims.yaml
+  - 5-runtime/scheduling.yaml
+  - 5-runtime/nodes.yaml
+  - 5-runtime/identity.yaml
+  - 5-runtime/secrets.yaml
+  - 5-runtime/observability.yaml
+  - 6-delivery/deployments.yaml
+  - 6-delivery/pipelines.yaml
+  - 7-services/catalog.yaml
+  - 8-economy/metering.yaml
+  - 9-actors/actors.yaml
+scenarios: []

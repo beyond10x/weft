@@ -1,0 +1,546 @@
+# Inventory: the operator-owned resource classes and the devices the nodes report. Source:
+# docs/domain-sketch.md section 6 "Resources" (lines 384-405), the GPU wipe of section 10 (line
+# 459) and the node reports of section 11 (lines 468-470). Moved here from weft.resources
+# (docs/layers.md, "Splits the graph shows"): nothing here has a tenant, and this domain names only
+# weft.cluster and weft.shared.
+#
+# Decisions this file takes:
+# - Compute classes with concrete units get an entity: Device (gpu, gpu-slice, accelerator,
+#   interconnect). `cpu`, `memory`, `scratch` and `cache` are amounts on a node and need no unit
+#   record (see weft.resources for the storage units and weft.claims for the network and security
+#   classes).
+# - A device does not store the binding that holds it: a binding is tenant-owned and lives in a
+#   higher layer. The binding names its devices (weft.claims.Binding.device_ids).
+domain: weft.inventory
+
+summary: >-
+  The operator-owned inventory of what the nodes offer: resource classes and the devices each node
+  reports. No tenant owns anything here.
+
+naming:
+  wire: weft
+  display: Inventory
+
+types:
+  # Section 6 line 389: `unit`: count, quantity or attachment.
+  - name: weft.inventory.ResourceUnit
+    kind: enum
+    variants: [Count, Quantity, Attachment]
+
+  # Section 6 line 392: `scope`: node-local or movable within a zone or cluster.
+  - name: weft.inventory.ResourceScope
+    kind: enum
+    variants: [NodeLocal, Zone, Cluster]
+
+  # Section 6 line 393: `lifetime`: dies with the instance, or lives on its own.
+  - name: weft.inventory.ResourceLifetime
+    kind: enum
+    variants: [Instance, Independent]
+
+  # Section 6 lines 399-405: the groups of the class list. Limits are metering's.
+  - name: weft.inventory.ResourceCategory
+    kind: enum
+    variants: [Compute, Storage, Network, Security]
+
+entities:
+  # Section 6 lines 384-393: `ResourceClass` with five attributes; the scheduler reads only these.
+  # OPEN: is the class list of lines 399-404 seeded when a cluster is created, and may a
+  # ClusterOperator define classes beyond it (a vendor accelerator)? Taken: classes are defined by
+  # the ClusterOperator through DefineResourceClass; seeding is the cluster domain's question.
+  # OPEN: which base unit an amount of each class counts in (millicores, bytes, devices). Taken:
+  # an amount is an Integer in the class's base unit, and the unit is not stored.
+  - name: weft.inventory.ResourceClass
+    naming:
+      summary: A kind of resource a workload can claim, described by the five attributes the scheduler reads.
+    identity:
+      name: class_name
+      type: weft.shared.ResourceClassName
+    fields:
+      - name: category
+        type: weft.inventory.ResourceCategory
+      - name: unit
+        type: weft.inventory.ResourceUnit
+      # Section 6 line 390: whole units only (false), or slices (true).
+      - name: divisible
+        type: Boolean
+      # Section 6 line 391. The sharing modes a claim of this class may ask for; a GPU admits
+      # [Exclusive], a volume [Exclusive, SharedReadOnly], a filesystem all three.
+      - name: sharing
+        type: List<weft.shared.Sharing>
+      - name: scope
+        type: weft.inventory.ResourceScope
+      - name: lifetime
+        type: weft.inventory.ResourceLifetime
+    lifecycle:
+      initial: Active
+      states:
+        - {name: Active, summary: Claims of this class are accepted.}
+        - {name: Retired, summary: No new claim of this class is accepted.}
+      terminal: [Retired]
+      transitions:
+        - {name: retire, from: [Active], to: Retired}
+
+  # Brief and section 6 line 399 (`gpu`, `gpu-slice`, `accelerator`, `interconnect`): a concrete
+  # unit on a node. Section 11 line 470: the node agent reports what it observed, so devices are
+  # created and moved by its reports. Section 10 line 459: a GPU is wiped between tenants; the
+  # wipe is the state Wiping.
+  # OPEN: wipe only when the next tenant differs, or after every binding? Taken: after every
+  # binding, and once before the first binding (a new device starts in Wiping), which is the
+  # stricter of the two.
+  # OPEN: who decides how a GPU is cut into slices (a ClusterOperator setting on the node pool, or
+  # the scheduler on demand)? Taken: the node agent reports a GPU as Sliced and reports each slice
+  # as a device with `parent_device_id`; a Sliced GPU is never bound whole.
+  # OPEN: a device the node reports gone or faulted while bound leaves its binding Active; the
+  # scheduling domain decides how the instance is moved. Not decided here.
+  - name: weft.inventory.Device
+    naming:
+      summary: One concrete unit on a node (a GPU, a GPU slice, an accelerator, an interconnect domain), bound to at most one claim at a time.
+    identity:
+      name: device_id
+      type: weft.shared.DeviceId
+    fields:
+      - name: node_id
+        type: weft.shared.NodeId
+      # One of `gpu`, `gpu-slice`, `accelerator`, `interconnect`.
+      - name: class_name
+        type: weft.shared.ResourceClassName
+      # The identifier the node reads from the hardware (a GPU UUID, a PCI address).
+      - name: hardware_id
+        type: String
+      - name: vendor
+        type: String
+      - name: model
+        type: String
+      - name: memory_bytes
+        type: Optional<Integer>
+      - name: driver_version
+        type: Optional<String>
+      # A GPU slice names the GPU it is cut from.
+      - name: parent_device_id
+        type: Optional<weft.shared.DeviceId>
+      # A GPU or accelerator names the interconnect domain (an `interconnect` device) it is in.
+      - name: interconnect_id
+        type: Optional<weft.shared.DeviceId>
+    relations:
+      # Section 11 line 470: the node reports the device; the device record is created and removed
+      # by those reports, not by the node's own lifecycle, so it references the node.
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: class
+        kind: references
+        target: weft.inventory.ResourceClass
+        cardinality: one
+        via: class_name
+      - name: parent
+        kind: references
+        target: weft.inventory.Device
+        cardinality: one
+        via: parent_device_id
+      - name: interconnect
+        kind: references
+        target: weft.inventory.Device
+        cardinality: one
+        via: interconnect_id
+    lifecycle:
+      initial: Wiping
+      states:
+        - {name: Wiping, summary: Being cleared of the last holder's data; not bindable.}
+        - {name: Free, summary: Wiped and bindable.}
+        - {name: Bound, summary: Held by exactly one Active binding.}
+        - {name: Sliced, summary: A GPU cut into slices; only its slices are bindable.}
+        - {name: Faulted, summary: Reported faulty by its node; not bindable.}
+        - {name: Removed, summary: No longer present on its node.}
+      terminal: [Removed]
+      transitions:
+        - {name: wiped, from: [Wiping], to: Free}
+        - {name: bind, from: [Free], to: Bound}
+        - {name: release, from: [Bound], to: Wiping, summary: Released by its binding; wiped before the next one.}
+        - {name: slice, from: [Free], to: Sliced}
+        - {name: fault, from: [Wiping, Free, Bound, Sliced], to: Faulted}
+        - {name: reset, from: [Faulted], to: Wiping}
+        - {name: remove, from: [Wiping, Free, Bound, Sliced, Faulted], to: Removed}
+
+errors:
+  - name: weft.inventory.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.inventory.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.inventory.ClassExists
+    summary: A resource class of this name is already defined.
+  - name: weft.inventory.NoSharingMode
+    summary: A class must admit at least one sharing mode.
+  - name: weft.inventory.ClassInUse
+    summary: Claims of this class are still pending or bound, so it is not retired.
+  - name: weft.inventory.UnknownClass
+    summary: No resource class of this name is defined.
+  - name: weft.inventory.ClassRetired
+    summary: The resource class is retired and takes no new claim or device.
+  - name: weft.inventory.DeviceKnown
+    summary: The node already reported a present device with this hardware identifier.
+  - name: weft.inventory.ParentNotSliced
+    summary: The GPU a slice names is missing, on another node, or not Sliced.
+  - name: weft.inventory.UnknownInterconnect
+    summary: The interconnect domain the device names is not a device of the same node.
+
+events:
+  - name: weft.inventory.ResourceClassDefined
+    fields:
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: category, type: weft.inventory.ResourceCategory}
+      - {name: unit, type: weft.inventory.ResourceUnit}
+      - {name: divisible, type: Boolean}
+      - {name: sharing, type: List<weft.shared.Sharing>}
+      - {name: scope, type: weft.inventory.ResourceScope}
+      - {name: lifetime, type: weft.inventory.ResourceLifetime}
+
+  - name: weft.inventory.ResourceClassRetired
+    fields:
+      - {name: class_name, type: weft.shared.ResourceClassName}
+
+  - name: weft.inventory.DeviceReported
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: hardware_id, type: String}
+      - {name: vendor, type: String}
+      - {name: model, type: String}
+
+  - name: weft.inventory.DeviceWiped
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+
+  - name: weft.inventory.DeviceSliced
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+
+  - name: weft.inventory.DeviceFaulted
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+      - {name: reason, type: String}
+
+  - name: weft.inventory.DeviceReset
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+
+  - name: weft.inventory.DeviceRemoved
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+
+commands:
+  # Section 6 lines 384-393 and 397-405.
+  - name: weft.inventory.DefineResourceClass
+    naming:
+      display: Define a resource class
+    input:
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: category, type: weft.inventory.ResourceCategory}
+      - {name: unit, type: weft.inventory.ResourceUnit}
+      - {name: divisible, type: Boolean}
+      - {name: sharing, type: List<weft.shared.Sharing>}
+      - {name: scope, type: weft.inventory.ResourceScope}
+      - {name: lifetime, type: weft.inventory.ResourceLifetime}
+    outcomes:
+      - name: no-sharing-mode
+        when: sharing.count == 0
+        error: weft.inventory.NoSharingMode
+      - name: exists
+        when_related:
+          entity: weft.inventory.ResourceClass
+          where: class_name == input.class_name
+          exists: true
+        error: weft.inventory.ClassExists
+      - name: defined
+        creates: weft.inventory.ResourceClass
+        instance: class_name
+        sets:
+          category: input.category
+          unit: input.unit
+          divisible: input.divisible
+          sharing: input.sharing
+          scope: input.scope
+          lifetime: input.lifetime
+        emits: [weft.inventory.ResourceClassDefined]
+        payload:
+          weft.inventory.ResourceClassDefined:
+            class_name: input.class_name
+            category: input.category
+            unit: input.unit
+            divisible: input.divisible
+            sharing: input.sharing
+            scope: input.scope
+            lifetime: input.lifetime
+
+  # Section 6 lines 384-393. A class with open claims is not retired, so no bound unit loses the
+  # class it was bound under. Claims are tenant-owned (weft.claims, a higher layer), so this
+  # domain cannot read them: the check is an external refusal.
+  - name: weft.inventory.RetireResourceClass
+    naming:
+      display: Retire a resource class
+    input:
+      - {name: class_name, type: weft.shared.ResourceClassName}
+    outcomes:
+      - name: no-such-class
+        unknown_instance: true
+        error: weft.inventory.NotFound
+      - name: in-use
+        external: claims of this class are still pending or bound
+        error: weft.inventory.ClassInUse
+      - name: retired
+        moves: weft.inventory.ResourceClass.retire
+        instance: class_name
+        emits: [weft.inventory.ResourceClassRetired]
+        payload:
+          weft.inventory.ResourceClassRetired:
+            class_name: input.class_name
+      - name: wrong-state
+        wrong_state: true
+        error: weft.inventory.StateConflict
+
+  # Brief (Device) and section 11 lines 468-470: the agent reports a device it observed. A new
+  # device starts in Wiping (see the OPEN on Device).
+  # Synthesis gap (ess 0.99.2, 2026-11-26): no outcome of this command gets a scenario
+  # (ESS-SYNTH-003), and so no Device row exists for the moves below (ESS-SYNTH-004). Cause: the
+  # row-set guard `known` over Device beside a `via:` guard over an Optional Device reference
+  # (`parent_device_id`, `interconnect_id`); synthesis arranges a parent row instead of leaving the
+  # absent reference out. A two-command model with only those two guards reproduces it. The guards
+  # stay: each refuses a report the stored rows contradict.
+  - name: weft.inventory.ReportDevice
+    naming:
+      display: Report a device
+    input:
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: hardware_id, type: String}
+      - {name: vendor, type: String}
+      - {name: model, type: String}
+      - {name: memory_bytes, type: Optional<Integer>}
+      - {name: driver_version, type: Optional<String>}
+      - {name: parent_device_id, type: Optional<weft.shared.DeviceId>}
+      - {name: interconnect_id, type: Optional<weft.shared.DeviceId>}
+    outcomes:
+      - name: unknown-class
+        when_related: {via: input.class_name, exists: false}
+        error: weft.inventory.UnknownClass
+      - name: parent-missing
+        when_related: {via: input.parent_device_id, exists: false}
+        error: weft.inventory.ParentNotSliced
+      - name: interconnect-missing
+        when_related: {via: input.interconnect_id, exists: false}
+        error: weft.inventory.UnknownInterconnect
+      - name: known
+        when_related:
+          entity: weft.inventory.Device
+          where:
+            all:
+              - node_id == input.node_id
+              - hardware_id == input.hardware_id
+              - state != Removed
+          exists: true
+        error: weft.inventory.DeviceKnown
+      - name: class-retired
+        when_related: {via: input.class_name, predicate: state == Retired}
+        error: weft.inventory.ClassRetired
+      - name: parent-not-sliced
+        when_related:
+          via: input.parent_device_id
+          predicate:
+            any:
+              - state != Sliced
+              - node_id != input.node_id
+        error: weft.inventory.ParentNotSliced
+      - name: interconnect-elsewhere
+        when_related:
+          via: input.interconnect_id
+          predicate: node_id != input.node_id
+        error: weft.inventory.UnknownInterconnect
+      - name: reported
+        creates: weft.inventory.Device
+        instance: device_id
+        sets:
+          node_id: input.node_id
+          class_name: input.class_name
+          hardware_id: input.hardware_id
+          vendor: input.vendor
+          model: input.model
+          memory_bytes: input.memory_bytes
+          driver_version: input.driver_version
+          parent_device_id: input.parent_device_id
+          interconnect_id: input.interconnect_id
+        emits: [weft.inventory.DeviceReported]
+        payload:
+          weft.inventory.DeviceReported:
+            device_id: {generated: true}
+            node_id: input.node_id
+            class_name: input.class_name
+            hardware_id: input.hardware_id
+            vendor: input.vendor
+            model: input.model
+
+  # Section 10 line 459: the wipe ends; the device is bindable again.
+  - name: weft.inventory.ReportDeviceWiped
+    naming:
+      display: Report a device wiped
+    input:
+      - {name: device_id, type: weft.shared.DeviceId}
+    outcomes:
+      - name: no-such-device
+        unknown_instance: true
+        error: weft.inventory.NotFound
+      - name: wiped
+        moves: weft.inventory.Device.wiped
+        instance: device_id
+        emits: [weft.inventory.DeviceWiped]
+        payload:
+          weft.inventory.DeviceWiped:
+            device_id: input.device_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.inventory.StateConflict
+
+  # Section 6 line 399 `gpu-slice` and line 390 `divisible`: the agent reports a GPU cut into
+  # slices. See the OPEN on Device.
+  - name: weft.inventory.ReportDeviceSliced
+    naming:
+      display: Report a GPU sliced
+    input:
+      - {name: device_id, type: weft.shared.DeviceId}
+    outcomes:
+      - name: no-such-device
+        unknown_instance: true
+        error: weft.inventory.NotFound
+      - name: sliced
+        moves: weft.inventory.Device.slice
+        instance: device_id
+        emits: [weft.inventory.DeviceSliced]
+        payload:
+          weft.inventory.DeviceSliced:
+            device_id: input.device_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.inventory.StateConflict
+
+  # Section 11 line 470: the agent reports a fault it observed (a failed wipe included).
+  - name: weft.inventory.ReportDeviceFault
+    naming:
+      display: Report a device fault
+    input:
+      - {name: device_id, type: weft.shared.DeviceId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-device
+        unknown_instance: true
+        error: weft.inventory.NotFound
+      - name: faulted
+        moves: weft.inventory.Device.fault
+        instance: device_id
+        emits: [weft.inventory.DeviceFaulted]
+        payload:
+          weft.inventory.DeviceFaulted:
+            device_id: input.device_id
+            reason: input.reason
+      - name: wrong-state
+        wrong_state: true
+        error: weft.inventory.StateConflict
+
+  # Actors line 102 (the ClusterOperator runs nodes): a repaired device goes back through the wipe.
+  - name: weft.inventory.ResetDevice
+    naming:
+      display: Reset a faulted device
+    input:
+      - {name: device_id, type: weft.shared.DeviceId}
+    outcomes:
+      - name: no-such-device
+        unknown_instance: true
+        error: weft.inventory.NotFound
+      - name: reset
+        moves: weft.inventory.Device.reset
+        instance: device_id
+        emits: [weft.inventory.DeviceReset]
+        payload:
+          weft.inventory.DeviceReset:
+            device_id: input.device_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.inventory.StateConflict
+
+  # Section 11 line 470: the agent reports a device no longer present, from any state: it reports
+  # what it observed. A binding on it stays Active (see the OPEN on Device).
+  - name: weft.inventory.ReportDeviceRemoved
+    naming:
+      display: Report a device removed
+    input:
+      - {name: device_id, type: weft.shared.DeviceId}
+    outcomes:
+      - name: no-such-device
+        unknown_instance: true
+        error: weft.inventory.NotFound
+      - name: removed
+        moves: weft.inventory.Device.remove
+        instance: device_id
+        emits: [weft.inventory.DeviceRemoved]
+        payload:
+          weft.inventory.DeviceRemoved:
+            device_id: input.device_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.inventory.StateConflict
+
+  # Section 6 line 395 and section 10 line 459: no command of this domain binds or releases a
+  # device. weft.claims (layer 5) moves Device rows itself, all or nothing per binding:
+  # weft.claims.CommitBinding moves every device of the binding Free -> Bound (Device.bind) and
+  # refuses the whole commit when one is not Free or not on the binding's node;
+  # weft.claims.ReleaseBinding moves every device of an Active binding that is still Bound
+  # Bound -> Wiping (Device.release). ReportDeviceWiped above moves Wiping -> Free.
+
+views:
+  # Section 6 line 387: the scheduler reads only these attributes.
+  - name: weft.inventory.ResourceClasses
+    source: weft.inventory.ResourceClass
+    consistency: read_your_writes
+    fields:
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: category, type: weft.inventory.ResourceCategory}
+      - {name: unit, type: weft.inventory.ResourceUnit}
+      - {name: divisible, type: Boolean}
+      - {name: sharing, type: List<weft.shared.Sharing>}
+      - {name: scope, type: weft.inventory.ResourceScope}
+      - {name: lifetime, type: weft.inventory.ResourceLifetime}
+      - {name: state, type: weft.inventory.ResourceClass.State}
+
+  # Brief (Device) and section 9 line 444 (a node reports capacity): the devices of one node.
+  - name: weft.inventory.NodeDevices
+    source: weft.inventory.Device
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: hardware_id, type: String}
+      - {name: vendor, type: String}
+      - {name: model, type: String}
+      - {name: memory_bytes, type: Optional<Integer>}
+      - {name: driver_version, type: Optional<String>}
+      - {name: parent_device_id, type: Optional<weft.shared.DeviceId>}
+      - {name: interconnect_id, type: Optional<weft.shared.DeviceId>}
+      - {name: state, type: weft.inventory.Device.State}
+
+  # Section 10 line 451 (the scheduler's input) and section 6 line 387: the bindable devices.
+  - name: weft.inventory.FreeDevices
+    source: weft.inventory.Device
+    consistency: read_your_writes
+    filter: state == Free
+    fields:
+      - {name: device_id, type: weft.shared.DeviceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: class_name, type: weft.shared.ResourceClassName}
+      - {name: vendor, type: String}
+      - {name: model, type: String}
+      - {name: memory_bytes, type: Optional<Integer>}
+      - {name: interconnect_id, type: Optional<weft.shared.DeviceId>}

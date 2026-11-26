@@ -1,0 +1,127 @@
+format: weft-sim-experiment/1
+name: node-loss
+summary: >-
+  One zone, one pool, two joined nodes with open sessions that heartbeat. Fault: node 0 goes
+  silent and is cordoned. The control plane's level step (sketch § 14 R3: SilentNodeSessions ->
+  LoseNodeSession, ExpiredLeases -> ReleaseAssignment) is driven as the controller would, once a
+  tick (30 s). Convergence: the gap views are empty within converge_within ticks of the fault.
+seed: 7
+
+vars:
+  zone: z1
+  hb_every: 1
+  silent_from: 2
+
+setup:
+  - label: create-cloud
+    command: weft.infrastructure.CreateCloud
+    actor: weft.actors.ClusterOperator
+    input: {name: sim}
+    expect: created
+    bind: {cloud_id: cloud_id}
+  - label: declare-zone
+    command: weft.infrastructure.DeclareZone
+    actor: weft.actors.ClusterOperator
+    input: {zone: "${zone}", cloud_id: "${cloud_id}"}
+    expect: declared
+  - label: create-pool
+    command: weft.infrastructure.CreateNodePool
+    actor: weft.actors.ClusterOperator
+    input: {name: pool-a, zone: "${zone}", machine_type: m1, image: weft-node, min_size: 0, max_size: 4}
+    expect: created
+    bind: {node_pool_id: node_pool_id}
+  - label: provision-node
+    repeat: 2
+    command: weft.infrastructure.ProvisionPoolNode
+    actor: weft.actors.ClusterOperator
+    input: {node_pool_id: "${node_pool_id}", join_token_expires_at: "2026-01-01T06:00:00Z"}
+    expect: provisioned
+    bind: {"node_${i}": node_id, "token_${i}": join_token}
+  - label: join-node-0
+    command: weft.infrastructure.JoinNode
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_0}", join_token: "${token_0}"}
+    expect: joined
+  - label: join-node-1
+    command: weft.infrastructure.JoinNode
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_1}", join_token: "${token_1}"}
+    expect: joined
+  - label: open-session-0
+    command: weft.nodes.OpenNodeSession
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_0}", agent_version: "1.0", received_at: "${now}"}
+    expect: opened
+    bind: {session_0: session_id}
+  - label: open-session-1
+    command: weft.nodes.OpenNodeSession
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_1}", agent_version: "1.0", received_at: "${now}"}
+    expect: opened
+    bind: {session_1: session_id}
+  - label: create-tenant
+    command: weft.accounts.CreateTenant
+    actor: weft.actors.ClusterOperator
+    input: {name: acme}
+    expect: created
+    bind: {tenant_id: tenant_id}
+
+traffic:
+  - name: heartbeat-node-0
+    every: "${hb_every}"
+    until: "${silent_from}"
+    step:
+      label: heartbeat-0
+      command: weft.nodes.Heartbeat
+      actor: weft.actors.NodeAgent
+      input: {session_id: "${session_0}", node_id: "${node_0}", received_at: "${now}"}
+  - name: heartbeat-node-1
+    every: "${hb_every}"
+    step:
+      label: heartbeat-1
+      command: weft.nodes.Heartbeat
+      actor: weft.actors.NodeAgent
+      input: {session_id: "${session_1}", node_id: "${node_1}", received_at: "${now}"}
+
+ticks: 8
+faults:
+  - at: 3
+    kind: node_loss
+    steps:
+      - label: cordon-node-0
+        command: weft.infrastructure.CordonNode
+        actor: weft.actors.ClusterOperator
+        input: {node_id: "${node_0}"}
+
+controllers:
+  - name: r3-lose-silent-sessions
+    view: weft.nodes.SilentNodeSessions
+    command: weft.nodes.LoseNodeSession
+    actor: weft.actors.ControlPlane
+    input: {session_id: row.session_id}
+  - name: r3-release-expired-leases
+    view: weft.nodes.ExpiredLeases
+    command: weft.nodes.ReleaseAssignment
+    actor: weft.actors.ControlPlane
+    input: {assignment_id: row.assignment_id}
+converge_within: 6
+
+invariants: [idempotency, no-double-placement, quota-conservation, tenant-isolation]
+
+mutations:
+  - {name: fault-tick, kind: fault, point: faults.0.at, values: [2, 3, 5]}
+  - {name: heartbeat-every, kind: var, point: hb_every, values: [1, 2, 3]}
+
+search:
+  mode: exhaustive
+  limit: 64
+  weights: {pattern-matches: -10, steps-to-converge: -1, unconverged: -20, violations: -5}
+  gates: [setup-failures]
+
+find:
+  gaps: true
+  patterns:
+    - name: healthy-node-lost
+      rows:
+        - {entity: weft.nodes.NodeSession, state: Lost}
+        - {entity: weft.nodes.NodeSession, state: Lost}

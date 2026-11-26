@@ -1,0 +1,67 @@
+version: '3'
+
+tasks:
+  default:
+    cmds: [{task: check}]
+
+  check:
+    desc: The gate. Validate the ESS specification and hold its layers.
+    cmds:
+      - task: spec
+      - task: layers
+
+  spec:
+    desc: Validate the ESS domain model.
+    cmds:
+      - ess specify validate --path ess --strict-requires
+
+  layers:
+    desc: Fail when a domain refers to a domain of a higher layer (docs/layers.md).
+    cmds:
+      - tools/check-layers.sh
+
+  graph:
+    desc: Print the domain reference graph with counts, then the layer check.
+    cmds:
+      - tools/check-layers.sh --graph
+
+  domain:
+    desc: Validate one domain with weft.shared only. Usage, task domain -- accounts
+    cmds:
+      - tools/check-domain.sh {{.CLI_ARGS}}
+
+  sim-build:
+    desc: Build weft-sim (tools/sim), the in-memory explorer and simulator.
+    dir: tools/sim
+    cmds:
+      - cargo build
+
+  sim-test:
+    desc: Test weft-sim. One test binary; a test over 60 s is killed, the step over 120 s fails.
+    dir: tools/sim
+    cmds:
+      - timeout 120 cargo nextest run
+
+  sim-explore:
+    desc: Explore the whole spec (measures; runs without slot). Usage, task sim-explore -- --serve
+    deps: [sim-build]
+    cmds:
+      - tools/sim/target/debug/weft-sim explore --spec ess --seed 1 --walks 2048 --steps 300 --threads 8 --out sim/out/explore {{.CLI_ARGS}}
+
+  sim-explore-from:
+    desc: Explore with every walk starting from the full setup, settled by its controllers (measures; runs without slot).
+    deps: [sim-build]
+    cmds:
+      - tools/sim/target/debug/weft-sim explore --spec ess --seed 1 --walks 1024 --steps 300 --threads 8 --from sim/experiments/full-setup.yaml --settle 12 --out sim/out/explore-from {{.CLI_ARGS}}
+
+  sim-explore-ticks:
+    desc: As sim-explore-from, with 1 step in 10 a tick of the setup's controllers; few walks, a tick costs about 1 s (measures; runs without slot).
+    deps: [sim-build]
+    cmds:
+      - tools/sim/target/debug/weft-sim explore --spec ess --seed 1 --walks 32 --steps 300 --threads 8 --from sim/experiments/full-setup.yaml --settle 12 --controller-share 0.1 --out sim/out/explore-ticks {{.CLI_ARGS}}
+
+  sim-experiments:
+    desc: Run every experiment in sim/experiments (measures; runs without slot).
+    deps: [sim-build]
+    cmds:
+      - for f in sim/experiments/*.yaml; do n=$(basename "$f" .yaml); tools/sim/target/debug/weft-sim simulate --spec ess --experiment "$f" --out "sim/out/$n" {{.CLI_ARGS}} || exit 1; done

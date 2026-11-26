@@ -1,0 +1,2687 @@
+# Deployments: what a user deploys, how weft translates it into a FormationRevision, and how a
+# revision reaches an environment as a release. Source: docs/domain-sketch.md section
+# "5. Deployments" (all of it), with "Goals, in order" items 2 to 5 and "Ecosystem formats".
+#
+# Goalpost (sketch, section 5, the owner 2026-11-26): the Helm chart of a Kubernetes SaaS product
+# deploys and runs on weft unchanged. The enum weft.deployments.KubernetesKind carries, per
+# object kind the sketch lists, whether it maps, is refused or is OPEN, so a coverage report
+# answers the goalpost per chart.
+domain: weft.deployments
+
+summary: >-
+  Deployment sources (weft, Compose, Helm, Kubernetes, ESS system, Loom agent), their
+  deterministic translation into formation revisions with a coverage report, and releases of a
+  revision to an environment: plans with simulation, ordered release steps, rollout strategies,
+  rollbacks and drift.
+
+naming:
+  wire: weft
+  display: Deployments
+
+types:
+  # Local identities. The sketch names these nouns only inside section 5; no other domain refers
+  # to them, so they are not in weft.shared.
+
+  # Section 5 "Deployment sources": the kinds. Sketch spelling in the comment.
+  - name: weft.deployments.SourceKind
+    kind: enum
+    variants:
+      - Weft        # weft: weft's own formation document (section 3)
+      - Compose     # compose: a Docker Compose file
+      - Helm        # helm: a Helm chart + values, rendered, then read as kubernetes
+      - Kubernetes  # kubernetes: a set of Kubernetes manifests
+      - EssSystem   # ess-system: an ESS system.yaml
+      - LoomAgent   # loom-agent: a loom.agent/1 document
+      - Training    # training (later): a ModelSpec program + corpus + data pipeline
+
+  # Section 5 "Translation": "source digest". The content digest of the source's bytes (for
+  # helm: the chart archive). Values files are digested apart (HelmValues).
+  - name: weft.deployments.SourceDigest
+    kind: newtype
+    of: String
+
+  # Section 5 "Translator: registered per source kind and version". The version of the source
+  # format the translator reads (Compose spec, Helm chart API, loom.agent/1, ess/37 ...).
+  - name: weft.deployments.SourceFormatVersion
+    kind: newtype
+    of: String
+
+  # Section 5 "Translation: source digest + translator version".
+  - name: weft.deployments.TranslatorVersion
+    kind: newtype
+    of: String
+
+  # Section 5 brief: "a helm source carries values per environment" (`--values prod.yaml`).
+  # Only the values file's digest is held here; its bytes are part of the source upload.
+  # OPEN: a values file that holds secret values (a common chart habit): refused, moved to
+  # secret custody, or allowed? Smallest safe answer taken: the translator reports each such
+  # value as a refused object (RefusalReason SecretValueInValues), so no value enters a revision.
+  - name: weft.deployments.HelmValues
+    kind: struct
+    fields:
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: values_digest
+        type: weft.deployments.SourceDigest
+
+  # Section 5 "A spec source can also be one component's package ...; then its translation
+  # becomes a sub-formation in that place."
+  - name: weft.deployments.EmbeddingPlace
+    kind: struct
+    fields:
+      - name: parent_source_id
+        type: weft.shared.DeploymentSourceId
+      - name: component
+        type: weft.shared.ComponentName
+
+  # Section 5 "CoverageReport: every object of the source with its outcome: mapped (to which
+  # formation element), mapped with loss (what was dropped), or refused (the named reason)."
+  - name: weft.deployments.CoverageOutcome
+    kind: enum
+    variants: [Mapped, MappedWithLoss, Refused]
+
+  # Section 5, the elements a source object maps to (sections 3, 4, 6, 7, 8). The element of the
+  # FormationRevision a coverage entry names.
+  - name: weft.deployments.FormationElementKind
+    kind: enum
+    variants:
+      - Component           # section 3/4: one workload
+      - ServiceShape        # section 4 Shape: Service
+      - StatefulService     # section 4 Shape: Service, stateful
+      - DaemonShape         # section 4 Shape: Daemon
+      - JobShape            # section 4 Shape: Job
+      - ScheduleShape       # section 4 Shape: Schedule
+      - Process             # section 4 "Inside one instance"
+      - Check               # section 4 Check
+      - InternalName        # section 3 InternalName
+      - Link                # section 3 Link
+      - BorderRoute         # section 3 Border Route
+      - Config              # section 3 Config
+      - SecretReference     # section 7 Secret; the value goes to secret custody, never here
+      - VolumeClaim         # section 6 volume claim
+      - ResourceClaim       # section 6 Claim (cpu, memory, gpu)
+      - WorkloadIdentity    # section 8 workload identity
+      - ScaleRule           # section 4 ScaleRule
+      - DisruptionBudget    # section 4 DisruptionBudget
+      - ReleaseStep         # section 5 ReleaseStep (Helm hooks)
+      - SubFormation        # section 5: a spec source embedded as one component's package
+      - Nothing             # a refused object maps to no element
+
+  # Section 5 "kubernetes" list, as the goalpost's checklist: per kind, whether it maps, is
+  # refused, or is OPEN in the sketch. A kind marked Open is refused until it is decided
+  # (security default: deny). A kind the sketch does not list is Unlisted, refused by name.
+  - name: weft.deployments.KindDisposition
+    kind: enum
+    variants: [Maps, Refused, Open]
+
+  - name: weft.deployments.KubernetesKind
+    kind: enum
+    attributes:
+      - {name: disposition, type: weft.deployments.KindDisposition}
+      - {name: element, type: weft.deployments.FormationElementKind}
+    variants:
+      # "Deployment -> Service shape; StatefulSet -> stateful Service; DaemonSet -> Daemon;
+      # Job -> Job; CronJob -> Schedule."
+      - {name: Deployment, attributes: {disposition: Maps, element: ServiceShape}}
+      - {name: StatefulSet, attributes: {disposition: Maps, element: StatefulService}}
+      - {name: DaemonSet, attributes: {disposition: Maps, element: DaemonShape}}
+      - {name: Job, attributes: {disposition: Maps, element: JobShape}}
+      - {name: CronJob, attributes: {disposition: Maps, element: ScheduleShape}}
+      # "Pod containers -> Processes; probes -> Checks." A bare Pod is not listed as a kind.
+      # OPEN: a bare Pod manifest (no controller): map to a Service of one replica, or refuse?
+      # Smallest safe answer taken: Open, so refused.
+      - {name: Pod, attributes: {disposition: Open, element: Nothing}}
+      # "Service -> InternalName + Link targets; Ingress -> Border Routes."
+      - {name: Service, attributes: {disposition: Maps, element: InternalName}}
+      - {name: Ingress, attributes: {disposition: Maps, element: BorderRoute}}
+      # "ConfigMap -> Config; Secret -> Secret (values go to secret custody, never into the
+      # formation document)."
+      - {name: ConfigMap, attributes: {disposition: Maps, element: Config}}
+      # OPEN: how a Secret manifest's value reaches secret custody (section 7: "a value is
+      # written once through the API"): does the translator write it, or must the deployer set
+      # it before apply? Taken: the revision holds a reference only; this domain never handles
+      # the value, and a missing value is the secrets domain's refusal at delivery.
+      - {name: Secret, attributes: {disposition: Maps, element: SecretReference}}
+      # "PersistentVolumeClaim -> volume claim; resource limits and nvidia.com/gpu -> claims."
+      - {name: PersistentVolumeClaim, attributes: {disposition: Maps, element: VolumeClaim}}
+      # "ServiceAccount -> workload identity; HorizontalPodAutoscaler -> ScaleRule;
+      # PodDisruptionBudget -> DisruptionBudget; NetworkPolicy -> Links."
+      - {name: ServiceAccount, attributes: {disposition: Maps, element: WorkloadIdentity}}
+      - {name: HorizontalPodAutoscaler, attributes: {disposition: Maps, element: ScaleRule}}
+      - {name: PodDisruptionBudget, attributes: {disposition: Maps, element: DisruptionBudget}}
+      - {name: NetworkPolicy, attributes: {disposition: Maps, element: Link}}
+      # "# OPEN: custom resources (CRDs) and operators, and workloads that call the Kubernetes
+      # API." The kinds below carry that OPEN point: refused until decided.
+      - {name: CustomResourceDefinition, attributes: {disposition: Open, element: Nothing}}
+      - {name: CustomResource, attributes: {disposition: Open, element: Nothing}}
+      - {name: Role, attributes: {disposition: Open, element: Nothing}}
+      - {name: RoleBinding, attributes: {disposition: Open, element: Nothing}}
+      - {name: ClusterRole, attributes: {disposition: Open, element: Nothing}}
+      - {name: ClusterRoleBinding, attributes: {disposition: Open, element: Nothing}}
+      # Any kind the sketch does not list (Namespace, PersistentVolume, StorageClass, webhook
+      # configurations, ...). OPEN: which further kinds common SaaS charts need.
+      - {name: Unlisted, attributes: {disposition: Refused, element: Nothing}}
+
+  # Section 5 "Refused by name: privileged pods, host paths, host network, kernel capabilities
+  # beyond the isolation level", and the OPEN kinds above. A refusal is always one of these names.
+  - name: weft.deployments.RefusalReason
+    kind: enum
+    variants:
+      - PrivilegedPod            # securityContext.privileged
+      - HostPath                 # a hostPath volume
+      - HostNetwork              # hostNetwork: true
+      # OPEN: hostPID / hostIPC are not named by the sketch; taken as refused like host network.
+      - HostNamespace
+      - KernelCapability         # a capability beyond the workload's isolation level
+      - CustomResource           # OPEN in the sketch: CRDs, custom resources, operators
+      - KubernetesApiAccess      # OPEN in the sketch: a workload that calls the Kubernetes API
+      - BarePod                  # OPEN (see KubernetesKind Pod)
+      - UnlistedKind             # a Kubernetes kind the sketch does not list
+      - SecretValueInValues      # OPEN (see HelmValues): a secret value in a values file
+      - UnsupportedConstruct     # any other source construct the translator cannot represent
+
+  # Section 5 "every object of the source": how a coverage entry names one source object. `kind`
+  # is the source's own word (a Compose `services` entry, a Kubernetes `Deployment`); `path` is
+  # the file and position inside the source (a rendered template for helm).
+  - name: weft.deployments.SourceObject
+    kind: struct
+    fields:
+      - name: kind
+        type: String
+      - name: name
+        type: String
+      - name: path
+        type: String
+
+  # Section 5 "ReleaseStep: ordered steps of a release (pre-install job, rollout, post-install
+  # job)" and "Helm hooks become ordered release steps". Hook names from Helm's hook list.
+  - name: weft.deployments.StepKind
+    kind: enum
+    variants:
+      - Rollout
+      - PreInstall
+      - PostInstall
+      - PreUpgrade
+      - PostUpgrade
+      - PreRollback
+      - PostRollback
+      # OPEN: Helm `pre-delete`, `post-delete` and `test` hooks: the sketch has no release
+      # deletion and no test run. Taken: a translator reports them as MappedWithLoss (dropped),
+      # so they never become steps.
+
+  # Section 5 "RolloutStrategy: replace, rolling (bounded by DisruptionBudget), blue-green".
+  - name: weft.deployments.RolloutStrategy
+    kind: enum
+    variants: [Replace, Rolling, BlueGreen]
+
+  # Section 5 "Plan: the diff between the live release and a new revision".
+  # OPEN: the diff's granularity (components only, or every link, route, claim and config key).
+  # Smallest answer taken: component names added, changed and removed.
+  - name: weft.deployments.PlanDiff
+    kind: struct
+    fields:
+      - name: added
+        type: List<weft.shared.ComponentName>
+      - name: changed
+        type: List<weft.shared.ComponentName>
+      - name: removed
+        type: List<weft.shared.ComponentName>
+
+  # Section 5 "Simulation": the three checks.
+  - name: weft.deployments.SimulationCheck
+    kind: enum
+    variants: [Placement, Policy, Reachability]
+
+  # Section 5 "Result: pass, or a list of named violations." The names, one per rule the sketch
+  # states for each check.
+  - name: weft.deployments.ViolationName
+    kind: enum
+    variants:
+      - ExceedsCapacity       # placement: an instance does not fit the cluster's capacity
+      - ExceedsQuota          # placement: an instance does not fit the account's quota
+      - NoMatchingResource    # placement: no node offers a claimed resource class
+      - LinkNotAllowed        # policy: a link the account's policy refuses
+      - EgressNotAllowed      # policy: an egress the account's policy refuses
+      - SecretGrantNotAllowed # policy: a secret grant the account's policy refuses
+      - UnreachableComponent  # reachability: a link's target cannot be reached
+      - UnintendedExposure    # reachability: a component reachable from outside not on the border
+
+  # A violation names the check, the rule and the subject by name only: "a value never appears in
+  # logs, plans, simulations or events" (section 7), so a secret is named, never shown.
+  - name: weft.deployments.Violation
+    kind: struct
+    fields:
+      - name: check
+        type: weft.deployments.SimulationCheck
+      - name: name
+        type: weft.deployments.ViolationName
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: subject
+        type: String
+
+  # Section 5 "reachability: which component can reach which, inside and outside". An absent
+  # side is outside the formation.
+  - name: weft.deployments.ReachabilityEdge
+    kind: struct
+    fields:
+      - name: caller
+        type: Optional<weft.shared.ComponentName>
+      - name: callee
+        type: Optional<weft.shared.ComponentName>
+
+  # Section 5 "Simulation: a release checked without running it ... Result: pass, or a list of
+  # named violations." Held on the Plan it checks: the sketch has no simulation without a plan.
+  - name: weft.deployments.Simulation
+    kind: struct
+    fields:
+      - name: reachability
+        type: List<weft.deployments.ReachabilityEdge>
+      - name: violations
+        type: List<weft.deployments.Violation>
+
+  # Section 5 "Drift: the difference between the live release and what the nodes report."
+  # OPEN: the kinds of difference. Smallest answer taken: the axes of section 4 a node observes.
+  - name: weft.deployments.DriftKind
+    kind: enum
+    variants:
+      - MissingInstance       # the release says it runs; no node reports it
+      - UnexpectedInstance    # a node reports an instance the release does not hold
+      - ArtifactMismatch      # the instance runs another artifact digest
+      - ReplicaMismatch       # replica count differs from the release
+      - ClaimMismatch         # bound resources differ from the claims
+
+entities:
+  # Section 5 "Translation": "Translator: registered per source kind and version." "A new source
+  # kind arrives as a new translator, not as a change to the scheduler or the node agent."
+  - name: weft.deployments.Translator
+    naming:
+      summary: A registered translator of one source kind and source format version.
+    identity:
+      name: translator_id
+      type: weft.shared.TranslatorId
+    fields:
+      - name: source_kind
+        type: weft.deployments.SourceKind
+      - name: source_format_version
+        type: weft.deployments.SourceFormatVersion
+      - name: translator_version
+        type: weft.deployments.TranslatorVersion
+      # OPEN: how a translator's artifact is identified and verified (signed like a package,
+      # section 4?). Taken: its artifact digest is recorded.
+      - name: artifact_digest
+        type: weft.shared.ArtifactDigest
+      - name: registered_at
+        type: Timestamp
+    relations:
+      - {name: artifact, kind: references, target: weft.artifacts.Artifact, cardinality: one, via: artifact_digest}
+    # OPEN: the sketch gives no translator lifecycle. Taken: registered until retired; a retired
+    # translator translates nothing new, and its translations stay readable.
+    lifecycle:
+      initial: Registered
+      states: [Registered, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Registered]
+          to: Retired
+
+  # Section 5 "Deployment sources": "A user deploys a DeploymentSource: a document weft
+  # translates into a FormationRevision."
+  - name: weft.deployments.DeploymentSource
+    naming:
+      summary: A document a user deploys, by kind and content digest, that weft translates.
+    identity:
+      name: source_id
+      type: weft.shared.DeploymentSourceId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      # The formation the translation becomes a revision of (section 3: a formation is named
+      # inside one account).
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: kind
+        type: weft.deployments.SourceKind
+      - name: format_version
+        type: weft.deployments.SourceFormatVersion
+      - name: source_digest
+        type: weft.deployments.SourceDigest
+      # helm only: the values files per environment (`--values prod.yaml`).
+      - name: helm_values
+        type: List<weft.deployments.HelmValues>
+      # A spec source embedded as one component's package of another source.
+      - name: embedded_in
+        type: Optional<weft.deployments.EmbeddingPlace>
+      - name: submitted_by
+        type: weft.shared.PrincipalId
+      - name: submitted_at
+        type: Timestamp
+    relations:
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: submitter, kind: references, target: weft.accounts.Principal, cardinality: one, via: submitted_by}
+    # UNMAPPED: embedded_in.parent_source_id names another DeploymentSource; a relation through a
+    # member of an Optional struct is not a relation entry this file found. Open question for the
+    # integrator: flatten it into a field `parent_source_id` with a `references` relation.
+    # OPEN: the sketch gives no source lifecycle. Taken: submitted until withdrawn; a withdrawn
+    # source is not translated again, and its translations and releases stay.
+    lifecycle:
+      initial: Submitted
+      states: [Submitted, Withdrawn]
+      terminal: [Withdrawn]
+      transitions:
+        - name: withdraw
+          from: [Submitted]
+          to: Withdrawn
+
+  # Section 5 "Translation: source digest + translator version -> FormationRevision +
+  # CoverageReport." "Deterministic: the same source and translator version give the same
+  # revision, byte for byte."
+  # UNMAPPED: byte-for-byte determinism is a property of the translator's output, which lives in
+  # the formations domain (the revision's document); this file can only key a translation by
+  # source, translator and environment (TranslateSource answers AlreadyTranslated). Open question
+  # for the integrator: a check that compares the revision digests of two translations.
+  # UNMAPPED: "A translator cannot grant more than the source declares: an agent that names no
+  # secret gets no secret grant." The grants are part of the FormationRevision (formations,
+  # secrets domains); nothing in this domain sees them. Open question for the integrator.
+  - name: weft.deployments.Translation
+    naming:
+      summary: One translation of a source by a translator into a formation revision.
+    identity:
+      name: translation_id
+      type: weft.shared.TranslationId
+    fields:
+      - name: source_id
+        type: weft.shared.DeploymentSourceId
+      # The source's formation, copied so a plan is checked against it.
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: source_digest
+        type: weft.deployments.SourceDigest
+      - name: translator_id
+        type: weft.shared.TranslatorId
+      - name: translator_version
+        type: weft.deployments.TranslatorVersion
+      # helm only: the environment whose values file the chart was rendered with.
+      - name: environment_id
+        type: Optional<weft.shared.EnvironmentId>
+      # Set when the translation completes. OPEN: whether a translation with a refused object
+      # still writes a revision. Taken: no; a refused translation has no revision to deploy.
+      - name: formation_revision_id
+        type: Optional<weft.shared.FormationRevisionId>
+      - name: failure
+        type: Optional<String>
+      - name: requested_at
+        type: Timestamp
+      - name: completed_at
+        type: Optional<Timestamp>
+    relations:
+      - name: source
+        kind: references
+        target: weft.deployments.DeploymentSource
+        cardinality: one
+        via: source_id
+      - name: translator
+        kind: references
+        target: weft.deployments.Translator
+        cardinality: one
+        via: translator_id
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
+      # The revision this translation produced. formations.FormationRevision stores no
+      # translation_id (docs/layers.md, cycle 3): this field is the only link between the two.
+      - {name: formation_revision, kind: references, target: weft.formations.FormationRevision, cardinality: one, via: formation_revision_id}
+      # The CoverageReport of this translation: an entry has no meaning without it.
+      - name: coverage
+        kind: owns
+        target: weft.deployments.CoverageEntry
+        cardinality: many
+        via: translation_id
+    # OPEN: the sketch names no translation states. Taken: Requested while the translator runs;
+    # Translated (every object mapped, with or without loss); Refused (at least one object
+    # refused: "a deploy with a refused object stops"); Failed (the translator itself failed).
+    lifecycle:
+      initial: Requested
+      states: [Requested, Translated, Refused, Failed]
+      terminal: [Translated, Refused, Failed]
+      transitions:
+        - name: complete
+          from: [Requested]
+          to: Translated
+        - name: refuse
+          from: [Requested]
+          to: Refused
+        - name: fail
+          from: [Requested]
+          to: Failed
+
+  # Section 5 "CoverageReport: every object of the source with its outcome: mapped (to which
+  # formation element), mapped with loss (what was dropped), or refused (the named reason)."
+  # The report of a translation is the set of its entries (view CoverageReport).
+  - name: weft.deployments.CoverageEntry
+    naming:
+      summary: The outcome of one source object in one translation.
+    identity:
+      name: entry_id
+      type: weft.shared.CoverageEntryId
+    fields:
+      - name: translation_id
+        type: weft.shared.TranslationId
+      - name: object
+        type: weft.deployments.SourceObject
+      # helm and kubernetes sources: the object's kind as the goalpost checklist names it.
+      - name: kubernetes_kind
+        type: Optional<weft.deployments.KubernetesKind>
+      - name: outcome
+        type: weft.deployments.CoverageOutcome
+      - name: element
+        type: weft.deployments.FormationElementKind
+      # The element's name in the revision (a component, a link, a route ...).
+      - name: element_name
+        type: Optional<String>
+      # MappedWithLoss: what was dropped.
+      - name: lost
+        type: Optional<String>
+      # Refused: the named reason.
+      - name: refusal
+        type: Optional<weft.deployments.RefusalReason>
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # Section 5 "Releases": "Plan: the diff between the live release and a new revision, plus a
+  # simulation, shown before apply." CLI `weft plan shop.yaml --env prod`; `weft deploy` is
+  # "plan, simulate, ask, apply".
+  - name: weft.deployments.Plan
+    naming:
+      summary: The diff and simulation of one revision against an environment's live release.
+    identity:
+      name: plan_id
+      type: weft.shared.PlanId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: formation_revision_id
+        type: weft.shared.FormationRevisionId
+      # A plan of a new revision names its translation; a plan of a rollback names the earlier
+      # release whose revision it restores. Exactly one is set (CreatePlan, PlanRollback).
+      - name: translation_id
+        type: Optional<weft.shared.TranslationId>
+      - name: rollback_of
+        type: Optional<weft.shared.ReleaseId>
+      # The release the diff was taken against; absent for the first release of an environment.
+      - name: live_release_id
+        type: Optional<weft.shared.ReleaseId>
+      - name: diff
+        type: Optional<weft.deployments.PlanDiff>
+      - name: simulation
+        type: Optional<weft.deployments.Simulation>
+      - name: created_by
+        type: weft.shared.PrincipalId
+      - name: created_at
+        type: Timestamp
+    relations:
+      - name: translation
+        kind: references
+        target: weft.deployments.Translation
+        cardinality: one
+        via: translation_id
+      - name: restored_release
+        kind: references
+        target: weft.deployments.Release
+        cardinality: one
+        via: rollback_of
+      - name: live_release
+        kind: references
+        target: weft.deployments.Release
+        cardinality: one
+        via: live_release_id
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
+      - {name: formation_revision, kind: references, target: weft.formations.FormationRevision, cardinality: one, via: formation_revision_id}
+      - {name: creator, kind: references, target: weft.accounts.Principal, cardinality: one, via: created_by}
+    # OPEN: the sketch names no plan states. Taken: Simulating until the control plane records
+    # the diff and simulation; Ready (simulation passed) or Blocked (named violations);
+    # Discarded by the user. Applying a Ready plan creates its release; the plan stays Ready, and
+    # a second release of it does not start (StartRelease already-applied).
+    # OPEN: a plan whose environment got a new live release after the plan was made (a stale
+    # diff). Taken: not detected here; the integrator decides whether ApplyPlan re-simulates.
+    lifecycle:
+      initial: Simulating
+      states: [Simulating, Ready, Blocked, Discarded]
+      terminal: [Discarded]
+      transitions:
+        - name: pass
+          from: [Simulating]
+          to: Ready
+        - name: block
+          from: [Simulating]
+          to: Blocked
+        - name: discard
+          from: [Simulating, Ready, Blocked]
+          to: Discarded
+
+  # Section 5 "Release: a FormationRevision applied to an Environment. Lifecycle: planned,
+  # applying, live, superseded, rolled-back, failed." "Rollback: a new release of an earlier
+  # revision" (rollback_of names the earlier release).
+  - name: weft.deployments.Release
+    naming:
+      summary: One formation revision applied to one environment.
+    identity:
+      name: release_id
+      type: weft.shared.ReleaseId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: formation_revision_id
+        type: weft.shared.FormationRevisionId
+      - name: plan_id
+        type: weft.shared.PlanId
+      - name: strategy
+        type: weft.deployments.RolloutStrategy
+      - name: rollback_of
+        type: Optional<weft.shared.ReleaseId>
+      - name: created_by
+        type: weft.shared.PrincipalId
+      - name: created_at
+        type: Timestamp
+      - name: live_at
+        type: Optional<Timestamp>
+      - name: failure
+        type: Optional<String>
+    relations:
+      - name: plan
+        kind: references
+        target: weft.deployments.Plan
+        cardinality: one
+        via: plan_id
+      - name: restored_release
+        kind: references
+        target: weft.deployments.Release
+        cardinality: one
+        via: rollback_of
+      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
+      - {name: formation_revision, kind: references, target: weft.formations.FormationRevision, cardinality: one, via: formation_revision_id}
+      - {name: creator, kind: references, target: weft.accounts.Principal, cardinality: one, via: created_by}
+      # "ReleaseStep: ordered steps of a release": a step has no meaning without its release.
+      - name: steps
+        kind: owns
+        target: weft.deployments.ReleaseStep
+        cardinality: many
+        via: release_id
+    # Sketch state words: planned, applying, live, superseded, rolled-back (RolledBack), failed.
+    lifecycle:
+      initial: Planned
+      states: [Planned, Applying, Live, Superseded, RolledBack, Failed]
+      terminal: [Superseded, RolledBack, Failed]
+      transitions:
+        - name: start
+          from: [Planned]
+          to: Applying
+        - name: go_live
+          from: [Applying]
+          to: Live
+        - name: fail
+          from: [Applying]
+          to: Failed
+        - name: supersede
+          from: [Live]
+          to: Superseded
+        - name: roll_back
+          from: [Live]
+          to: RolledBack
+
+  # Section 5 "ReleaseStep: ordered steps of a release (pre-install job, rollout, post-install
+  # job); a failed step stops the release." "Helm hooks become ordered release steps."
+  - name: weft.deployments.ReleaseStep
+    naming:
+      summary: One ordered step of a release; a failed step stops the release.
+    identity:
+      name: step_id
+      type: weft.shared.ReleaseStepId
+    fields:
+      - name: release_id
+        type: weft.shared.ReleaseId
+      # 1-based order inside the release; Helm hook weights become this order.
+      - name: position
+        type: Integer
+      - name: kind
+        type: weft.deployments.StepKind
+      # The component a rollout step rolls out, or a hook step's job component.
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      # A hook step runs a Job (section 4); known once the step starts.
+      - name: job_id
+        type: Optional<weft.shared.JobId>
+      # Section 14 R1 ("release live -> instances requested for each component at its scale"), in
+      # the level form: a rollout step names the workload it rolls out (known once it starts, like
+      # job_id) and the replica count the component runs at in this environment (read from the
+      # revision and the environment's ScaleSetting when the step is added). ReleaseStepStarted
+      # carries both, so one binding sets the desired count that the Scheduler's gap view in
+      # workloads reads. Absent on a hook step.
+      # OPEN: a Daemon component runs one instance per eligible node, so its count is the node
+      # count at plan time; does the rollout step of a Daemon carry that count, or no count and a
+      # readiness rule of its own?
+      - name: workload_id
+        type: Optional<weft.shared.WorkloadId>
+      - name: replicas
+        type: Optional<Integer>
+      # Section 15 "A rollout step waits for the new instances to be ready": the ready count the
+      # ReleaseController read from weft.workloads.ReadyInstances when the step succeeded.
+      - name: ready_replicas
+        type: Optional<Integer>
+      - name: failure
+        type: Optional<String>
+      - name: started_at
+        type: Optional<Timestamp>
+      - name: ended_at
+        type: Optional<Timestamp>
+    relations:
+      - {name: job, kind: references, target: weft.workloads.Job, cardinality: one, via: job_id}
+      - {name: workload, kind: references, target: weft.workloads.Workload, cardinality: one, via: workload_id}
+    # OPEN: the sketch names no step states. Taken: Pending, Running, Succeeded, Failed, and
+    # Skipped for the steps after a failed one. Section 14 R7 ("drift recorded -> the release step
+    # re-applied"): a succeeded rollout step of a live release runs again (reapply, ReapplyDrift).
+    lifecycle:
+      initial: Pending
+      states: [Pending, Running, Succeeded, Failed, Skipped]
+      terminal: [Failed, Skipped]
+      transitions:
+        - name: start
+          from: [Pending]
+          to: Running
+        - name: succeed
+          from: [Running]
+          to: Succeeded
+        - name: fail
+          from: [Running]
+          to: Failed
+        - name: skip
+          from: [Pending]
+          to: Skipped
+        - name: reapply
+          from: [Succeeded]
+          to: Running
+
+  # Section 5 "Drift: the difference between the live release and what the nodes report."
+  # Section 14 R7 decides what weft does on drift: "drift recorded -> the release step re-applied
+  # or the drift escalated". A drift names the rollout step whose effect drifted; one without a
+  # step (an instance the release does not hold) cannot be re-applied and is escalated.
+  - name: weft.deployments.Drift
+    naming:
+      summary: One difference between a live release and what the nodes report.
+    identity:
+      name: drift_id
+      type: weft.shared.DriftId
+    fields:
+      - name: release_id
+        type: weft.shared.ReleaseId
+      - name: kind
+        type: weft.deployments.DriftKind
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: instance_id
+        type: Optional<weft.shared.InstanceId>
+      - name: node_id
+        type: Optional<weft.shared.NodeId>
+      - name: detail
+        type: String
+      # Section 14 R7: the rollout step of this release whose effect drifted.
+      - name: step_id
+        type: Optional<weft.shared.ReleaseStepId>
+      # Section 14 R7 "or the drift escalated": why it was handed to a person.
+      - name: escalation
+        type: Optional<String>
+      - name: observed_at
+        type: Timestamp
+      - name: resolved_at
+        type: Optional<Timestamp>
+    relations:
+      - name: release
+        kind: references
+        target: weft.deployments.Release
+        cardinality: one
+        via: release_id
+      - name: step
+        kind: references
+        target: weft.deployments.ReleaseStep
+        cardinality: one
+        via: step_id
+      - {name: instance, kind: references, target: weft.workloads.Instance, cardinality: one, via: instance_id}
+      - {name: node, kind: references, target: weft.infrastructure.Node, cardinality: one, via: node_id}
+    # Section 14 R7. Open until the ReleaseController acts; Reapplying while its step runs again;
+    # Escalated when it cannot be re-applied; Resolved once the nodes report the release's state.
+    # OPEN: whether an escalated drift is resolved by the nodes' next report (taken: yes,
+    # ResolveDrift from Escalated) or only by a person.
+    lifecycle:
+      initial: Open
+      states: [Open, Reapplying, Escalated, Resolved]
+      terminal: [Resolved]
+      transitions:
+        - name: reapply
+          from: [Open]
+          to: Reapplying
+        - name: escalate
+          from: [Open, Reapplying]
+          to: Escalated
+        - name: resolve
+          from: [Open, Reapplying, Escalated]
+          to: Resolved
+
+errors:
+  - name: weft.deployments.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  - name: weft.deployments.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.deployments.TranslatorExists
+    summary: A translator of this source kind, format version and translator version is registered.
+  - name: weft.deployments.NoTranslator
+    summary: >-
+      No registered translator reads this source kind and format version, so weft cannot
+      translate it (training sources, until their translator exists).
+  - name: weft.deployments.ValuesOnlyForHelm
+    summary: Values per environment were given for a source that is not a helm chart.
+  - name: weft.deployments.NotASpecSource
+    summary: >-
+      Only a spec source (ess-system, loom-agent, training) can be one component's package; a
+      weft, compose, helm or kubernetes source cannot be embedded.
+  - name: weft.deployments.SourceIsWithdrawn
+    summary: The source was withdrawn, so it is not translated again.
+  - name: weft.deployments.TranslatorIsRetired
+    summary: The translator is retired, so it translates nothing new.
+  - name: weft.deployments.SourceMismatch
+    summary: >-
+      The source's kind, format version, digest or formation is not what the request names, so the
+      translation would not be of the bytes the caller meant.
+  - name: weft.deployments.TranslatorMismatch
+    summary: The translator's source kind, format version or version is not what the request names.
+  - name: weft.deployments.EnvironmentRequired
+    summary: A helm chart is rendered with one environment's values, and the request names none.
+  - name: weft.deployments.NoValuesForEnvironment
+    summary: The helm source holds no values file for the named environment.
+  - name: weft.deployments.AlreadyTranslated
+    summary: >-
+      This source was already translated by this translator for this environment; the same input
+      gives the same revision, so the existing translation is the answer.
+  - name: weft.deployments.TranslationClosed
+    summary: The translation is no longer running, so its coverage report is not changed.
+  - name: weft.deployments.RefusalUnnamed
+    summary: A refused object must name its refusal reason.
+  - name: weft.deployments.LossUnnamed
+    summary: An object mapped with loss must say what was dropped.
+  - name: weft.deployments.ElementMissing
+    summary: A mapped object must name the formation element it maps to.
+  - name: weft.deployments.KindNotMappable
+    summary: >-
+      The Kubernetes kind is refused or OPEN in weft's checklist, so a translator cannot report it
+      as mapped.
+  - name: weft.deployments.HasRefusedObjects
+    summary: The coverage report holds a refused object, so the translation does not complete.
+  - name: weft.deployments.NoRefusedObject
+    summary: The coverage report holds no refused object, so the translation is not refused.
+  - name: weft.deployments.DeployRefused
+    summary: >-
+      The translation's coverage report holds a refused object, so the deploy stops; the
+      report names each refused object and its reason.
+  - name: weft.deployments.TranslationNotReady
+    summary: The translation has not completed, so there is no revision to plan.
+  - name: weft.deployments.TranslationMismatch
+    summary: The translation's formation or revision is not what the request names.
+  - name: weft.deployments.ValuesForOtherEnvironment
+    summary: The helm chart was rendered with another environment's values.
+  - name: weft.deployments.ReleaseMismatch
+    summary: The release's environment, formation or revision is not what the request names.
+  - name: weft.deployments.NotARollbackTarget
+    summary: >-
+      The release never went live (planned, applying or failed) or is live now, so it is no
+      earlier revision to roll back to.
+  - name: weft.deployments.PlanMismatch
+    summary: The plan's environment is not what the request names.
+  - name: weft.deployments.SimulationViolations
+    summary: The plan's simulation named violations, so it is not applied.
+  - name: weft.deployments.PlanNotReady
+    summary: The plan's simulation has not passed, or the plan was discarded.
+  - name: weft.deployments.PlanAlreadyApplied
+    summary: The plan already has a release.
+  - name: weft.deployments.ReleaseInProgress
+    summary: Another release of this environment is applying.
+  - name: weft.deployments.InvalidStepPosition
+    summary: A step's position starts at 1.
+  - name: weft.deployments.ReleaseNotPlanned
+    summary: Steps are added to a release only while it is planned.
+  - name: weft.deployments.StepPositionTaken
+    summary: The release already has a step at this position.
+  - name: weft.deployments.StepMismatch
+    summary: The step does not belong to the named release, or sits at another position.
+  - name: weft.deployments.ReleaseNotApplying
+    summary: The release is not applying, so its steps do not run.
+  - name: weft.deployments.PreviousStepIncomplete
+    summary: An earlier step of the release has not succeeded, so this step does not start.
+  - name: weft.deployments.StepsIncomplete
+    summary: A step of the release has not succeeded, so the release does not go live.
+  - name: weft.deployments.ReleaseNotLive
+    summary: Drift is recorded against a live release only.
+  - name: weft.deployments.IsARollback
+    summary: The release is a rollback; it goes live through MarkRollbackLive.
+  - name: weft.deployments.NotARollback
+    summary: The release is no rollback; it goes live through MarkReleaseLive.
+  - name: weft.deployments.RolloutNeedsReplicas
+    summary: A rollout step names the replica count its component runs at; this one names none.
+  - name: weft.deployments.InvalidReplicas
+    summary: A replica count or ready count is below 0.
+  - name: weft.deployments.RolloutNeedsWorkload
+    summary: A rollout step starts only with the workload it rolls out named.
+  - name: weft.deployments.NotARolloutStep
+    summary: The step is no rollout step, so it neither waits for ready instances nor is re-applied.
+  - name: weft.deployments.IsARolloutStep
+    summary: >-
+      The step is a rollout step; it succeeds only through CompleteRolloutStep, which checks that
+      its new instances are ready.
+  - name: weft.deployments.RolloutNotReady
+    summary: >-
+      Fewer instances of the rolled-out workload are ready than the step's replica count, so the
+      step does not end yet.
+  - name: weft.deployments.DriftMismatch
+    summary: The drift belongs to another release or names another step than the request.
+  - name: weft.deployments.NoStepToReapply
+    summary: The drift names no release step, so there is nothing to re-apply; it is escalated.
+  - name: weft.deployments.StepNotReappliable
+    summary: >-
+      The drifted step has not succeeded (it runs, failed or was skipped), so it is not re-applied
+      now.
+  # hardening pass 1 D1.
+  - name: weft.deployments.GateNotPassed
+    summary: >-
+      A deploy gate of the release's environment has no passed check for the release's plan, so
+      the release does not start.
+  # hardening pass 1 (CompleteTranslation, RecordDrift, StartReleaseStep).
+  - name: weft.deployments.OutsideRelease
+    summary: >-
+      The instance, job or workload named belongs to another environment than the release, so it
+      is not recorded against it.
+
+events:
+  - name: weft.deployments.TranslatorRegistered
+    fields:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+  - name: weft.deployments.TranslatorRetired
+    fields:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+  - name: weft.deployments.SourceSubmitted
+    fields:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: kind, type: weft.deployments.SourceKind}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+  - name: weft.deployments.SourceWithdrawn
+    fields:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+  - name: weft.deployments.TranslationRequested
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+  - name: weft.deployments.CoverageEntryRecorded
+    fields:
+      - {name: entry_id, type: weft.shared.CoverageEntryId}
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: object, type: weft.deployments.SourceObject}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
+  - name: weft.deployments.SourceTranslated
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+  - name: weft.deployments.TranslationRefused
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+  - name: weft.deployments.TranslationFailed
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: failure, type: String}
+  - name: weft.deployments.PlanCreated
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+  - name: weft.deployments.RollbackPlanned
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: rollback_of, type: weft.shared.ReleaseId}
+  - name: weft.deployments.PlanSimulated
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+  - name: weft.deployments.PlanBlocked
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: violations, type: List<weft.deployments.Violation>}
+  - name: weft.deployments.PlanDiscarded
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+  - name: weft.deployments.ReleaseCreated
+    fields:
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: strategy, type: weft.deployments.RolloutStrategy}
+  - name: weft.deployments.ReleaseStarted
+    fields:
+      - {name: release_id, type: weft.shared.ReleaseId}
+  - name: weft.deployments.ReleaseStepAdded
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: position, type: Integer}
+      - {name: kind, type: weft.deployments.StepKind}
+  # Section 14 R1 (edge into the level form): a started rollout step carries the workload and
+  # the replica count, so a binding filtered on `event.kind == Rollout` sets the desired count
+  # the Scheduler's gap view in workloads reads.
+  - name: weft.deployments.ReleaseStepStarted
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: position, type: Integer}
+      - {name: kind, type: weft.deployments.StepKind}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: job_id, type: Optional<weft.shared.JobId>}
+      - {name: workload_id, type: Optional<weft.shared.WorkloadId>}
+      - {name: replicas, type: Optional<Integer>}
+  - name: weft.deployments.ReleaseStepSucceeded
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+  # Section 15 "A rollout step waits for the new instances to be ready before it ends the old
+  # ones": a rollout step ended with its ready count. The old instances end from here.
+  - name: weft.deployments.RolloutStepSucceeded
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: ready_replicas, type: Integer}
+  - name: weft.deployments.ReleaseStepFailed
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: failure, type: String}
+  - name: weft.deployments.ReleaseLive
+    fields:
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+  # Section 14 R7: carries the step, so a binding filtered on `defined(event.step_id)` invokes
+  # ReapplyDrift, and one filtered on `not defined(event.step_id)` invokes EscalateDrift.
+  - name: weft.deployments.DriftDetected
+    fields:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: kind, type: weft.deployments.DriftKind}
+      - {name: step_id, type: Optional<weft.shared.ReleaseStepId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+  - name: weft.deployments.DriftResolved
+    fields:
+      - {name: drift_id, type: weft.shared.DriftId}
+  # Section 14 R7 "the release step re-applied": the drift's rollout step runs again.
+  - name: weft.deployments.DriftReapplying
+    fields:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+  # Section 14 R7 "or the drift escalated", and the record an `on_failure: escalate` of the R7
+  # binding emits (its fields are ReapplyDrift's input minus the step). Emitted by EscalateDrift
+  # too.
+  - name: weft.deployments.DriftEscalated
+    fields:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+
+commands:
+  # Section 5 "Translator: registered per source kind and version"; "A new source kind arrives
+  # as a new translator".
+  - name: weft.deployments.RegisterTranslator
+    naming:
+      display: Register a translator
+    input:
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+    outcomes:
+      - name: exists
+        when_related:
+          entity: weft.deployments.Translator
+          where:
+            all:
+              - source_kind == input.source_kind
+              - source_format_version == input.source_format_version
+              - translator_version == input.translator_version
+          exists: true
+        error: weft.deployments.TranslatorExists
+      - name: registered
+        creates: weft.deployments.Translator
+        instance: translator_id
+        sets:
+          source_kind: input.source_kind
+          source_format_version: input.source_format_version
+          translator_version: input.translator_version
+          artifact_digest: input.artifact_digest
+          registered_at: {generated: true}
+        emits: [weft.deployments.TranslatorRegistered]
+        payload:
+          weft.deployments.TranslatorRegistered:
+            translator_id: {generated: true}
+            source_kind: input.source_kind
+            source_format_version: input.source_format_version
+            translator_version: input.translator_version
+
+  # Section 5 "Translator" (OPEN lifecycle, see the entity).
+  - name: weft.deployments.RetireTranslator
+    naming:
+      display: Retire a translator
+    input:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+    outcomes:
+      - name: no-such-translator
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: retired
+        moves: weft.deployments.Translator.retire
+        instance: translator_id
+        emits: [weft.deployments.TranslatorRetired]
+        payload:
+          weft.deployments.TranslatorRetired:
+            translator_id: input.translator_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "A user deploys a DeploymentSource"; CLI `weft deploy shop.yaml`,
+  # `weft deploy chart/ --values prod.yaml`, `weft deploy system.yaml`.
+  # The role binding itself is checked by the management API's authorization (section 2: "every
+  # management call is authorized against RoleBindings"), which sets caller.account_id; this
+  # command ties the account, the formation and each values file's environment to it.
+  # The submitter is the caller (hardening pass 1 D2): the request no longer names it.
+  - name: weft.deployments.SubmitDeploymentSource
+    naming:
+      display: Submit a deployment source
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: kind, type: weft.deployments.SourceKind}
+      - {name: format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: helm_values, type: List<weft.deployments.HelmValues>}
+      - {name: embedded_in, type: Optional<weft.deployments.EmbeddingPlace>}
+      # Section 5 "Translator: registered per source kind and version": the translator the caller
+      # means to translate this source with, the same choice TranslateSource takes (the CLI picks
+      # the newest registered one for the kind and format version). Checked here by its row, so a
+      # source no registered translator reads is refused at submit.
+      - {name: translator_id, type: weft.shared.TranslatorId}
+    outcomes:
+      # hardening pass 1 D3: the account must be the one the request acts in; another account
+      # answers like a missing row, so it is not disclosed.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.deployments.NotFound
+      - name: values-not-helm
+        when:
+          all:
+            - kind != Helm
+            - helm_values.count > 0
+        error: weft.deployments.ValuesOnlyForHelm
+      - name: not-a-spec-source
+        when:
+          all:
+            - embedded_in: {defined: true}
+            - kind: {in: [Weft, Compose, Helm, Kubernetes]}
+        error: weft.deployments.NotASpecSource
+      # hardening pass 1 W4: a source of one account is never filed under another account's
+      # formation (TranslateSource copies the formation into the translation, and every plan and
+      # release follows it). A foreign formation answers like a missing one.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.deployments.NotFound
+      # The translator is read by the row the input names, not as a row set over every
+      # translator: ESS 0.99.2 synthesis does not arrange a row-set guard's rows on a creating
+      # command used as a scenario prefix (beyond10x/ess#642), which left every later outcome of
+      # this domain without a scenario.
+      - name: no-translator
+        when_related: {via: input.translator_id, exists: false}
+        error: weft.deployments.NoTranslator
+      # hardening pass 1 W4 (see formation-missing).
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
+        error: weft.deployments.NotFound
+      - name: translator-not-for-source
+        when_related:
+          via: input.translator_id
+          predicate:
+            any:
+              - state != Registered
+              - source_kind != input.kind
+              - source_format_version != input.format_version
+        error: weft.deployments.NoTranslator
+      # hardening pass 1 W8: every values file names an environment of the source's formation, so
+      # TranslateSource (no-values-for-environment) cannot render the chart with another
+      # formation's environment. A foreign environment answers like a missing one.
+      # OPEN: a row set on this creating command may meet beyond10x/ess#642 (rows of a prefix
+      # step's row-set guard not arranged); the integrator's synthesis run decides whether it stays.
+      - name: values-environment-foreign
+        when_related:
+          entity: weft.formations.Formation
+          where:
+            all:
+              - formation_id == input.formation_id
+              - exists:
+                  in: input.helm_values
+                  as: v
+                  that:
+                    not:
+                      exists:
+                        in: {entity: weft.formations.Environment}
+                        as: e
+                        that: {all: [e.environment_id == v.environment_id, e.formation_id == formation_id]}
+          exists: true
+        error: weft.deployments.NotFound
+      - name: submitted
+        creates: weft.deployments.DeploymentSource
+        instance: source_id
+        sets:
+          account_id: input.account_id
+          formation_id: input.formation_id
+          kind: input.kind
+          format_version: input.format_version
+          source_digest: input.source_digest
+          helm_values: input.helm_values
+          embedded_in: input.embedded_in
+          # hardening pass 1 D2: the submitter is the authenticated caller, not a request field.
+          submitted_by: {caller: principal_id}
+          submitted_at: {generated: true}
+        emits: [weft.deployments.SourceSubmitted]
+        payload:
+          weft.deployments.SourceSubmitted:
+            source_id: {generated: true}
+            account_id: input.account_id
+            formation_id: input.formation_id
+            kind: input.kind
+            source_digest: input.source_digest
+
+  # Section 5 "Deployment sources" (OPEN lifecycle, see the entity).
+  - name: weft.deployments.WithdrawDeploymentSource
+    naming:
+      display: Withdraw a deployment source
+    input:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+    outcomes:
+      - name: no-such-source
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # hardening pass 1 D3: a source of another account than the one the request acts in answers
+      # like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.deployments.NotFound
+      - name: withdrawn
+        moves: weft.deployments.DeploymentSource.withdraw
+        instance: source_id
+        emits: [weft.deployments.SourceWithdrawn]
+        payload:
+          weft.deployments.SourceWithdrawn:
+            source_id: input.source_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Translation: source digest + translator version -> FormationRevision +
+  # CoverageReport"; "Helm: rendered with its values, then read as kubernetes". The request names
+  # the source kind and format version it means; both are checked against the source and the
+  # translator, so the translator reads the source's kind and version. The digest, formation and
+  # translator version are copied from the rows (no command changes them), so the translation
+  # records exactly the bytes and the translator that ran. (The request named them too, compared
+  # field by field: the refusals got no scenario and made synthesis of this command take minutes
+  # in ESS 0.99.2.)
+  # OPEN: whether the caller picks the translator or weft picks the newest registered one for the
+  # kind and format version. Taken: the caller names it (the CLI picks the newest).
+  # OPEN (hardening pass 1 D3): not tied to caller.account_id: the account is on the source, a
+  # related row, and ESS compares the caller only with an input field or a stored field of the
+  # subject.
+  - name: weft.deployments.TranslateSource
+    naming:
+      display: Translate a deployment source
+    input:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+    outcomes:
+      - name: environment-required
+        when:
+          all:
+            - source_kind == Helm
+            - environment_id: {defined: false}
+        error: weft.deployments.EnvironmentRequired
+      - name: environment-not-helm
+        when:
+          all:
+            - source_kind != Helm
+            - environment_id: {defined: true}
+        error: weft.deployments.ValuesOnlyForHelm
+      - name: no-such-source
+        when_related: {via: input.source_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: no-such-translator
+        when_related: {via: input.translator_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: source-withdrawn
+        when_related: {via: input.source_id, predicate: state == Withdrawn}
+        error: weft.deployments.SourceIsWithdrawn
+      - name: translator-retired
+        when_related: {via: input.translator_id, predicate: state == Retired}
+        error: weft.deployments.TranslatorIsRetired
+      - name: source-mismatch
+        when_related:
+          via: input.source_id
+          predicate:
+            any:
+              - kind != input.source_kind
+              - format_version != input.source_format_version
+        error: weft.deployments.SourceMismatch
+      - name: translator-mismatch
+        when_related:
+          via: input.translator_id
+          predicate:
+            any:
+              - source_kind != input.source_kind
+              - source_format_version != input.source_format_version
+        error: weft.deployments.TranslatorMismatch
+      - name: no-values-for-environment
+        when_related:
+          via: input.source_id
+          predicate:
+            all:
+              - kind == Helm
+              - not:
+                  exists:
+                    in: helm_values
+                    as: v
+                    that: v.environment_id == input.environment_id
+        error: weft.deployments.NoValuesForEnvironment
+      # UNMAPPED: the refusal of a second translation of one source by one translator for one
+      # environment (error AlreadyTranslated, a row set over Translation) is not declared. ESS
+      # 0.99.2 synthesis arranges no row beside a row-set guard when another guard of the command
+      # compares a required field of a related row with the input (source-mismatch,
+      # translator-mismatch): every outcome of this command and every later step of the domain went
+      # without a scenario. The comparisons are what makes the translator read the source's kind
+      # and version, so they stay. A repeated request makes a second translation of the same
+      # revision (the translator is deterministic). Open question for ESS (strict beside-row search
+      # in synthesize/related_guard.rs) and for the owner: whether the refusal is wanted back once
+      # ESS arranges it.
+      - name: requested
+        creates: weft.deployments.Translation
+        instance: translation_id
+        sets:
+          source_id: input.source_id
+          formation_id: {related: {via: input.source_id, field: formation_id}}
+          source_digest: {related: {via: input.source_id, field: source_digest}}
+          translator_id: input.translator_id
+          translator_version: {related: {via: input.translator_id, field: translator_version}}
+          environment_id: input.environment_id
+          requested_at: {generated: true}
+        emits: [weft.deployments.TranslationRequested]
+        payload:
+          weft.deployments.TranslationRequested:
+            translation_id: {generated: true}
+            source_id: input.source_id
+            source_digest: {related: {via: input.source_id, field: source_digest}}
+            translator_id: input.translator_id
+            translator_version: {related: {via: input.translator_id, field: translator_version}}
+            environment_id: input.environment_id
+
+  # Section 5 "CoverageReport: every object of the source with its outcome: mapped (to which
+  # formation element), mapped with loss (what was dropped), or refused (the named reason)."
+  # Issued by the Translator actor while the translation runs.
+  - name: weft.deployments.RecordCoverageEntry
+    naming:
+      display: Record one source object's coverage
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: object, type: weft.deployments.SourceObject}
+      - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - {name: element, type: weft.deployments.FormationElementKind}
+      - {name: element_name, type: Optional<String>}
+      - {name: lost, type: Optional<String>}
+      - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
+    outcomes:
+      - name: refusal-unnamed
+        when:
+          all:
+            - outcome == Refused
+            - refusal: {defined: false}
+        error: weft.deployments.RefusalUnnamed
+      - name: loss-unnamed
+        when:
+          all:
+            - outcome == MappedWithLoss
+            - lost: {defined: false}
+        error: weft.deployments.LossUnnamed
+      - name: element-missing
+        when:
+          all:
+            - outcome: {in: [Mapped, MappedWithLoss]}
+            - element == Nothing
+        error: weft.deployments.ElementMissing
+      # Security default: a kind refused or OPEN in the checklist is never reported as mapped.
+      - name: kind-not-mappable
+        when:
+          all:
+            - outcome: {in: [Mapped, MappedWithLoss]}
+            - kubernetes_kind.disposition: {in: [Refused, Open]}
+        error: weft.deployments.KindNotMappable
+      - name: no-such-translation
+        when_related: {via: input.translation_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: translation-closed
+        when_related: {via: input.translation_id, predicate: state != Requested}
+        error: weft.deployments.TranslationClosed
+      - name: recorded
+        creates: weft.deployments.CoverageEntry
+        instance: entry_id
+        sets:
+          translation_id: input.translation_id
+          object: input.object
+          kubernetes_kind: input.kubernetes_kind
+          outcome: input.outcome
+          element: input.element
+          element_name: input.element_name
+          lost: input.lost
+          refusal: input.refusal
+        emits: [weft.deployments.CoverageEntryRecorded]
+        payload:
+          weft.deployments.CoverageEntryRecorded:
+            entry_id: {generated: true}
+            translation_id: input.translation_id
+            object: input.object
+            outcome: input.outcome
+            refusal: input.refusal
+
+  # Section 5 "Translation: ... -> FormationRevision + CoverageReport". The translator ends a
+  # translation with no refused object by naming the revision it wrote.
+  - name: weft.deployments.CompleteTranslation
+    naming:
+      display: Complete a translation
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+    outcomes:
+      - name: no-such-translation
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # hardening pass 1 (CompleteTranslation formation_revision_id): the revision a translator
+      # names is a revision of the translation's own formation, never another formation's.
+      - name: no-such-revision
+        when_related: {via: input.formation_revision_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: revision-of-other-formation
+        when_related:
+          entity: weft.formations.FormationRevision
+          where:
+            all:
+              - revision_id == input.formation_revision_id
+              - formation_id != subject.formation_id
+          exists: true
+        error: weft.deployments.TranslationMismatch
+      - name: has-refused-objects
+        when_related:
+          entity: weft.deployments.CoverageEntry
+          where:
+            all:
+              - translation_id == input.translation_id
+              - outcome == Refused
+          exists: true
+        error: weft.deployments.HasRefusedObjects
+      - name: translated
+        moves: weft.deployments.Translation.complete
+        instance: translation_id
+        sets:
+          formation_revision_id: input.formation_revision_id
+          completed_at: {generated: true}
+        emits: [weft.deployments.SourceTranslated]
+        payload:
+          weft.deployments.SourceTranslated:
+            translation_id: input.translation_id
+            formation_revision_id: input.formation_revision_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "A deploy with a refused object stops." The translator ends a translation that
+  # holds at least one refused object; it writes no revision. The translator names one refused
+  # entry of the translation's report as the reason. (A row set over CoverageEntry here left
+  # every scenario that passes through a refused translation without a witness in ESS 0.99.2:
+  # a prefix step's row-set refusal is not arranged, beyond10x/ess#642.)
+  - name: weft.deployments.RefuseTranslation
+    naming:
+      display: Refuse a translation
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: entry_id, type: weft.shared.CoverageEntryId}
+    outcomes:
+      - name: no-such-translation
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: no-refused-object
+        when_related: {via: input.entry_id, exists: false}
+        error: weft.deployments.NoRefusedObject
+      - name: entry-not-refused
+        when_related:
+          via: input.entry_id
+          predicate:
+            any:
+              - translation_id != input.translation_id
+              - outcome != Refused
+        error: weft.deployments.NoRefusedObject
+      - name: refused
+        moves: weft.deployments.Translation.refuse
+        instance: translation_id
+        sets:
+          completed_at: {generated: true}
+        emits: [weft.deployments.TranslationRefused]
+        payload:
+          weft.deployments.TranslationRefused:
+            translation_id: input.translation_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Translator" (OPEN: the sketch says nothing of a translator that fails; taken: the
+  # translation ends Failed with the translator's message, and a new request may run again).
+  - name: weft.deployments.FailTranslation
+    naming:
+      display: Record a failed translation
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: failure, type: String}
+    outcomes:
+      - name: no-such-translation
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: failed
+        moves: weft.deployments.Translation.fail
+        instance: translation_id
+        sets:
+          failure: input.failure
+          completed_at: {generated: true}
+        emits: [weft.deployments.TranslationFailed]
+        payload:
+          weft.deployments.TranslationFailed:
+            translation_id: input.translation_id
+            failure: input.failure
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Plan: the diff between the live release and a new revision, plus a simulation,
+  # shown before apply"; "A deploy with a refused object stops." CLI `weft plan`, and the first
+  # step of `weft deploy`. The formation is the translation's, copied from its row (the request
+  # named it too, compared beside the revision: that refusal got no scenario in ESS 0.99.2).
+  - name: weft.deployments.CreatePlan
+    naming:
+      display: Plan a revision for an environment
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+    outcomes:
+      - name: no-such-translation
+        when_related: {via: input.translation_id, exists: false}
+        error: weft.deployments.NotFound
+      # hardening pass 1 W4: the environment must exist (see environment-foreign).
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.deployments.NotFound
+      # hardening pass 1 disclosure (CreatePlan translation_id): the revision tie answers before
+      # any state of the translation, with the not-found error, so a translation of another
+      # formation discloses neither its existence nor its state to a caller who does not hold its
+      # revision. A translation that holds no revision yet (Requested, Refused, Failed) still
+      # answers its state below.
+      # OPEN: the real tie is the translation's account against caller.account_id; Translation has
+      # no account and a related row's field cannot be compared with the caller (ESS caller values).
+      - name: translation-mismatch
+        when_related:
+          via: input.translation_id
+          predicate:
+            all:
+              - formation_revision_id: {defined: true}
+              - formation_revision_id != input.formation_revision_id
+        error: weft.deployments.NotFound
+      # hardening pass 1 W4: a plan's environment is an environment of the translation's
+      # formation, so no plan (and no release) of one formation targets another formation's or
+      # another account's environment. A foreign environment answers like a missing one.
+      # OPEN: an earlier row set over CoverageEntry beside translation-mismatch left this command
+      # without scenarios in ESS 0.99.2; the integrator's synthesis run decides whether this stays.
+      - name: environment-foreign
+        when_related:
+          entity: weft.formations.Environment
+          where:
+            all:
+              - environment_id == input.environment_id
+              - not:
+                  exists:
+                    in: {entity: weft.deployments.Translation}
+                    as: t
+                    that: {all: [t.translation_id == input.translation_id, t.formation_id == formation_id]}
+          exists: true
+        error: weft.deployments.NotFound
+      # The goalpost's stop: any refused object in the coverage report stops the deploy. Read as
+      # the translation's state: a translation is Refused exactly when its report holds a refused
+      # object (RefuseTranslation requires one, CompleteTranslation refuses with one, and a closed
+      # translation takes no new entry). A row set over CoverageEntry here left the command without
+      # scenarios beside translation-mismatch (ESS 0.99.2, see TranslateSource).
+      - name: deploy-refused
+        when_related: {via: input.translation_id, predicate: state == Refused}
+        error: weft.deployments.DeployRefused
+      - name: not-translated
+        when_related: {via: input.translation_id, predicate: state != Translated}
+        error: weft.deployments.TranslationNotReady
+      - name: values-for-other-environment
+        when_related:
+          via: input.translation_id
+          predicate:
+            all:
+              - environment_id: {defined: true}
+              - environment_id != input.environment_id
+        error: weft.deployments.ValuesForOtherEnvironment
+      - name: created
+        creates: weft.deployments.Plan
+        instance: plan_id
+        sets:
+          formation_id: {related: {via: input.translation_id, field: formation_id}}
+          environment_id: input.environment_id
+          formation_revision_id: input.formation_revision_id
+          translation_id: input.translation_id
+          # hardening pass 1 D2: the creator is the authenticated caller, not a request field.
+          created_by: {caller: principal_id}
+          created_at: {generated: true}
+        emits: [weft.deployments.PlanCreated]
+        payload:
+          weft.deployments.PlanCreated:
+            plan_id: {generated: true}
+            environment_id: input.environment_id
+            formation_revision_id: input.formation_revision_id
+
+  # Section 5 "Rollback: a new release of an earlier revision." A rollback is planned and
+  # simulated like any revision, since the account's policy or the cluster may have changed.
+  # OPEN: whether a rollback may skip simulation in an emergency. Taken: no.
+  # The formation and revision are the earlier release's, copied from its row; the request names
+  # the environment it rolls back, checked against the release.
+  - name: weft.deployments.PlanRollback
+    naming:
+      display: Plan a rollback to an earlier release
+    input:
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    outcomes:
+      - name: no-such-release
+        when_related: {via: input.release_id, exists: false}
+        error: weft.deployments.NotFound
+      # hardening pass 1 disclosure (PlanRollback release_id): a release of another environment
+      # answers like a missing one, before its state, so its existence is not disclosed.
+      # OPEN: the real tie is the release's account against caller.account_id; Release has no
+      # account and a related row's field cannot be compared with the caller (ESS caller values).
+      - name: release-mismatch
+        when_related:
+          via: input.release_id
+          predicate:
+            any:
+              - environment_id != input.environment_id
+        error: weft.deployments.NotFound
+      - name: not-a-rollback-target
+        when_related:
+          via: input.release_id
+          predicate:
+            state: {not_in: [Superseded, RolledBack]}
+        error: weft.deployments.NotARollbackTarget
+      - name: created
+        creates: weft.deployments.Plan
+        instance: plan_id
+        sets:
+          formation_id: {related: {via: input.release_id, field: formation_id}}
+          environment_id: input.environment_id
+          formation_revision_id: {related: {via: input.release_id, field: formation_revision_id}}
+          rollback_of: input.release_id
+          # hardening pass 1 D2: the creator is the authenticated caller, not a request field.
+          created_by: {caller: principal_id}
+          created_at: {generated: true}
+        emits: [weft.deployments.RollbackPlanned]
+        payload:
+          weft.deployments.RollbackPlanned:
+            plan_id: {generated: true}
+            environment_id: input.environment_id
+            formation_revision_id: {related: {via: input.release_id, field: formation_revision_id}}
+            rollback_of: input.release_id
+
+  # Section 5 "Simulation: a release checked without running it: placement, policy,
+  # reachability. Result: pass, or a list of named violations." The control plane records the
+  # diff and the simulation of a plan. Secret values never appear: a violation names a secret.
+  - name: weft.deployments.RecordPlanResult
+    naming:
+      display: Record a plan's diff and simulation
+    input:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: live_release_id, type: Optional<weft.shared.ReleaseId>}
+      - {name: diff, type: weft.deployments.PlanDiff}
+      - {name: simulation, type: weft.deployments.Simulation}
+    outcomes:
+      - name: no-such-plan
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # hardening pass 1 (RecordPlanResult live_release_id): the release a diff was taken against
+      # is a release of the plan's own environment, never another environment's.
+      - name: live-release-of-other-environment
+        when_related:
+          entity: weft.deployments.Release
+          where:
+            all:
+              - release_id == input.live_release_id
+              - environment_id != subject.environment_id
+          exists: true
+        error: weft.deployments.ReleaseMismatch
+      - name: blocked
+        when: simulation.violations.count > 0
+        moves: weft.deployments.Plan.block
+        instance: plan_id
+        sets:
+          live_release_id: input.live_release_id
+          diff: input.diff
+          simulation: input.simulation
+        emits: [weft.deployments.PlanBlocked]
+        payload:
+          weft.deployments.PlanBlocked:
+            plan_id: input.plan_id
+            violations: input.simulation.violations
+      - name: passed
+        moves: weft.deployments.Plan.pass
+        instance: plan_id
+        sets:
+          live_release_id: input.live_release_id
+          diff: input.diff
+          simulation: input.simulation
+        emits: [weft.deployments.PlanSimulated]
+        payload:
+          weft.deployments.PlanSimulated:
+            plan_id: input.plan_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Plan ... shown before apply": the user's "ask" step of `weft deploy` answered no.
+  # OPEN (hardening pass 1 D3): not tied to caller.account_id: Plan stores no account (only
+  # formation_id), and ESS compares the caller only with an input field or a stored field of the
+  # subject.
+  - name: weft.deployments.DiscardPlan
+    naming:
+      display: Discard a plan
+    input:
+      - {name: plan_id, type: weft.shared.PlanId}
+    outcomes:
+      - name: no-such-plan
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: discarded
+        moves: weft.deployments.Plan.discard
+        instance: plan_id
+        emits: [weft.deployments.PlanDiscarded]
+        payload:
+          weft.deployments.PlanDiscarded:
+            plan_id: input.plan_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Release: a FormationRevision applied to an Environment"; the "apply" step of
+  # `weft deploy`. A plan with violations, or not yet simulated, is never applied.
+  # The environment is the plan's, read from its row: the command takes no environment input, so
+  # no request can name another one (this replaces the refusal plan-mismatch, error PlanMismatch,
+  # whose comparison with the input left the command without scenarios beside a row set in
+  # ESS 0.99.2; see TranslateSource).
+  # OPEN (hardening pass 1 D3): not tied to caller.account_id: Plan stores no account (only
+  # formation_id), and ESS compares the caller only with an input field or a stored field of the
+  # subject.
+  - name: weft.deployments.ApplyPlan
+    naming:
+      display: Apply a plan as a release
+    input:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: strategy, type: weft.deployments.RolloutStrategy}
+    outcomes:
+      - name: no-such-plan
+        when_related: {via: input.plan_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: simulation-violations
+        when_related: {via: input.plan_id, predicate: state == Blocked}
+        error: weft.deployments.SimulationViolations
+      - name: plan-not-ready
+        when_related: {via: input.plan_id, predicate: state != Ready}
+        error: weft.deployments.PlanNotReady
+      # Both row-set checks of an apply are made when the release starts (StartRelease
+      # already-applied, release-in-progress), on the row the release holds: one release of a plan
+      # starts, and one release of an environment applies at a time. Beside a row set here, ESS
+      # 0.99.2 synthesis arranged the plan without moving it to Ready, and its scenario failed on
+      # the interpreted target; the environment's row set needs an equality with the input or the
+      # subject, and the environment is the plan's.
+      - name: created
+        creates: weft.deployments.Release
+        instance: release_id
+        sets:
+          formation_id: {related: {via: input.plan_id, field: formation_id}}
+          environment_id: {related: {via: input.plan_id, field: environment_id}}
+          formation_revision_id: {related: {via: input.plan_id, field: formation_revision_id}}
+          plan_id: input.plan_id
+          strategy: input.strategy
+          rollback_of: {related: {via: input.plan_id, field: rollback_of}}
+          # hardening pass 1 D2: the creator is the authenticated caller, not a request field.
+          created_by: {caller: principal_id}
+          created_at: {generated: true}
+        emits: [weft.deployments.ReleaseCreated]
+        payload:
+          weft.deployments.ReleaseCreated:
+            release_id: {generated: true}
+            plan_id: input.plan_id
+            environment_id: {related: {via: input.plan_id, field: environment_id}}
+            strategy: input.strategy
+
+  # Section 5 "Lifecycle: planned, applying ...". The control plane starts a planned release
+  # once its steps are added.
+  # UNMAPPED: no outcome of this command gets a scenario (ESS-SYNTH-001): ESS 0.99.2 synthesis
+  # reads `plan_id == subject.plan_id` and `environment_id == subject.environment_id` as subject
+  # fields "the steps leave undetermined" (written from a generated identity and a related read).
+  # Every later state of a release (Applying, Live, Superseded, RolledBack, Failed) and every
+  # command acting on one is unreached in the synthesized suite. A variant that reaches them
+  # (environment input on ApplyPlan, Plan state Applied moved here, rollback marker read through
+  # plan_id) validates, but its synthesis ran past 1200 s for this domain alone (403 s here).
+  # Open question for ESS (synthesis cost of a reachable release chain) and for the owner.
+  - name: weft.deployments.StartRelease
+    naming:
+      display: Start applying a release
+    input:
+      - {name: release_id, type: weft.shared.ReleaseId}
+    outcomes:
+      - name: no-such-release
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # A plan has one release: another release of the same plan already started (this one is
+      # Planned, so `state != Planned` leaves it out).
+      - name: already-applied
+        when_related:
+          entity: weft.deployments.Release
+          where:
+            all:
+              - plan_id == subject.plan_id
+              - state != Planned
+          exists: true
+        error: weft.deployments.PlanAlreadyApplied
+      # One release of an environment applies at a time; a planned release waits until the
+      # applying one is live or failed.
+      - name: release-in-progress
+        when_related:
+          entity: weft.deployments.Release
+          where:
+            all:
+              - environment_id == subject.environment_id
+              - state == Applying
+          exists: true
+        error: weft.deployments.ReleaseInProgress
+      # hardening pass 1 D1: design ci-cd-support.md:58 "StartRelease refuses while a gate of the
+      # target environment has no passed check for the plan". Read as: an active gate of the
+      # release's environment for which no Passed weft.pipelines.GateCheck of the release's plan
+      # exists, so a gate with only Waiting or Failed checks, or with none, refuses.
+      - name: gate-not-passed
+        when_related:
+          entity: weft.pipelines.DeployGate
+          where:
+            all:
+              - environment_id == subject.environment_id
+              - state == Active
+              - not:
+                  exists:
+                    in: {entity: weft.pipelines.GateCheck}
+                    as: c
+                    that: {all: [c.deploy_gate_id == deploy_gate_id, c.plan_id == subject.plan_id, c.state == Passed]}
+          exists: true
+        error: weft.deployments.GateNotPassed
+      - name: started
+        moves: weft.deployments.Release.start
+        instance: release_id
+        emits: [weft.deployments.ReleaseStarted]
+        payload:
+          weft.deployments.ReleaseStarted:
+            release_id: input.release_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "ReleaseStep: ordered steps of a release (pre-install job, rollout, post-install
+  # job)"; "Helm hooks become ordered release steps". The control plane adds the steps of a
+  # planned release from its revision.
+  - name: weft.deployments.AddReleaseStep
+    naming:
+      display: Add a step to a planned release
+    input:
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: position, type: Integer}
+      - {name: kind, type: weft.deployments.StepKind}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      # Section 14 R1 "at its scale": the replica count the component runs at in this
+      # environment, from the revision and the environment's weft.formations.ScaleSetting.
+      # Required on a rollout step.
+      - {name: replicas, type: Optional<Integer>}
+    outcomes:
+      - name: invalid-position
+        when: position < 1
+        error: weft.deployments.InvalidStepPosition
+      - name: rollout-needs-replicas
+        when:
+          all:
+            - kind == Rollout
+            - replicas: {defined: false}
+        error: weft.deployments.RolloutNeedsReplicas
+      - name: invalid-replicas
+        when:
+          all:
+            - replicas: {defined: true}
+            - replicas < 0
+        error: weft.deployments.InvalidReplicas
+      - name: no-such-release
+        when_related: {via: input.release_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: release-not-planned
+        when_related: {via: input.release_id, predicate: state != Planned}
+        error: weft.deployments.ReleaseNotPlanned
+      - name: position-taken
+        when_related:
+          entity: weft.deployments.ReleaseStep
+          where:
+            all:
+              - release_id == input.release_id
+              - position == input.position
+          exists: true
+        error: weft.deployments.StepPositionTaken
+      - name: added
+        creates: weft.deployments.ReleaseStep
+        instance: step_id
+        sets:
+          release_id: input.release_id
+          position: input.position
+          kind: input.kind
+          component: input.component
+          replicas: input.replicas
+        emits: [weft.deployments.ReleaseStepAdded]
+        payload:
+          weft.deployments.ReleaseStepAdded:
+            step_id: {generated: true}
+            release_id: input.release_id
+            position: input.position
+            kind: input.kind
+
+  # Section 5 "ordered steps": a step starts only after every earlier step succeeded, and only
+  # while its release is applying. The step is the addressed record: its release and position
+  # are its own stored fields (the request named them too, unchecked against the step, and their
+  # guards beside the row set got no scenario in ESS 0.99.2).
+  - name: weft.deployments.StartReleaseStep
+    naming:
+      display: Start a release step
+    input:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: job_id, type: Optional<weft.shared.JobId>}
+      # Section 14 R1: the workload a rollout step rolls out (absent for a hook step).
+      - {name: workload_id, type: Optional<weft.shared.WorkloadId>}
+    outcomes:
+      - name: no-such-step
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: no-such-release
+        when_related: {via: release_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: release-not-applying
+        when_related: {via: release_id, predicate: state != Applying}
+        error: weft.deployments.ReleaseNotApplying
+      # The addressed step read as a row set keyed by its identity: ESS 0.99.2 refuses a
+      # when_subject guard beside a row set on one command.
+      - name: rollout-needs-workload
+        when_related:
+          entity: weft.deployments.ReleaseStep
+          where:
+            all:
+              - step_id == input.step_id
+              - kind == Rollout
+              - input.workload_id: {defined: false}
+          exists: true
+        error: weft.deployments.RolloutNeedsWorkload
+      - name: previous-step-incomplete
+        when_related:
+          entity: weft.deployments.ReleaseStep
+          where:
+            all:
+              - release_id == subject.release_id
+              - position < subject.position
+              - state != Succeeded
+          exists: true
+        error: weft.deployments.PreviousStepIncomplete
+      # hardening pass 1 (StartReleaseStep job_id): a hook step's job runs a workload of the
+      # release's own environment, never another formation's or account's.
+      - name: job-outside-release
+        when_related:
+          entity: weft.workloads.Workload
+          where:
+            all:
+              - exists:
+                  in: {entity: weft.workloads.Job}
+                  as: j
+                  that: {all: [j.job_id == input.job_id, j.workload_id == workload_id]}
+              - not:
+                  exists:
+                    in: {entity: weft.deployments.Release}
+                    as: r
+                    that: {all: [r.release_id == subject.release_id, r.environment_id == environment_id]}
+          exists: true
+        error: weft.deployments.OutsideRelease
+      # hardening pass 1 (StartReleaseStep, same class as job_id): the workload a rollout step rolls
+      # out is one of the release's environment; ReleaseStepStarted sets that workload's desired
+      # count (section 14 R1), so another account's workload is never scaled from here.
+      - name: workload-outside-release
+        when_related:
+          entity: weft.workloads.Workload
+          where:
+            all:
+              - workload_id == input.workload_id
+              - not:
+                  exists:
+                    in: {entity: weft.deployments.Release}
+                    as: r
+                    that: {all: [r.release_id == subject.release_id, r.environment_id == environment_id]}
+          exists: true
+        error: weft.deployments.OutsideRelease
+      - name: started
+        moves: weft.deployments.ReleaseStep.start
+        instance: step_id
+        sets:
+          job_id: input.job_id
+          workload_id: input.workload_id
+          started_at: {generated: true}
+        emits: [weft.deployments.ReleaseStepStarted]
+        payload:
+          weft.deployments.ReleaseStepStarted:
+            step_id: input.step_id
+            release_id: {related: {via: input.step_id, field: release_id}}
+            position: {related: {via: input.step_id, field: position}}
+            kind: {related: {via: input.step_id, field: kind}}
+            component: {related: {via: input.step_id, field: component}}
+            job_id: input.job_id
+            workload_id: input.workload_id
+            replicas: {related: {via: input.step_id, field: replicas}}
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "ReleaseStep" (a step that ran to its end). A hook step; a rollout step ends
+  # through CompleteRolloutStep (section 15).
+  - name: weft.deployments.CompleteReleaseStep
+    naming:
+      display: Record a release step succeeded
+    input:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+    outcomes:
+      - name: no-such-step
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: is-a-rollout-step
+        when_subject:
+          predicate: kind == Rollout
+        error: weft.deployments.IsARolloutStep
+      - name: succeeded
+        moves: weft.deployments.ReleaseStep.succeed
+        instance: step_id
+        sets:
+          ended_at: {generated: true}
+        emits: [weft.deployments.ReleaseStepSucceeded]
+        payload:
+          weft.deployments.ReleaseStepSucceeded:
+            step_id: input.step_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 15 "A rollout step waits for the new instances to be ready before it ends the old
+  # ones." Level form: the ReleaseController reads RunningRolloutSteps, and for each row reads
+  # weft.workloads.ReadyInstances(workload_id) (running and health Ready) and passes the number of
+  # rows as `ready_replicas`; the step succeeds only once that count reaches the step's replica
+  # count, else it answers RolloutNotReady and the controller reads again. ESS counts rows only
+  # against a literal, so the count is the controller's read and the guard compares it with the
+  # stored count.
+  # OPEN: the guard trusts the controller's count; a stored ready counter per workload in
+  # 4-applications/workloads.yaml (kept by InstanceReady / InstanceNotReady and the instance's
+  # end) would let this guard read the count itself (`when_related` on that row).
+  # OPEN: "before it ends the old ones": which command ends the old release's instances
+  # (RolloutStepSucceeded -> a workloads command that sets the old workload's desired count to 0)
+  # is a workloads decision; this event carries the new workload only.
+  - name: weft.deployments.CompleteRolloutStep
+    naming:
+      display: Record a rollout step's new instances ready
+    input:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: ready_replicas, type: Integer}
+    outcomes:
+      - name: invalid-ready-count
+        when: ready_replicas < 0
+        error: weft.deployments.InvalidReplicas
+      - name: no-such-step
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: not-a-rollout-step
+        when_subject:
+          predicate: kind != Rollout
+        error: weft.deployments.NotARolloutStep
+      - name: step-mismatch
+        when_subject:
+          predicate: workload_id != input.workload_id
+        error: weft.deployments.StepMismatch
+      - name: not-ready
+        when_subject:
+          predicate: replicas > input.ready_replicas
+        error: weft.deployments.RolloutNotReady
+      - name: succeeded
+        moves: weft.deployments.ReleaseStep.succeed
+        instance: step_id
+        sets:
+          ready_replicas: input.ready_replicas
+          ended_at: {generated: true}
+        emits: [weft.deployments.ReleaseStepSucceeded, weft.deployments.RolloutStepSucceeded]
+        payload:
+          weft.deployments.ReleaseStepSucceeded:
+            step_id: input.step_id
+          weft.deployments.RolloutStepSucceeded:
+            step_id: input.step_id
+            workload_id: input.workload_id
+            ready_replicas: input.ready_replicas
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "a failed step stops the release": the step fails, the release fails, and every
+  # step still pending is skipped, in one outcome.
+  - name: weft.deployments.FailReleaseStep
+    naming:
+      display: Record a release step failed
+    input:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: failure, type: String}
+    outcomes:
+      - name: no-such-step
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: step-mismatch
+        when_subject:
+          predicate: release_id != input.release_id
+        error: weft.deployments.StepMismatch
+      - name: failed
+        moves: weft.deployments.ReleaseStep.fail
+        instance: step_id
+        sets:
+          failure: input.failure
+          ended_at: {generated: true}
+        emits: [weft.deployments.ReleaseStepFailed]
+        payload:
+          weft.deployments.ReleaseStepFailed:
+            step_id: input.step_id
+            release_id: input.release_id
+            failure: input.failure
+        affects:
+          - entity: weft.deployments.Release
+            where: release_id == input.release_id
+            moves: weft.deployments.Release.fail
+          - entity: weft.deployments.ReleaseStep
+            where:
+              all:
+                - release_id == input.release_id
+                - state == Pending
+            moves: weft.deployments.ReleaseStep.skip
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Lifecycle: ... live, superseded". A release goes live when every step
+  # succeeded; the environment's previous live release becomes superseded.
+  # (Two commands, this one and MarkRollbackLive, because ESS 0.99.2 refuses a branch chosen by
+  # a when_subject guard beside the row-set guard over the steps.)
+  # The release is the addressed record (unknown_instance, wrong_state), so synthesis arranges it
+  # Applying; its rollback marker is read as a row set keyed by its identity, beside the steps'
+  # (ESS 0.99.2 refuses a when_subject guard beside a row set). Neither command gets a scenario
+  # past wrong-state while no release reaches Applying (see StartRelease).
+  # The environment is the release's own (subject.environment_id): neither command takes an
+  # environment input, which replaces the refusal release-mismatch (error ReleaseMismatch) whose
+  # comparison with the input left both commands without scenarios beside the row set over the
+  # steps (ESS 0.99.2; see TranslateSource).
+  - name: weft.deployments.MarkReleaseLive
+    naming:
+      display: Record a release live
+    input:
+      - {name: release_id, type: weft.shared.ReleaseId}
+    outcomes:
+      - name: no-such-release
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: is-a-rollback
+        when_related:
+          entity: weft.deployments.Release
+          where:
+            all:
+              - release_id == input.release_id
+              - rollback_of: {defined: true}
+          exists: true
+        error: weft.deployments.IsARollback
+      - name: steps-incomplete
+        when_related:
+          entity: weft.deployments.ReleaseStep
+          where:
+            all:
+              - release_id == input.release_id
+              - state != Succeeded
+          exists: true
+        error: weft.deployments.StepsIncomplete
+      - name: live
+        moves: weft.deployments.Release.go_live
+        instance: release_id
+        sets:
+          live_at: {generated: true}
+        emits: [weft.deployments.ReleaseLive]
+        payload:
+          weft.deployments.ReleaseLive:
+            release_id: input.release_id
+            environment_id: {related: {via: input.release_id, field: environment_id}}
+        affects:
+          - entity: weft.deployments.Release
+            where:
+              all:
+                - environment_id == subject.environment_id
+                - state == Live
+            moves: weft.deployments.Release.supersede
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Rollback: a new release of an earlier revision"; "Lifecycle: ... rolled-back".
+  # A rollback release goes live when every step succeeded; the release it replaces becomes
+  # rolled back.
+  - name: weft.deployments.MarkRollbackLive
+    naming:
+      display: Record a rollback release live
+    input:
+      - {name: release_id, type: weft.shared.ReleaseId}
+    outcomes:
+      - name: no-such-release
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: not-a-rollback
+        when_related:
+          entity: weft.deployments.Release
+          where:
+            all:
+              - release_id == input.release_id
+              - rollback_of: {defined: false}
+          exists: true
+        error: weft.deployments.NotARollback
+      - name: steps-incomplete
+        when_related:
+          entity: weft.deployments.ReleaseStep
+          where:
+            all:
+              - release_id == input.release_id
+              - state != Succeeded
+          exists: true
+        error: weft.deployments.StepsIncomplete
+      - name: live
+        moves: weft.deployments.Release.go_live
+        instance: release_id
+        sets:
+          live_at: {generated: true}
+        emits: [weft.deployments.ReleaseLive]
+        payload:
+          weft.deployments.ReleaseLive:
+            release_id: input.release_id
+            environment_id: {related: {via: input.release_id, field: environment_id}}
+        affects:
+          - entity: weft.deployments.Release
+            where:
+              all:
+                - environment_id == subject.environment_id
+                - state == Live
+            moves: weft.deployments.Release.roll_back
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Drift: the difference between the live release and what the nodes report."
+  # The control plane compares the nodes' observations (section 11) with the live release.
+  - name: weft.deployments.RecordDrift
+    naming:
+      display: Record drift of a live release
+    input:
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: kind, type: weft.deployments.DriftKind}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: detail, type: String}
+      # Section 14 R7: the rollout step of this release whose effect drifted (the step of the
+      # drift's component); absent when no step covers it (an instance the release does not hold).
+      - {name: step_id, type: Optional<weft.shared.ReleaseStepId>}
+    outcomes:
+      - name: no-such-release
+        when_related: {via: input.release_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: no-such-step
+        when_related: {via: input.step_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: release-not-live
+        when_related: {via: input.release_id, predicate: state != Live}
+        error: weft.deployments.ReleaseNotLive
+      - name: step-mismatch
+        when_related:
+          via: input.step_id
+          predicate:
+            any:
+              - release_id != input.release_id
+              - kind != Rollout
+        error: weft.deployments.StepMismatch
+      # hardening pass 1 (RecordDrift instance_id): the instance a drift names runs a workload of
+      # the release's own environment, never another formation's or account's.
+      - name: instance-outside-release
+        when_related:
+          entity: weft.workloads.Workload
+          where:
+            all:
+              - exists:
+                  in: {entity: weft.workloads.Instance}
+                  as: i
+                  that: {all: [i.instance_id == input.instance_id, i.workload_id == workload_id]}
+              - not:
+                  exists:
+                    in: {entity: weft.deployments.Release}
+                    as: r
+                    that: {all: [r.release_id == input.release_id, r.environment_id == environment_id]}
+          exists: true
+        error: weft.deployments.OutsideRelease
+      - name: detected
+        creates: weft.deployments.Drift
+        instance: drift_id
+        sets:
+          release_id: input.release_id
+          kind: input.kind
+          component: input.component
+          instance_id: input.instance_id
+          node_id: input.node_id
+          detail: input.detail
+          step_id: input.step_id
+          observed_at: {generated: true}
+        emits: [weft.deployments.DriftDetected]
+        payload:
+          weft.deployments.DriftDetected:
+            drift_id: {generated: true}
+            release_id: input.release_id
+            kind: input.kind
+            step_id: input.step_id
+            component: input.component
+            instance_id: input.instance_id
+            node_id: input.node_id
+
+  # Section 5 "Drift" (the nodes report the release's state again).
+  - name: weft.deployments.ResolveDrift
+    naming:
+      display: Record drift resolved
+    input:
+      - {name: drift_id, type: weft.shared.DriftId}
+    outcomes:
+      - name: no-such-drift
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: resolved
+        moves: weft.deployments.Drift.resolve
+        instance: drift_id
+        sets:
+          resolved_at: {generated: true}
+        emits: [weft.deployments.DriftResolved]
+        payload:
+          weft.deployments.DriftResolved:
+            drift_id: input.drift_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 14 R7 "drift recorded -> the release step re-applied". Edge form: a binding on
+  # DriftDetected filtered on `defined(event.step_id)` maps drift_id, release_id and step_id.
+  # The drift's succeeded rollout step runs again in the same outcome (ReleaseStep.reapply); the
+  # ReleaseController then drives it as a started rollout step (RunningRolloutSteps,
+  # CompleteRolloutStep), and ResolveDrift closes the drift once the nodes report the release.
+  # A refusal of this command is the escalation: the binding's `on_failure: escalate` emits
+  # DriftEscalated.
+  # OPEN: a re-applied rollout step that fails: FailReleaseStep fails the step, and its release,
+  # being Live, does not move to Failed. Should a failed re-application escalate the drift
+  # (EscalateDrift) and leave the release Live, or end the release?
+  - name: weft.deployments.ReapplyDrift
+    naming:
+      display: Re-apply the release step a drift names
+    input:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+    # UNMAPPED: `wrong-state` has no synthesized scenario (ESS-SYNTH-008: the drift is read as a
+    # related row, and that strategy arranges no wrong state). Addressing the drift as the subject
+    # (unknown_instance, when_subject) is refused by ESS 0.99.2 validation: with two or more
+    # related rows the joint partition (related_guard.rs `partitioned`) counts the existence and
+    # held-state branches as guarded, "select 2 branches: no-such-drift, drift-mismatch". Open
+    # question for ESS.
+    outcomes:
+      - name: no-such-drift
+        when_related: {via: input.drift_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: no-such-release
+        when_related: {via: input.release_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: no-such-step
+        when_related: {via: input.step_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: drift-mismatch
+        when_related:
+          via: input.drift_id
+          predicate:
+            any:
+              - release_id != input.release_id
+              - step_id != input.step_id
+        error: weft.deployments.DriftMismatch
+      - name: release-not-live
+        when_related: {via: input.release_id, predicate: state != Live}
+        error: weft.deployments.ReleaseNotLive
+      - name: step-not-reappliable
+        when_related: {via: input.step_id, predicate: state != Succeeded}
+        error: weft.deployments.StepNotReappliable
+      - name: reapplying
+        moves: weft.deployments.Drift.reapply
+        instance: drift_id
+        emits: [weft.deployments.DriftReapplying]
+        payload:
+          weft.deployments.DriftReapplying:
+            drift_id: input.drift_id
+            release_id: input.release_id
+            step_id: input.step_id
+        affects:
+          - entity: weft.deployments.ReleaseStep
+            where: step_id == input.step_id
+            moves: weft.deployments.ReleaseStep.reapply
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 14 R7 "or the drift escalated". Edge form for a drift no step covers: a binding on
+  # DriftDetected filtered on `not defined(event.step_id)`. Also the ReleaseController's answer
+  # to a drift whose re-application failed. Escalation hands the drift to a person; the event
+  # records that it did.
+  # OPEN: the R7 binding's `on_failure: escalate` emits DriftEscalated but moves no row (ESS's
+  # escalate emits an event and invokes no command), so that drift stays Open. A second binding,
+  # DriftEscalated -> EscalateDrift with `drop: [wrong-state]`, records it on the row; its own
+  # DriftEscalated then meets an Escalated drift and is dropped. Take that, or leave the row Open?
+  - name: weft.deployments.EscalateDrift
+    naming:
+      display: Escalate a drift
+    input:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+    outcomes:
+      - name: no-such-drift
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: drift-mismatch
+        when_subject:
+          predicate: release_id != input.release_id
+        error: weft.deployments.DriftMismatch
+      - name: escalated
+        moves: weft.deployments.Drift.escalate
+        instance: drift_id
+        sets:
+          escalation: {related: {via: input.drift_id, field: detail}}
+        emits: [weft.deployments.DriftEscalated]
+        payload:
+          weft.deployments.DriftEscalated:
+            drift_id: input.drift_id
+            release_id: input.release_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+views:
+  # Section 5 "Translator: registered per source kind and version".
+  - name: weft.deployments.Translators
+    source: weft.deployments.Translator
+    consistency: read_your_writes
+    fields:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: registered_at, type: Timestamp}
+      - {name: state, type: weft.deployments.Translator.State}
+
+  # Section 5 "Deployment sources", per account.
+  - name: weft.deployments.DeploymentSources
+    source: weft.deployments.DeploymentSource
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: kind, type: weft.deployments.SourceKind}
+      - {name: format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: helm_values, type: List<weft.deployments.HelmValues>}
+      - {name: embedded_in, type: Optional<weft.deployments.EmbeddingPlace>}
+      - {name: submitted_by, type: weft.shared.PrincipalId}
+      - {name: submitted_at, type: Timestamp}
+      - {name: state, type: weft.deployments.DeploymentSource.State}
+
+  # Section 5 "Translation", per source.
+  - name: weft.deployments.Translations
+    source: weft.deployments.Translation
+    consistency: read_your_writes
+    params:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+    filter: source_id == param.source_id
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+      - {name: formation_revision_id, type: Optional<weft.shared.FormationRevisionId>}
+      - {name: failure, type: Optional<String>}
+      - {name: requested_at, type: Timestamp}
+      - {name: completed_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.deployments.Translation.State}
+
+  # Section 5 "CoverageReport: every object of the source with its outcome". Shown by
+  # `weft plan` and by a stopped `weft deploy`.
+  - name: weft.deployments.CoverageReport
+    source: weft.deployments.CoverageEntry
+    consistency: read_your_writes
+    params:
+      - {name: translation_id, type: weft.shared.TranslationId}
+    filter: translation_id == param.translation_id
+    fields:
+      - {name: entry_id, type: weft.shared.CoverageEntryId}
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: object, type: weft.deployments.SourceObject}
+      - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - {name: element, type: weft.deployments.FormationElementKind}
+      - {name: element_name, type: Optional<String>}
+      - {name: lost, type: Optional<String>}
+      - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
+      - {name: state, type: weft.deployments.CoverageEntry.State}
+
+  # Section 5 goalpost: "the Helm chart of a Kubernetes SaaS product deploys and runs on weft
+  # unchanged". Per translation, how many objects of each Kubernetes kind mapped, mapped with
+  # loss or were refused: the goalpost holds for a chart when no row has outcome Refused.
+  - name: weft.deployments.KubernetesCoverage
+    source: weft.deployments.CoverageEntry
+    consistency: read_your_writes
+    params:
+      - {name: translation_id, type: weft.shared.TranslationId}
+    filter: translation_id == param.translation_id
+    group_by: [kubernetes_kind, outcome]
+    fields:
+      - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - name: objects
+        type: Integer
+        aggregate: {count: {}}
+
+  # Section 5 "Plan ... shown before apply"; CLI `weft plan shop.yaml --env prod`.
+  - name: weft.deployments.Plans
+    source: weft.deployments.Plan
+    consistency: read_your_writes
+    params:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    filter: environment_id == param.environment_id
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: translation_id, type: Optional<weft.shared.TranslationId>}
+      - {name: rollback_of, type: Optional<weft.shared.ReleaseId>}
+      - {name: live_release_id, type: Optional<weft.shared.ReleaseId>}
+      - {name: diff, type: Optional<weft.deployments.PlanDiff>}
+      - {name: simulation, type: Optional<weft.deployments.Simulation>}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: created_at, type: Timestamp}
+      - {name: state, type: weft.deployments.Plan.State}
+
+  # Section 5 "Release: a FormationRevision applied to an Environment", per environment.
+  - name: weft.deployments.Releases
+    source: weft.deployments.Release
+    consistency: read_your_writes
+    params:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    filter: environment_id == param.environment_id
+    fields:
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: strategy, type: weft.deployments.RolloutStrategy}
+      - {name: rollback_of, type: Optional<weft.shared.ReleaseId>}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: created_at, type: Timestamp}
+      - {name: live_at, type: Optional<Timestamp>}
+      - {name: failure, type: Optional<String>}
+      - {name: state, type: weft.deployments.Release.State}
+
+  # Section 5 "ReleaseStep: ordered steps of a release".
+  - name: weft.deployments.ReleaseSteps
+    source: weft.deployments.ReleaseStep
+    consistency: read_your_writes
+    params:
+      - {name: release_id, type: weft.shared.ReleaseId}
+    filter: release_id == param.release_id
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: position, type: Integer}
+      - {name: kind, type: weft.deployments.StepKind}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: job_id, type: Optional<weft.shared.JobId>}
+      - {name: workload_id, type: Optional<weft.shared.WorkloadId>}
+      - {name: replicas, type: Optional<Integer>}
+      - {name: ready_replicas, type: Optional<Integer>}
+      - {name: failure, type: Optional<String>}
+      - {name: started_at, type: Optional<Timestamp>}
+      - {name: ended_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.deployments.ReleaseStep.State}
+
+  # Section 15 "A rollout step waits for the new instances to be ready", level form: every
+  # running rollout step, across releases, with the workload and count the ReleaseController
+  # checks against weft.workloads.ReadyInstances(workload_id) before CompleteRolloutStep. Also
+  # lists a step ReapplyDrift set running again (section 14 R7).
+  - name: weft.deployments.RunningRolloutSteps
+    source: weft.deployments.ReleaseStep
+    consistency: read_your_writes
+    filter:
+      all:
+        - kind == Rollout
+        - state == Running
+    fields:
+      - {name: step_id, type: weft.shared.ReleaseStepId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: position, type: Integer}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: workload_id, type: Optional<weft.shared.WorkloadId>}
+      - {name: replicas, type: Optional<Integer>}
+      - {name: started_at, type: Optional<Timestamp>}
+
+  # Section 5 "Drift: the difference between the live release and what the nodes report."
+  - name: weft.deployments.DriftReport
+    source: weft.deployments.Drift
+    consistency: read_your_writes
+    params:
+      - {name: release_id, type: weft.shared.ReleaseId}
+    filter: release_id == param.release_id
+    fields:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: kind, type: weft.deployments.DriftKind}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: instance_id, type: Optional<weft.shared.InstanceId>}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: detail, type: String}
+      - {name: step_id, type: Optional<weft.shared.ReleaseStepId>}
+      - {name: escalation, type: Optional<String>}
+      - {name: observed_at, type: Timestamp}
+      - {name: resolved_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.deployments.Drift.State}
+
+  # Section 14 R7, level form: every drift no controller has acted on yet (a missed
+  # DriftDetected edge is repaired from here). A row with step_id goes to ReapplyDrift, one
+  # without to EscalateDrift.
+  - name: weft.deployments.OpenDrifts
+    source: weft.deployments.Drift
+    consistency: read_your_writes
+    filter: state == Open
+    fields:
+      - {name: drift_id, type: weft.shared.DriftId}
+      - {name: release_id, type: weft.shared.ReleaseId}
+      - {name: kind, type: weft.deployments.DriftKind}
+      - {name: step_id, type: Optional<weft.shared.ReleaseStepId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: observed_at, type: Timestamp}

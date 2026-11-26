@@ -1,0 +1,899 @@
+# Resources: the tenant-owned storage units a claim is bound to. Source: docs/domain-sketch.md
+# section 6 "Resources" (lines 382-405).
+# ResourceClass and Device are operator-owned and live in weft.inventory (layer 1,
+# docs/layers.md "Splits the graph shows"). Claim and Binding name an instance or a component and
+# live in weft.claims (layer 5, runtime): they moved there on 2026-11-26 because Claim.holder
+# pointed up to layer 4. weft.claims names the units of this file through weft.shared.VolumeId,
+# FilesystemId and BucketId and moves Volume rows (attach, detach) itself; this file names
+# nothing of weft.claims. A volume with a writer is Attached (a stored state DeleteVolume reads);
+# every other check that a unit is still claimed is an external refusal.
+#
+# Decisions this file takes:
+# - Storage classes with concrete units get entities: Volume, Filesystem, Bucket,
+#   VolumeSnapshot. Compute devices (gpu, gpu-slice, accelerator, interconnect) are
+#   weft.inventory.Device. `cpu`, `memory`, `scratch` and `cache` are amounts on a node and need
+#   no unit record.
+#   OPEN: is the `cache` class (section 6 line 401) node-local scratch for caching, or the
+#   catalog's `cache` offering (section 13 line 518)? Taken: a node-local amount.
+# - Network, security and limit classes: see weft.claims.
+# UNMAPPED: the sketch says nothing about ownership between these records. Every relation in this
+# file is `references` (no record is deleted; each ends in a terminal state). Owner to confirm,
+# in particular VolumeSnapshot -> Volume, which could be `owns`.
+domain: weft.resources
+
+summary: >-
+  The tenant-owned storage units: volumes, filesystems, buckets and volume snapshots.
+
+naming:
+  wire: weft
+  display: Resources
+
+types:
+  # What a provisioner reports for a storage unit it was asked to create.
+  - name: weft.resources.ProvisionResult
+    kind: enum
+    variants: [Ready, Failed]
+
+entities:
+  # Brief (Volume) and section 6 line 401 `volume`: persistent, bound to a zone or to one node,
+  # one writer at a time. Lifetime independent (section 6 line 393): it outlives instances.
+  # OPEN: what provisions a zone volume (a storage backend of the cluster, or the node agent of
+  # the node it first attaches to)? Taken: the provisioner reports through
+  # ReportVolumeProvisioned, issued by the NodeAgent actor.
+  # OPEN: may read-only readers stay attached while a writer attaches? Taken: no; a writer
+  # attaches only to a volume with no binding, and a reader only to one without a writer.
+  # Brief: one writer. The writer is a weft.claims.Binding (layer 5), which names this volume; the
+  # volume does not name its writer (that would point up), it is Attached while the writer holds
+  # it. weft.claims.CommitVolumeWriter attaches it and weft.claims.ReleaseBinding detaches it.
+  - name: weft.resources.Volume
+    naming:
+      summary: A persistent block volume of one account, bound to a zone or one node, with at most one writer.
+    identity:
+      name: volume_id
+      type: weft.shared.VolumeId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: size_bytes
+        type: Integer
+      - name: zone
+        type: weft.shared.ZoneName
+      # Set for a node-bound volume (scope node-local).
+      - name: node_id
+        type: Optional<weft.shared.NodeId>
+      - name: source_snapshot_id
+        type: Optional<weft.shared.VolumeSnapshotId>
+    invariants:
+      - size_bytes > 0
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: zone
+        kind: references
+        target: weft.infrastructure.Zone
+        cardinality: one
+        via: zone
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+      - name: source_snapshot
+        kind: references
+        target: weft.resources.VolumeSnapshot
+        cardinality: one
+        via: source_snapshot_id
+    lifecycle:
+      initial: Provisioning
+      states:
+        - {name: Provisioning, summary: Being created; not attachable.}
+        - {name: Available, summary: Created and without a writer.}
+        - {name: Attached, summary: Written by exactly one exclusive binding.}
+        - {name: Failed, summary: Could not be created.}
+        - {name: Deleted, summary: Removed with its data.}
+      terminal: [Deleted]
+      transitions:
+        - {name: provisioned, from: [Provisioning], to: Available}
+        - {name: fail, from: [Provisioning], to: Failed}
+        - {name: attach, from: [Available], to: Attached}
+        - {name: detach, from: [Attached], to: Available}
+        - {name: delete, from: [Available, Failed], to: Deleted}
+
+  # Brief (VolumeSnapshot) and section 6 line 401 `snapshot`: a point-in-time copy of a volume, in
+  # the volume's account and zone; a new volume can be restored from it.
+  - name: weft.resources.VolumeSnapshot
+    naming:
+      summary: A point-in-time copy of a volume, from which a new volume of the same account can be created.
+    identity:
+      name: volume_snapshot_id
+      type: weft.shared.VolumeSnapshotId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: volume_id
+        type: weft.shared.VolumeId
+      - name: size_bytes
+        type: Integer
+      - name: zone
+        type: weft.shared.ZoneName
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: zone
+        kind: references
+        target: weft.infrastructure.Zone
+        cardinality: one
+        via: zone
+      - name: volume
+        kind: references
+        target: weft.resources.Volume
+        cardinality: one
+        via: volume_id
+    lifecycle:
+      initial: Pending
+      states:
+        - {name: Pending, summary: Being taken.}
+        - {name: Ready, summary: Complete; a volume can be restored from it.}
+        - {name: Failed, summary: Could not be taken.}
+        - {name: Deleted, summary: Removed.}
+      terminal: [Deleted]
+      transitions:
+        - {name: ready, from: [Pending], to: Ready}
+        - {name: fail, from: [Pending], to: Failed}
+        - {name: delete, from: [Ready, Failed], to: Deleted}
+
+  # Brief (Filesystem) and section 6 line 401 `filesystem`: a shared filesystem of one account
+  # in one zone; several claims may read and write it at once.
+  # OPEN: is a filesystem zone-scoped or cluster-scoped? Taken: zone.
+  # OPEN: sketch Open points (lines 630-631) leave the home of `filesystem` (resources or the
+  # catalog's `object-store`) to the integration pass. Taken: modelled here until then.
+  - name: weft.resources.Filesystem
+    naming:
+      summary: A shared filesystem of one account in one zone, mountable by several holders at once.
+    identity:
+      name: filesystem_id
+      type: weft.shared.FilesystemId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: size_bytes
+        type: Integer
+      - name: zone
+        type: weft.shared.ZoneName
+    invariants:
+      - size_bytes > 0
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+      - name: zone
+        kind: references
+        target: weft.infrastructure.Zone
+        cardinality: one
+        via: zone
+    lifecycle:
+      initial: Provisioning
+      states:
+        - {name: Provisioning, summary: Being created.}
+        - {name: Available, summary: Created and mountable.}
+        - {name: Failed, summary: Could not be created.}
+        - {name: Deleted, summary: Removed with its data.}
+      terminal: [Deleted]
+      transitions:
+        - {name: provisioned, from: [Provisioning], to: Available}
+        - {name: fail, from: [Provisioning], to: Failed}
+        - {name: delete, from: [Available, Failed], to: Deleted}
+
+  # Brief (Bucket) and section 6 line 401 `bucket`: an object store bucket of one account,
+  # reachable from the whole cluster.
+  # OPEN: is a bucket name unique in the cluster or in the account? Taken: in the cluster, so an
+  # address never names two accounts' buckets.
+  # The sketch contradicts itself: section 13 line 521 says the catalog's `object-store`
+  # "moves `bucket` out of resources", section 6 line 401 lists `bucket` here, and Open points
+  # (lines 630-631) leave the home to the integration pass. Decided in the integration pass
+  # (2026-11-26, caller's decision): buckets stay here; the catalog's object-store offering refers
+  # to a bucket by weft.shared.BucketId.
+  - name: weft.resources.Bucket
+    naming:
+      summary: An object storage bucket of one account, reachable from the whole cluster.
+    identity:
+      name: bucket_id
+      type: weft.shared.BucketId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: name
+        type: String
+    relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
+    lifecycle:
+      initial: Provisioning
+      states:
+        - {name: Provisioning, summary: Being created.}
+        - {name: Available, summary: Created and usable.}
+        - {name: Failed, summary: Could not be created.}
+        - {name: Deleted, summary: Removed with its objects.}
+      terminal: [Deleted]
+      transitions:
+        - {name: provisioned, from: [Provisioning], to: Available}
+        - {name: fail, from: [Provisioning], to: Failed}
+        - {name: delete, from: [Available, Failed], to: Deleted}
+
+errors:
+  # hardening pass 1 D3: also answers when the request names an account other than the caller's,
+  # or a record of another account, so a foreign record and a missing one answer the same.
+  - name: weft.resources.NotFound
+    summary: The addressed record does not exist in the account the request acts in, and nothing changed.
+  - name: weft.resources.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  - name: weft.resources.InvalidAmount
+    summary: The amount is not a positive number.
+  - name: weft.resources.QuotaExceeded
+    summary: The claim would exceed the quota of the account or of an account above it.
+  # hardening pass 1 disclosure (resources.yaml:411): also answers for a unit of another account,
+  # which replaced weft.resources.ForeignResource, so another account's unit and a missing one
+  # answer the same.
+  - name: weft.resources.UnitNotFound
+    summary: The volume or snapshot the request names does not exist in the account the request acts in.
+  - name: weft.resources.UnitNotAvailable
+    summary: The unit the request names is not in a usable state.
+  - name: weft.resources.VolumeTooSmall
+    summary: The volume would be smaller than the snapshot it is restored from.
+  - name: weft.resources.UnitInUse
+    summary: Claims or bindings still use the unit, so it is not deleted.
+  - name: weft.resources.BucketNameTaken
+    summary: A bucket of this name exists in the cluster.
+  - name: weft.resources.BucketNotEmpty
+    summary: The bucket still holds objects, so it is not deleted.
+
+events:
+  - name: weft.resources.VolumeCreated
+    fields:
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+
+  # Soundness pass (2026-11-26): the restored volume's event, emitted by RestoreVolume. It took
+  # `source_snapshot_id` from VolumeCreated, which CreateVolume can no longer fill (ESS has no
+  # payload source for an absent value).
+  - name: weft.resources.VolumeRestored
+    fields:
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: source_snapshot_id, type: weft.shared.VolumeSnapshotId}
+
+  - name: weft.resources.VolumeProvisioned
+    fields:
+      - {name: volume_id, type: weft.shared.VolumeId}
+
+  - name: weft.resources.VolumeFailed
+    fields:
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: reason, type: Optional<String>}
+
+  - name: weft.resources.VolumeDeleted
+    fields:
+      - {name: volume_id, type: weft.shared.VolumeId}
+
+  - name: weft.resources.VolumeSnapshotRequested
+    fields:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: account_id, type: weft.shared.AccountId}
+
+  - name: weft.resources.VolumeSnapshotReady
+    fields:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+
+  - name: weft.resources.VolumeSnapshotFailed
+    fields:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+      - {name: reason, type: Optional<String>}
+
+  - name: weft.resources.VolumeSnapshotDeleted
+    fields:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+
+  - name: weft.resources.FilesystemCreated
+    fields:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+
+  - name: weft.resources.FilesystemProvisioned
+    fields:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+
+  - name: weft.resources.FilesystemFailed
+    fields:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+      - {name: reason, type: Optional<String>}
+
+  - name: weft.resources.FilesystemDeleted
+    fields:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+
+  - name: weft.resources.BucketCreated
+    fields:
+      - {name: bucket_id, type: weft.shared.BucketId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: name, type: String}
+
+  - name: weft.resources.BucketProvisioned
+    fields:
+      - {name: bucket_id, type: weft.shared.BucketId}
+
+  - name: weft.resources.BucketFailed
+    fields:
+      - {name: bucket_id, type: weft.shared.BucketId}
+      - {name: reason, type: Optional<String>}
+
+  - name: weft.resources.BucketDeleted
+    fields:
+      - {name: bucket_id, type: weft.shared.BucketId}
+
+commands:
+  # Brief (Volume) and section 6 line 401 `volume`: create an empty volume.
+  # Soundness pass (2026-11-26): the restore from a snapshot moved to RestoreVolume. With the
+  # snapshot guards here, synthesis (ess 0.99.2) could arrange no VolumeSnapshot row for any branch
+  # of this command (a snapshot needs a volume, which needed this command: a cycle), so no volume
+  # could be created in any scenario, and every volume scenario of this domain and of weft.claims
+  # was refused. OPEN: owner to confirm the split (one create command with an optional
+  # `source_snapshot_id` before, two commands now).
+  - name: weft.resources.CreateVolume
+    naming:
+      display: Create a volume
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+    outcomes:
+      # hardening pass 1 D3: the volume is created only in the account the request acts in.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.resources.NotFound
+      - name: invalid-size
+        when: size_bytes <= 0
+        error: weft.resources.InvalidAmount
+      # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
+      # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
+      - name: quota-exceeded
+        external: the size would exceed the storage quota of the account or of an account above it
+        error: weft.resources.QuotaExceeded
+      - name: created
+        creates: weft.resources.Volume
+        instance: volume_id
+        sets:
+          account_id: input.account_id
+          size_bytes: input.size_bytes
+          zone: input.zone
+          node_id: input.node_id
+        emits: [weft.resources.VolumeCreated]
+        payload:
+          weft.resources.VolumeCreated:
+            volume_id: {generated: true}
+            account_id: input.account_id
+            size_bytes: input.size_bytes
+            zone: input.zone
+            node_id: input.node_id
+
+  # Brief (Volume, VolumeSnapshot) and section 6 line 401 `volume`, `snapshot`: create a volume
+  # restored from a snapshot of the same account and zone. Split from CreateVolume in the
+  # soundness pass (2026-11-26); see there.
+  - name: weft.resources.RestoreVolume
+    naming:
+      display: Restore a volume from a snapshot
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: source_snapshot_id, type: weft.shared.VolumeSnapshotId}
+    outcomes:
+      # hardening pass 1 D3: the volume is restored only in the account the request acts in.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.resources.NotFound
+      - name: invalid-size
+        when: size_bytes <= 0
+        error: weft.resources.InvalidAmount
+      - name: snapshot-missing
+        when_related: {via: input.source_snapshot_id, exists: false}
+        error: weft.resources.UnitNotFound
+      # hardening pass 1 disclosure (resources.yaml:411): another account's snapshot answers like a
+      # missing one, before its state, zone or size is checked.
+      - name: snapshot-foreign
+        when_related: {via: input.source_snapshot_id, predicate: account_id != input.account_id}
+        error: weft.resources.UnitNotFound
+      - name: snapshot-unavailable
+        when_related:
+          via: input.source_snapshot_id
+          predicate:
+            any:
+              - state != Ready
+              - zone != input.zone
+        error: weft.resources.UnitNotAvailable
+      - name: too-small
+        when_related: {via: input.source_snapshot_id, predicate: size_bytes > input.size_bytes}
+        error: weft.resources.VolumeTooSmall
+      # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
+      # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
+      - name: quota-exceeded
+        external: the size would exceed the storage quota of the account or of an account above it
+        error: weft.resources.QuotaExceeded
+      - name: restored
+        creates: weft.resources.Volume
+        instance: volume_id
+        sets:
+          account_id: input.account_id
+          size_bytes: input.size_bytes
+          zone: input.zone
+          node_id: input.node_id
+          source_snapshot_id: input.source_snapshot_id
+        emits: [weft.resources.VolumeRestored]
+        payload:
+          weft.resources.VolumeRestored:
+            volume_id: {generated: true}
+            account_id: input.account_id
+            size_bytes: input.size_bytes
+            zone: input.zone
+            node_id: input.node_id
+            source_snapshot_id: input.source_snapshot_id
+
+  # Brief (Volume lifecycle). See the OPEN on Volume for who provisions it.
+  - name: weft.resources.ReportVolumeProvisioned
+    naming:
+      display: Report a volume provisioned
+    input:
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: result, type: weft.resources.ProvisionResult}
+      - {name: reason, type: Optional<String>}
+    outcomes:
+      - name: no-such-volume
+        unknown_instance: true
+        error: weft.resources.NotFound
+      - name: failed
+        when: result == Failed
+        moves: weft.resources.Volume.fail
+        instance: volume_id
+        emits: [weft.resources.VolumeFailed]
+        payload:
+          weft.resources.VolumeFailed:
+            volume_id: input.volume_id
+            reason: input.reason
+      - name: provisioned
+        moves: weft.resources.Volume.provisioned
+        instance: volume_id
+        emits: [weft.resources.VolumeProvisioned]
+        payload:
+          weft.resources.VolumeProvisioned:
+            volume_id: input.volume_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (Volume lifecycle). A volume a claim still names is not deleted.
+  - name: weft.resources.DeleteVolume
+    naming:
+      display: Delete a volume
+    input:
+      - {name: volume_id, type: weft.shared.VolumeId}
+    outcomes:
+      - name: no-such-volume
+        unknown_instance: true
+        error: weft.resources.NotFound
+      # hardening pass 1 D3: another account's volume answers like a missing one, before its state.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.resources.NotFound
+      # A volume with a writer is Attached: weft.claims.CommitVolumeWriter moves it there and
+      # weft.claims.ReleaseBinding back, so this part of "in use" is the stored state.
+      - name: has-writer
+        when_subject:
+          predicate: state == Attached
+        error: weft.resources.UnitInUse
+      # The rest of "in use" is not on the volume: a read-only binding leaves it Available, and a
+      # Pending claim naming it moves nothing here. Both are rows of weft.claims (layer 5, above
+      # this one), which this domain cannot read, so that part is an external refusal.
+      - name: in-use
+        external: a claim of weft.claims that is not Released, or an Active read-only binding, names the volume
+        error: weft.resources.UnitInUse
+      - name: deleted
+        moves: weft.resources.Volume.delete
+        instance: volume_id
+        emits: [weft.resources.VolumeDeleted]
+        payload:
+          weft.resources.VolumeDeleted:
+            volume_id: input.volume_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (VolumeSnapshot) and section 6 line 401 `snapshot`.
+  # OPEN: may a volume with a writer be snapshotted (crash-consistent), or only one without a
+  # writer? Taken: only an Available volume (no writer); an Attached one is refused.
+  - name: weft.resources.SnapshotVolume
+    naming:
+      display: Snapshot a volume
+    input:
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: account_id, type: weft.shared.AccountId}
+    outcomes:
+      # hardening pass 1 D3: the snapshot is taken only in the account the request acts in.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.resources.NotFound
+      - name: volume-missing
+        when_related: {via: input.volume_id, exists: false}
+        error: weft.resources.UnitNotFound
+      # hardening pass 1 disclosure (resources.yaml:527): another account's volume answers like a
+      # missing one, before its state is checked.
+      - name: volume-foreign
+        when_related: {via: input.volume_id, predicate: account_id != input.account_id}
+        error: weft.resources.UnitNotFound
+      - name: volume-unavailable
+        when_related: {via: input.volume_id, predicate: state != Available}
+        error: weft.resources.UnitNotAvailable
+      # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
+      # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
+      - name: quota-exceeded
+        external: the snapshot would exceed the storage quota of the account or of an account above it
+        error: weft.resources.QuotaExceeded
+      - name: requested
+        creates: weft.resources.VolumeSnapshot
+        instance: volume_snapshot_id
+        sets:
+          account_id: input.account_id
+          volume_id: input.volume_id
+          size_bytes: {related: {via: input.volume_id, field: size_bytes}}
+          zone: {related: {via: input.volume_id, field: zone}}
+        emits: [weft.resources.VolumeSnapshotRequested]
+        payload:
+          weft.resources.VolumeSnapshotRequested:
+            volume_snapshot_id: {generated: true}
+            volume_id: input.volume_id
+            account_id: input.account_id
+
+  # Brief (VolumeSnapshot). Reported by the provisioner, as for volumes.
+  - name: weft.resources.ReportVolumeSnapshotTaken
+    naming:
+      display: Report a volume snapshot taken
+    input:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+      - {name: result, type: weft.resources.ProvisionResult}
+      - {name: reason, type: Optional<String>}
+    outcomes:
+      - name: no-such-snapshot
+        unknown_instance: true
+        error: weft.resources.NotFound
+      - name: failed
+        when: result == Failed
+        moves: weft.resources.VolumeSnapshot.fail
+        instance: volume_snapshot_id
+        emits: [weft.resources.VolumeSnapshotFailed]
+        payload:
+          weft.resources.VolumeSnapshotFailed:
+            volume_snapshot_id: input.volume_snapshot_id
+            reason: input.reason
+      - name: ready
+        moves: weft.resources.VolumeSnapshot.ready
+        instance: volume_snapshot_id
+        emits: [weft.resources.VolumeSnapshotReady]
+        payload:
+          weft.resources.VolumeSnapshotReady:
+            volume_snapshot_id: input.volume_snapshot_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (VolumeSnapshot). A volume restored from it keeps its own data; the snapshot can go.
+  - name: weft.resources.DeleteVolumeSnapshot
+    naming:
+      display: Delete a volume snapshot
+    input:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+    outcomes:
+      - name: no-such-snapshot
+        unknown_instance: true
+        error: weft.resources.NotFound
+      # hardening pass 1 D3: another account's snapshot answers like a missing one, before its state.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.resources.NotFound
+      - name: deleted
+        moves: weft.resources.VolumeSnapshot.delete
+        instance: volume_snapshot_id
+        emits: [weft.resources.VolumeSnapshotDeleted]
+        payload:
+          weft.resources.VolumeSnapshotDeleted:
+            volume_snapshot_id: input.volume_snapshot_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (Filesystem) and section 6 line 401 `filesystem`.
+  - name: weft.resources.CreateFilesystem
+    naming:
+      display: Create a filesystem
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+    outcomes:
+      # hardening pass 1 D3: the filesystem is created only in the account the request acts in.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.resources.NotFound
+      - name: invalid-size
+        when: size_bytes <= 0
+        error: weft.resources.InvalidAmount
+      # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
+      # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
+      - name: quota-exceeded
+        external: the size would exceed the storage quota of the account or of an account above it
+        error: weft.resources.QuotaExceeded
+      - name: created
+        creates: weft.resources.Filesystem
+        instance: filesystem_id
+        sets:
+          account_id: input.account_id
+          size_bytes: input.size_bytes
+          zone: input.zone
+        emits: [weft.resources.FilesystemCreated]
+        payload:
+          weft.resources.FilesystemCreated:
+            filesystem_id: {generated: true}
+            account_id: input.account_id
+            size_bytes: input.size_bytes
+            zone: input.zone
+
+  # Brief (Filesystem). Reported by the provisioner, as for volumes.
+  - name: weft.resources.ReportFilesystemProvisioned
+    naming:
+      display: Report a filesystem provisioned
+    input:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+      - {name: result, type: weft.resources.ProvisionResult}
+      - {name: reason, type: Optional<String>}
+    outcomes:
+      - name: no-such-filesystem
+        unknown_instance: true
+        error: weft.resources.NotFound
+      - name: failed
+        when: result == Failed
+        moves: weft.resources.Filesystem.fail
+        instance: filesystem_id
+        emits: [weft.resources.FilesystemFailed]
+        payload:
+          weft.resources.FilesystemFailed:
+            filesystem_id: input.filesystem_id
+            reason: input.reason
+      - name: provisioned
+        moves: weft.resources.Filesystem.provisioned
+        instance: filesystem_id
+        emits: [weft.resources.FilesystemProvisioned]
+        payload:
+          weft.resources.FilesystemProvisioned:
+            filesystem_id: input.filesystem_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (Filesystem). A filesystem a claim still names is not deleted.
+  - name: weft.resources.DeleteFilesystem
+    naming:
+      display: Delete a filesystem
+    input:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+    outcomes:
+      - name: no-such-filesystem
+        unknown_instance: true
+        error: weft.resources.NotFound
+      # hardening pass 1 D3: another account's filesystem answers like a missing one, before its
+      # use or state.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.resources.NotFound
+      # Claims are weft.claims (layer 5), and no state of this unit records them (weft.claims moves
+      # only Volume rows), so the check is an external refusal.
+      - name: in-use
+        external: a claim of weft.claims that is not Released names the filesystem
+        error: weft.resources.UnitInUse
+      - name: deleted
+        moves: weft.resources.Filesystem.delete
+        instance: filesystem_id
+        emits: [weft.resources.FilesystemDeleted]
+        payload:
+          weft.resources.FilesystemDeleted:
+            filesystem_id: input.filesystem_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (Bucket) and section 6 line 401 `bucket`.
+  - name: weft.resources.CreateBucket
+    naming:
+      display: Create a bucket
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: name, type: String}
+    outcomes:
+      # hardening pass 1 D3: the bucket is created only in the account the request acts in.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.resources.NotFound
+      # OPEN (hardening pass 1, disclosure): bucket names are unique in the cluster (see Bucket),
+      # so this refusal tells any caller that some account holds the name. Kept: an address must
+      # never name two accounts' buckets. Owner to confirm.
+      - name: name-taken
+        when_related:
+          entity: weft.resources.Bucket
+          where:
+            all:
+              - name == input.name
+              - state != Deleted
+          exists: true
+        error: weft.resources.BucketNameTaken
+      # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
+      # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
+      - name: quota-exceeded
+        external: another bucket would exceed the storage quota of the account or of an account above it
+        error: weft.resources.QuotaExceeded
+      - name: created
+        creates: weft.resources.Bucket
+        instance: bucket_id
+        sets:
+          account_id: input.account_id
+          name: input.name
+        emits: [weft.resources.BucketCreated]
+        payload:
+          weft.resources.BucketCreated:
+            bucket_id: {generated: true}
+            account_id: input.account_id
+            name: input.name
+
+  # Brief (Bucket). Reported by the provisioner, as for volumes.
+  - name: weft.resources.ReportBucketProvisioned
+    naming:
+      display: Report a bucket provisioned
+    input:
+      - {name: bucket_id, type: weft.shared.BucketId}
+      - {name: result, type: weft.resources.ProvisionResult}
+      - {name: reason, type: Optional<String>}
+    outcomes:
+      - name: no-such-bucket
+        unknown_instance: true
+        error: weft.resources.NotFound
+      - name: failed
+        when: result == Failed
+        moves: weft.resources.Bucket.fail
+        instance: bucket_id
+        emits: [weft.resources.BucketFailed]
+        payload:
+          weft.resources.BucketFailed:
+            bucket_id: input.bucket_id
+            reason: input.reason
+      - name: provisioned
+        moves: weft.resources.Bucket.provisioned
+        instance: bucket_id
+        emits: [weft.resources.BucketProvisioned]
+        payload:
+          weft.resources.BucketProvisioned:
+            bucket_id: input.bucket_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+  # Brief (Bucket). A bucket a claim still names, or one that holds objects, is not deleted.
+  # OPEN: should deleting a bucket remove its objects? Taken: no; a bucket with objects is refused.
+  - name: weft.resources.DeleteBucket
+    naming:
+      display: Delete a bucket
+    input:
+      - {name: bucket_id, type: weft.shared.BucketId}
+    outcomes:
+      - name: no-such-bucket
+        unknown_instance: true
+        error: weft.resources.NotFound
+      # hardening pass 1 D3: another account's bucket answers like a missing one, before its use,
+      # contents or state.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.resources.NotFound
+      # Claims are weft.claims (layer 5), and no state of this unit records them (weft.claims moves
+      # only Volume rows), so the check is an external refusal.
+      - name: in-use
+        external: a claim of weft.claims that is not Released names the bucket
+        error: weft.resources.UnitInUse
+      - name: not-empty
+        # The objects are data in the object store, which weft does not model as rows.
+        external: the object store still holds objects in the bucket
+        error: weft.resources.BucketNotEmpty
+      - name: deleted
+        moves: weft.resources.Bucket.delete
+        instance: bucket_id
+        emits: [weft.resources.BucketDeleted]
+        payload:
+          weft.resources.BucketDeleted:
+            bucket_id: input.bucket_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.resources.StateConflict
+
+views:
+  # Brief (Volume): the volumes of an account.
+  - name: weft.resources.Volumes
+    source: weft.resources.Volume
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: node_id, type: Optional<weft.shared.NodeId>}
+      - {name: source_snapshot_id, type: Optional<weft.shared.VolumeSnapshotId>}
+      - {name: state, type: weft.resources.Volume.State}
+
+  # Brief (VolumeSnapshot): the volume snapshots of an account.
+  - name: weft.resources.VolumeSnapshots
+    source: weft.resources.VolumeSnapshot
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: volume_id, type: weft.shared.VolumeId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: state, type: weft.resources.VolumeSnapshot.State}
+
+  # Brief (Filesystem): the filesystems of an account.
+  - name: weft.resources.Filesystems
+    source: weft.resources.Filesystem
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: filesystem_id, type: weft.shared.FilesystemId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: size_bytes, type: Integer}
+      - {name: zone, type: weft.shared.ZoneName}
+      - {name: state, type: weft.resources.Filesystem.State}
+
+  # Brief (Bucket): the buckets of an account.
+  - name: weft.resources.Buckets
+    source: weft.resources.Bucket
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: bucket_id, type: weft.shared.BucketId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: name, type: String}
+      - {name: state, type: weft.resources.Bucket.State}

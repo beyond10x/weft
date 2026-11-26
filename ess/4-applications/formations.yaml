@@ -1,0 +1,2435 @@
+# Formations: the deployable unit of weft. Source: docs/domain-sketch.md section 3 "Formation (the
+# outer frame)". Releases, plans, simulation and drift are `weft.deployments`
+# (section 5); a component's package, shape and claims are `weft.workloads` (section 4).
+#
+# Model: a formation holds one editable topology (components, links, border, config, environments)
+# as rows of this domain. "Changing the border, adding a link or splitting a component is an edit
+# and a new revision" ("Topology as data"): each edit changes a row, and CommitRevision freezes the current
+# topology into an immutable FormationRevision.
+# OPEN: the sketch does not say whether the topology is edited row by row (this file) or only
+# replaced as a whole document. Taken: rows, so that link and border rules are guards over typed
+# rows; a whole document arrives as a translation (section 5) that writes the same rows.
+domain: weft.formations
+
+summary: >-
+  Formations: a set of components that belong together inside one account, their allowed links,
+  their border to the outside, their config and their environments, frozen into immutable
+  revisions.
+
+naming:
+  wire: weft
+  display: Formations
+
+types:
+  # Identities of rows only this domain addresses. Other domains name a component by
+  # (weft.shared.FormationId, weft.shared.ComponentName).
+
+  # Section 3, `Formation`: "named"; the "Topology as data" example's `formation: shop`.
+  - name: weft.formations.FormationName
+    kind: newtype
+    of: String
+  # Section 3, `Environment`: "a named target of the same formation (`dev`, `staging`, `prod`)".
+  # OPEN: whether environment names are a closed set. Taken: any name; dev, staging, prod are
+  # examples.
+  - name: weft.formations.EnvironmentName
+    kind: newtype
+    of: String
+  # Section 3, `InternalName`: "a DNS name inside the formation's private network
+  # (`orders.shop.internal`)".
+  - name: weft.formations.InternalName
+    kind: newtype
+    of: String
+  # Section 3, `Border`: "host and path"; a public DNS host name.
+  - name: weft.formations.Host
+    kind: newtype
+    of: String
+  - name: weft.formations.ConfigName
+    kind: newtype
+    of: String
+
+  # Section 3, `Link` "(protocol, port)" and `Border` "a component and port".
+  - name: weft.formations.Port
+    kind: newtype
+    of: Integer
+    invariants:
+      - value >= 1
+      - value <= 65535
+  # OPEN: the sketch names a link's protocol but no list. Taken: the four below.
+  - name: weft.formations.LinkProtocol
+    kind: enum
+    variants: [Http, Grpc, Tcp, Udp]
+
+  # Section 3, `Formation` "a quota slice" and `Environment` "its own ... quotas": a list of
+  # weft.shared.ResourceAmount, one amount of one resource class (section 6). The shared type
+  # carries no `amount >= 0`; the entities and the commands that set a slice hold it.
+
+  # Section 3, `Config`: "mounted into components as files or environment variables".
+  - name: weft.formations.MountKind
+    kind: enum
+    variants: [File, Env]
+
+  # Design ci-cd-support § Stage 1.3: "an `Environment` gets an origin (`manual`, `pull-request`)".
+  - name: weft.formations.EnvironmentOrigin
+    kind: enum
+    variants: [Manual, PullRequest]
+
+entities:
+  # Section 3: "`Formation`: named, inside one account. Owns a private network, a secret
+  # scope and a quota slice."
+  - name: weft.formations.Formation
+    naming:
+      summary: A named set of components inside one account, with its private network, secret scope and quota slice.
+    identity:
+      name: formation_id
+      type: weft.shared.FormationId
+    fields:
+      - name: account_id
+        type: weft.shared.AccountId
+      - name: name
+        type: weft.formations.FormationName
+      # The private network's DNS domain, `<formation>.internal` (section 3, `InternalName`: `orders.shop.internal`).
+      # OPEN: the private network's address range and how it is allocated; taken: the
+      # implementation mints the domain, and the network is the implicit claim of section 4 "Claims".
+      - name: internal_domain
+        type: String
+      # The formation itself is the secret scope of section 7, `Secret` ("formation ... scope");
+      # `weft.secrets` keys its secrets by this formation's id, so no field is stored here.
+      - name: quota_slice
+        type: List<weft.shared.ResourceAmount>
+      # Section 10 line 456 (the scheduler's input: "formation's zone rules"); docs/open-questions.md
+      # "workloads loops" (wave 4, decided): the zones the formation's instances may run in, given
+      # at creation. Empty: any zone. weft.workloads.InstanceCreated carries it to the scheduler.
+      # OPEN: no command changes it after creation, and CreateFormation does not refuse a name no
+      # weft.infrastructure.Zone declares (a `when_related: {via: input.zones, exists: false}` guard with
+      # an error of its own would); the scheduler meets such a zone as one with no node.
+      - name: zones
+        type: List<weft.shared.ZoneName>
+      # design:tenant-clusters step 3 (integrator, 2026-11-26): the tenant cluster the formation
+      # deploys into; the CLI fills the cloud's default cluster. Fixed at creation.
+      - name: cluster_id
+        type: weft.shared.ClusterId
+    invariants:
+      - forall: {in: quota_slice, as: q, that: q.amount >= 0}
+    # OPEN: the sketch gives the formation no lifecycle. Taken: Active until retired; a retired
+    # formation takes no edit and no commit.
+    lifecycle:
+      initial: Active
+      states: [Active, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Active]
+          to: Retired
+    # Every row below is part of the formation's document ("Topology as data": "The formation document is the
+    # topology"), so the formation owns each of them.
+    relations:
+      # Section 3: "named, inside one account". The account (layer 2, `weft.accounts`) stands on
+      # its own and outlives the link: references.
+      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: cluster, kind: references, target: weft.cluster.Cluster, cardinality: one, via: cluster_id}
+      # Section 10 line 456: a zone (layer 1, `weft.infrastructure`) stands on its own: references.
+      - {name: allowed_zones, kind: references, target: weft.infrastructure.Zone, cardinality: many, via: zones}
+      - {name: revisions, kind: owns, target: weft.formations.FormationRevision, cardinality: many, via: formation_id}
+      - {name: environments, kind: owns, target: weft.formations.Environment, cardinality: many, via: formation_id}
+      - {name: components, kind: owns, target: weft.formations.Component, cardinality: many, via: formation_id}
+      - {name: links, kind: owns, target: weft.formations.Link, cardinality: many, via: formation_id}
+      - {name: endpoints, kind: owns, target: weft.formations.Endpoint, cardinality: many, via: formation_id}
+      - {name: routes, kind: owns, target: weft.formations.Route, cardinality: many, via: formation_id}
+      - {name: configs, kind: owns, target: weft.formations.Config, cardinality: many, via: formation_id}
+      - {name: config_mounts, kind: owns, target: weft.formations.ConfigMount, cardinality: many, via: formation_id}
+      - {name: config_overrides, kind: owns, target: weft.formations.ConfigOverride, cardinality: many, via: formation_id}
+      - {name: scale_settings, kind: owns, target: weft.formations.ScaleSetting, cardinality: many, via: formation_id}
+
+  # Section 3: "`FormationRevision`: immutable snapshot of the formation's document."
+  # Section 5 "Translation" has a Translation produce one; the Translation (`weft.deployments`)
+  # names the revision it produced, so the revision stores no reference back to it.
+  - name: weft.formations.FormationRevision
+    naming:
+      summary: An immutable snapshot of a formation's document; releases apply revisions.
+    identity:
+      name: revision_id
+      type: weft.shared.FormationRevisionId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      # 1 for the first revision of a formation, one more for each next. Minted by the
+      # implementation.
+      - name: number
+        type: Integer
+      # Digest of the canonical document the revision froze: components, links, border, config,
+      # environments. Section 5 "Translation", "Deterministic": the same source gives the same revision byte for byte.
+      # OPEN: the canonical serialization of the document; taken: the implementation mints the
+      # digest over it.
+      - name: document_digest
+        type: weft.shared.ArtifactDigest
+    invariants:
+      - number >= 1
+    # Integration 2: the frozen document is a content-addressed artifact (layer 3,
+    # `weft.artifacts`). It stands on its own and outlives the revision: references.
+    relations:
+      - {name: document, kind: references, target: weft.artifacts.Artifact, cardinality: one, via: document_digest}
+    # Immutable: one state, no transition, no command that updates or deletes it.
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # Section 3: "`Environment`: a named target of the same formation (`dev`,
+  # `staging`, `prod`). Each has its own secrets, config values, quotas and scale settings."
+  # Its secrets are `weft.secrets`' (section 7, `Secret`, environment scope), keyed by its id. Its
+  # config values are ConfigOverride rows, its scale settings ScaleSetting rows.
+  - name: weft.formations.Environment
+    naming:
+      summary: A named target of a formation, with its own config values, quota slice and scale settings.
+    identity:
+      name: environment_id
+      type: weft.shared.EnvironmentId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: name
+        type: weft.formations.EnvironmentName
+      - name: quota_slice
+        type: List<weft.shared.ResourceAmount>
+      # Design ci-cd-support § Stage 1.3 and § Security ("a rule for a production environment
+      # requires a protected ref"): who made the environment and whether it is production.
+      - name: origin
+        type: weft.formations.EnvironmentOrigin
+      - name: protected
+        type: Boolean
+      # A preview's source: the repository and pull request it was made for, and when it ends.
+      # Absent for a manual environment.
+      - name: source_repository
+        type: Optional<String>
+      - name: pull_request
+        type: Optional<Integer>
+      - name: expires_at
+        type: Optional<Timestamp>
+    invariants:
+      - forall: {in: quota_slice, as: q, that: q.amount >= 0}
+    # OPEN: the sketch gives an environment no lifecycle. Taken: Active until retired, like the
+    # formation.
+    lifecycle:
+      initial: Active
+      states: [Active, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Active]
+          to: Retired
+
+  # Section 3: "`Component`: one workload inside the formation (section 4)." Its package,
+  # shape and claims are `weft.workloads`', which names it by (formation_id, name); the name is
+  # unique in the formation (CreateComponent refuses a second).
+  # Line 159-161: "`InternalName`: each component has a DNS name inside the formation's private
+  # network (`orders.shop.internal`)": `internal_name`, `<name>.<formation>.internal`.
+  # Lines 155-158: a component with `on_border` is part of the formation's Border; every other
+  # component is internal.
+  - name: weft.formations.Component
+    naming:
+      summary: One workload inside a formation, with its internal DNS name and whether it is on the border.
+    identity:
+      name: component_id
+      type: weft.shared.ComponentId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: name
+        type: weft.shared.ComponentName
+      - name: internal_name
+        type: weft.formations.InternalName
+      - name: on_border
+        type: Boolean
+    # OPEN: the sketch gives a component no lifecycle. Taken: one state; RemoveComponent deletes
+    # the row and refuses while a link, route, mount or scale setting names it.
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 3: "`Link`: an allowed call from one component to another (protocol,
+  # port). Components without a link cannot reach each other." Section 3, `InternalName`: a Link is also what
+  # lets the caller resolve the target's InternalName. Default deny: no row, no reach.
+  # OPEN: whether a link may cross formations (or accounts, through an `Export` below).
+  # Taken: no; both components are of the link's formation.
+  - name: weft.formations.Link
+    naming:
+      summary: An allowed call from a caller component to a target component of the same formation, on one protocol and port.
+    identity:
+      name: link_id
+      type: weft.shared.LinkId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: caller_component_id
+        type: weft.shared.ComponentId
+      - name: target_component_id
+        type: weft.shared.ComponentId
+      - name: protocol
+        type: weft.formations.LinkProtocol
+      - name: port
+        type: weft.formations.Port
+    relations:
+      - {name: caller, kind: references, target: weft.formations.Component, cardinality: one, via: caller_component_id}
+      - {name: target, kind: references, target: weft.formations.Component, cardinality: one, via: target_component_id}
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 3: "`Border`: the components reachable from outside the formation, with
+  # their public `Endpoint`s". An Endpoint is one public host of the formation.
+  # OPEN: whether each environment gets its own hosts. Taken: an endpoint belongs to the formation;
+  # per-environment hosts are left to `weft.deployments`.
+  - name: weft.formations.Endpoint
+    naming:
+      summary: A public host name at the formation's border.
+    identity:
+      name: endpoint_id
+      type: weft.shared.EndpointId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: host
+        type: weft.formations.Host
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 1 "Accounts", sketch lines 139-140: "Nothing crosses accounts unless an `Export` names
+  # it (an endpoint shared to another account)." The endpoint is this domain's (section 3,
+  # `Border`), so the export sits beside it; the accounts are `weft.accounts`', named by
+  # weft.shared.AccountId and weft.shared.TenantId.
+  # OPEN: whether an export may cross tenants. Taken: no; both accounts belong to one tenant,
+  # and a cross-tenant export is refused.
+  # OPEN: whether the receiving account must accept an export. Taken: no; an export only lets
+  # the receiving account's workloads reach the endpoint, and their own links still declare it
+  # (sketch line 12).
+  # OPEN: whether one export names one receiving account only or that account and the accounts
+  # below it. Taken: that account only.
+  # Integration 2 (decided): RemoveEndpoint refuses while an active export names the endpoint
+  # (`ExportsRemain`), so no active export outlives its endpoint. A revoked export is a record
+  # and keeps the endpoint's id after the endpoint is gone: the endpoint is referenced, not owner.
+  # While Export was `weft.accounts`', closing either account revoked it. Taken in wave 4 (the
+  # brief's answer to "Account close vs active exports", docs/open-questions.md): the close
+  # proceeds, and RevokeAccountExports, bound to `weft.accounts.AccountClosed`, revokes every
+  # active export from or to the account (R6, § 14 line 590).
+  # OPEN: confirm with the owner that the close proceeds rather than being refused while active
+  # exports remain; between the close and the binding's delivery an export of a closed account is
+  # still Active.
+  - name: weft.formations.Export
+    naming:
+      summary: One endpoint of one account shared to one other account of the same tenant.
+    identity:
+      name: export_id
+      type: weft.shared.ExportId
+    fields:
+      - name: tenant_id
+        type: weft.shared.TenantId
+      - name: endpoint_id
+        type: weft.shared.EndpointId
+      - name: from_account_id
+        type: weft.shared.AccountId
+        summary: The account the endpoint belongs to.
+      - name: to_account_id
+        type: weft.shared.AccountId
+        summary: The account whose workloads may reach the endpoint.
+    # The tenant and both accounts are `weft.accounts`' (layer 2) and stand on their own.
+    relations:
+      - {name: endpoint, kind: references, target: weft.formations.Endpoint, cardinality: one, via: endpoint_id}
+      - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
+      - {name: from_account, kind: references, target: weft.accounts.Account, cardinality: one, via: from_account_id}
+      - {name: to_account, kind: references, target: weft.accounts.Account, cardinality: one, via: to_account_id}
+    lifecycle:
+      initial: Active
+      states: [Active, Revoked]
+      terminal: [Revoked]
+      transitions:
+        - name: revoke
+          from: [Active]
+          to: Revoked
+
+  # Section 3, `Border`: "`Route`s (host and path to a component and port; what a Kubernetes
+  # Ingress says)". The host is the endpoint's.
+  - name: weft.formations.Route
+    naming:
+      summary: Host and path of a public endpoint, sent to one border component on one port.
+    identity:
+      name: route_id
+      type: weft.shared.RouteId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: endpoint_id
+        type: weft.shared.EndpointId
+      # A path prefix such as `/api`. OPEN: prefix or exact match; taken: prefix.
+      - name: path
+        type: String
+      - name: component_id
+        type: weft.shared.ComponentId
+      - name: port
+        type: weft.formations.Port
+    relations:
+      - {name: endpoint, kind: references, target: weft.formations.Endpoint, cardinality: one, via: endpoint_id}
+      - {name: component, kind: references, target: weft.formations.Component, cardinality: one, via: component_id}
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 3: "`Config`: named non-secret data (files, key-value pairs) of the
+  # formation ... What a Kubernetes ConfigMap says." `data` maps a key (or a file name) to its
+  # text.
+  # OPEN: how a secret value written into a Config is kept out (section 5 "Deployment sources", `kubernetes`, sends Secret
+  # values to custody). Taken: Config is declared non-secret; nothing here inspects its values.
+  - name: weft.formations.Config
+    naming:
+      summary: Named non-secret data of a formation, as keys or files.
+    identity:
+      name: config_id
+      type: weft.shared.ConfigId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: name
+        type: weft.formations.ConfigName
+      - name: data
+        type: Map<String, String>
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 3, `Config`: "mounted into components as files or environment variables". For
+  # `File`, `target` is the directory the keys appear in as files; for `Env`, the prefix of the
+  # variable names.
+  - name: weft.formations.ConfigMount
+    naming:
+      summary: One config mounted into one component, as files or as environment variables.
+    identity:
+      name: mount_id
+      type: weft.shared.ConfigMountId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: component_id
+        type: weft.shared.ComponentId
+      - name: config_id
+        type: weft.shared.ConfigId
+      - name: kind
+        type: weft.formations.MountKind
+      - name: target
+        type: String
+    relations:
+      - {name: component, kind: references, target: weft.formations.Component, cardinality: one, via: component_id}
+      - {name: config, kind: references, target: weft.formations.Config, cardinality: one, via: config_id}
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 3, `Environment`: each environment has "its own ... config values": the data of one config
+  # in one environment, replacing the config's own data there.
+  # OPEN: replace the config's data whole or merge key by key. Taken: replace.
+  - name: weft.formations.ConfigOverride
+    naming:
+      summary: The values one config takes in one environment.
+    identity:
+      name: override_id
+      type: weft.shared.ConfigOverrideId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: config_id
+        type: weft.shared.ConfigId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: data
+        type: Map<String, String>
+    relations:
+      - {name: config, kind: references, target: weft.formations.Config, cardinality: one, via: config_id}
+      - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Section 3, `Environment`: each environment has "its own ... scale settings": the replica bounds of
+  # one component in one environment. The metric that moves replicas between them is the
+  # ScaleRule of `weft.workloads` (section 4 "Inside one instance").
+  - name: weft.formations.ScaleSetting
+    naming:
+      summary: The replica bounds of one component in one environment.
+    identity:
+      name: scale_setting_id
+      type: weft.shared.ScaleSettingId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: component_id
+        type: weft.shared.ComponentId
+      - name: min_replicas
+        type: Integer
+      - name: max_replicas
+        type: Integer
+    invariants:
+      - min_replicas >= 0
+      - max_replicas >= 1
+    relations:
+      - {name: environment, kind: references, target: weft.formations.Environment, cardinality: one, via: environment_id}
+      - {name: component, kind: references, target: weft.formations.Component, cardinality: one, via: component_id}
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+errors:
+  - name: weft.formations.NoSuchFormation
+    summary: No formation has this id, and nothing changed.
+  - name: weft.formations.FormationStateConflict
+    summary: The formation is retired, so it takes no edit, and nothing changed.
+  - name: weft.formations.NoSuchCluster
+    summary: The cluster does not exist, was deleted, or belongs to another account; nothing was created.
+  - name: weft.formations.NoSuchAccount
+    summary: The account does not exist or is closed, and nothing was created.
+  - name: weft.formations.FormationNameTaken
+    summary: The account already has a formation of this name, and nothing was created.
+  - name: weft.formations.QuotaExceeded
+    summary: The slice asked for exceeds the quota its parent has left, and nothing changed.
+  - name: weft.formations.NegativeQuotaAmount
+    summary: The slice asked for holds an amount below zero, and nothing changed.
+  - name: weft.formations.ReleasesLive
+    summary: A release of this formation or environment is live, and nothing changed.
+  - name: weft.formations.NoSuchEnvironment
+    summary: No environment of this formation has this id, and nothing changed.
+  - name: weft.formations.EnvironmentStateConflict
+    summary: The environment is retired, so it takes no edit, and nothing changed.
+  - name: weft.formations.EnvironmentNameTaken
+    summary: The formation already has an environment of this name, and nothing was created.
+  - name: weft.formations.NoSuchComponent
+    summary: No component of this formation has this id, and nothing changed.
+  - name: weft.formations.ComponentNameTaken
+    summary: The formation already has a component of this name, and nothing was created.
+  - name: weft.formations.ComponentInUse
+    summary: A link, route, config mount or scale setting still names the component, and nothing was removed.
+  - name: weft.formations.NoSuchLink
+    summary: No link of this formation has this id, and nothing changed.
+  - name: weft.formations.LinkExists
+    summary: The formation already allows this call on this protocol and port, and nothing was created.
+  - name: weft.formations.NotOnBorder
+    summary: The component is not on the formation's border, so no route may reach it, and nothing changed.
+  - name: weft.formations.RoutesRemain
+    summary: A route still names this component or endpoint, and nothing changed.
+  - name: weft.formations.ExportsRemain
+    summary: An active export still shares this endpoint with another account, and nothing was removed.
+  - name: weft.formations.NoSuchEndpoint
+    summary: No endpoint of this formation has this id, and nothing changed.
+  - name: weft.formations.HostTaken
+    summary: Another endpoint already holds this host, and nothing was created.
+  - name: weft.formations.HostNotVerified
+    summary: The account has not shown that it controls this host, and nothing was created.
+  - name: weft.formations.SelfExport
+    summary: An export names the same account on both sides; nothing was exported.
+  - name: weft.formations.ExportExists
+    summary: This endpoint is already exported to this account, and nothing was exported.
+  - name: weft.formations.EndpointNotInAccount
+    summary: The endpoint does not belong to the exporting account, so nothing was exported.
+  - name: weft.formations.ExportNotPermitted
+    summary: The caller holds no role on the exporting account that may export, so nothing crossed accounts.
+  - name: weft.formations.ExportNotFound
+    summary: No export has this identifier, and nothing changed.
+  - name: weft.formations.ExportNotActive
+    summary: The export is revoked already, and nothing changed.
+  - name: weft.formations.AccountNotClosed
+    summary: The account does not exist or is still open, so no export was revoked.
+  - name: weft.formations.NoSuchRoute
+    summary: No route of this formation has this id, and nothing changed.
+  - name: weft.formations.RouteExists
+    summary: The endpoint already routes this path, and nothing was created.
+  - name: weft.formations.NoSuchConfig
+    summary: No config of this formation has this id, and nothing changed.
+  - name: weft.formations.ConfigNameTaken
+    summary: The formation already has a config of this name, and nothing was created.
+  - name: weft.formations.ConfigInUse
+    summary: A mount or an environment's values still name the config, and nothing was removed.
+  - name: weft.formations.NoSuchMount
+    summary: No config mount of this formation has this id, and nothing changed.
+  - name: weft.formations.MountExists
+    summary: The component already mounts this config, and nothing was created.
+  - name: weft.formations.NoSuchOverride
+    summary: No environment values of this formation have this id, and nothing changed.
+  - name: weft.formations.OverrideExists
+    summary: The environment already has values for this config, and nothing was created.
+  - name: weft.formations.NoSuchScaleSetting
+    summary: No scale setting of this formation has this id, and nothing changed.
+  - name: weft.formations.ScaleSettingExists
+    summary: The environment already has a scale setting for this component, and nothing was created.
+  - name: weft.formations.InvalidScaleBounds
+    summary: The minimum replicas exceed the maximum, and nothing changed.
+  - name: weft.formations.EmptyFormation
+    summary: The formation has no component, so no revision was recorded.
+
+events:
+  - name: weft.formations.FormationCreated
+    fields:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: name, type: weft.formations.FormationName}
+  - name: weft.formations.FormationQuotaSet
+    fields:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: quota_slice, type: List<weft.shared.ResourceAmount>}
+  - name: weft.formations.FormationRetired
+    fields:
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.RevisionCommitted
+    fields:
+      - {name: revision_id, type: weft.shared.FormationRevisionId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: number, type: Integer}
+      - {name: document_digest, type: weft.shared.ArtifactDigest}
+  - name: weft.formations.EnvironmentCreated
+    fields:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.EnvironmentName}
+  - name: weft.formations.EnvironmentQuotaSet
+    fields:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: quota_slice, type: List<weft.shared.ResourceAmount>}
+  - name: weft.formations.EnvironmentRetired
+    fields:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+  - name: weft.formations.ComponentAdded
+    fields:
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.shared.ComponentName}
+      - {name: internal_name, type: weft.formations.InternalName}
+  - name: weft.formations.ComponentRemoved
+    fields:
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ComponentBordered
+    fields:
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ComponentUnbordered
+    fields:
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.LinkAdded
+    fields:
+      - {name: link_id, type: weft.shared.LinkId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: caller_component_id, type: weft.shared.ComponentId}
+      - {name: target_component_id, type: weft.shared.ComponentId}
+      - {name: protocol, type: weft.formations.LinkProtocol}
+      - {name: port, type: weft.formations.Port}
+  - name: weft.formations.LinkRemoved
+    fields:
+      - {name: link_id, type: weft.shared.LinkId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.EndpointAdded
+    fields:
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: host, type: weft.formations.Host}
+  - name: weft.formations.EndpointRemoved
+    fields:
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ExportCreated
+    fields:
+      - {name: export_id, type: weft.shared.ExportId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: from_account_id, type: weft.shared.AccountId}
+      - {name: to_account_id, type: weft.shared.AccountId}
+  - name: weft.formations.ExportRevoked
+    fields:
+      - {name: export_id, type: weft.shared.ExportId}
+  # One per RevokeAccountExports; each export it revoked also gets its own ExportRevoked.
+  - name: weft.formations.AccountExportsRevoked
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: revoked, type: Integer}
+  - name: weft.formations.RouteAdded
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: path, type: String}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: port, type: weft.formations.Port}
+  - name: weft.formations.RouteRemoved
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  # Config events carry names and ids, not the data: a config is non-secret, but events stay
+  # small and the data is read through the Configs view.
+  - name: weft.formations.ConfigCreated
+    fields:
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.ConfigName}
+  - name: weft.formations.ConfigChanged
+    fields:
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ConfigRemoved
+    fields:
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ConfigMounted
+    fields:
+      - {name: mount_id, type: weft.shared.ConfigMountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: kind, type: weft.formations.MountKind}
+      - {name: target, type: String}
+  - name: weft.formations.ConfigUnmounted
+    fields:
+      - {name: mount_id, type: weft.shared.ConfigMountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ConfigOverrideSet
+    fields:
+      - {name: override_id, type: weft.shared.ConfigOverrideId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+  - name: weft.formations.ConfigOverrideChanged
+    fields:
+      - {name: override_id, type: weft.shared.ConfigOverrideId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ConfigOverrideRemoved
+    fields:
+      - {name: override_id, type: weft.shared.ConfigOverrideId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  - name: weft.formations.ScaleSet
+    fields:
+      - {name: scale_setting_id, type: weft.shared.ScaleSettingId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: min_replicas, type: Integer}
+      - {name: max_replicas, type: Integer}
+  - name: weft.formations.ScaleChanged
+    fields:
+      - {name: scale_setting_id, type: weft.shared.ScaleSettingId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: min_replicas, type: Integer}
+      - {name: max_replicas, type: Integer}
+  - name: weft.formations.ScaleRemoved
+    fields:
+      - {name: scale_setting_id, type: weft.shared.ScaleSettingId}
+      - {name: formation_id, type: weft.shared.FormationId}
+
+commands:
+  # Section 3, `Formation`. A new formation holds no component and an empty quota slice.
+  - name: weft.formations.CreateFormation
+    naming:
+      display: Create a formation
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: name, type: weft.formations.FormationName}
+      # Section 10 line 456, the formation's zone rules (see Formation.zones). Empty: any zone.
+      - {name: zones, type: List<weft.shared.ZoneName>}
+      # design:tenant-clusters step 3: the cluster to deploy into.
+      - {name: cluster_id, type: weft.shared.ClusterId}
+    outcomes:
+      - name: no-such-account
+        external: the account does not exist or is closed
+        before_row: true
+        error: weft.formations.NoSuchAccount
+      # hardening pass 1 D3: the formation is created only in the account the request acts in;
+      # another account answers as a missing one, so its existence is not disclosed.
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.formations.NoSuchAccount
+      # design:tenant-clusters step 3: a deleted cluster and another account's cluster answer as a
+      # missing one. The default cluster (no account) takes every account.
+      - name: no-such-cluster
+        when_related: {via: input.cluster_id, exists: false}
+        error: weft.formations.NoSuchCluster
+      - name: cluster-deleted
+        when_related: {via: input.cluster_id, predicate: state == Deleted}
+        error: weft.formations.NoSuchCluster
+      - name: cluster-of-other-account
+        when_related:
+          entity: weft.cluster.Cluster
+          where:
+            all:
+              - cluster_id == input.cluster_id
+              - defined(account_id)
+              - account_id != input.account_id
+          exists: true
+        error: weft.formations.NoSuchCluster
+      - name: name-taken
+        when_related:
+          entity: weft.formations.Formation
+          where:
+            all:
+              - account_id == input.account_id
+              - name == input.name
+          exists: true
+        error: weft.formations.FormationNameTaken
+      - name: created
+        creates: weft.formations.Formation
+        instance: formation_id
+        sets:
+          account_id: input.account_id
+          name: input.name
+          internal_domain: {generated: true}
+          quota_slice: []
+          zones: input.zones
+          cluster_id: input.cluster_id
+        emits: [weft.formations.FormationCreated]
+        payload:
+          weft.formations.FormationCreated:
+            formation_id: {generated: true}
+            account_id: input.account_id
+            name: input.name
+
+  # Section 3, `Formation` "a quota slice"; section 1, `Quota`: "A child's quota is at most its
+  # parent's remaining quota". The account's remaining quota is `weft.accounts`', so the check is
+  # external.
+  - name: weft.formations.SetFormationQuota
+    naming:
+      display: Set a formation's quota slice
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: quota_slice, type: List<weft.shared.ResourceAmount>}
+    outcomes:
+      # Was the `amount >= 0` invariant of the local QuotaAmount type, before the shared
+      # ResourceAmount replaced it.
+      - name: negative-amount
+        when:
+          exists: {in: quota_slice, as: q, that: q.amount < 0}
+        error: weft.formations.NegativeQuotaAmount
+      - name: no-such-formation
+        unknown_instance: true
+        error: weft.formations.NoSuchFormation
+      # hardening pass 1 D3: a formation of another account answers as a missing one, before its
+      # state is read.
+      - name: not-callers-formation
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_subject: {predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: over-quota
+        external: the slice exceeds the account's remaining quota of a resource class
+        error: weft.formations.QuotaExceeded
+      - name: set
+        updates: weft.formations.Formation
+        instance: formation_id
+        sets:
+          quota_slice: input.quota_slice
+        emits: [weft.formations.FormationQuotaSet]
+        payload:
+          weft.formations.FormationQuotaSet:
+            formation_id: input.formation_id
+            quota_slice: input.quota_slice
+
+  # OPEN: the sketch names no removal of a formation. Taken: retire, refused while any release of
+  # it is live (`weft.deployments` decides, so the check is external).
+  - name: weft.formations.RetireFormation
+    naming:
+      display: Retire a formation
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+    outcomes:
+      - name: no-such-formation
+        unknown_instance: true
+        error: weft.formations.NoSuchFormation
+      # hardening pass 1 D3: a formation of another account answers as a missing one, before its
+      # releases or its state are read.
+      - name: not-callers-formation
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.formations.NoSuchFormation
+      - name: releases-live
+        external: a release of this formation is live
+        error: weft.formations.ReleasesLive
+      - name: retired
+        moves: weft.formations.Formation.retire
+        instance: formation_id
+        emits: [weft.formations.FormationRetired]
+        payload:
+          weft.formations.FormationRetired:
+            formation_id: input.formation_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.formations.FormationStateConflict
+
+  # Section 3, `FormationRevision`, and "Topology as data": "an edit and a new revision": freeze the formation's current
+  # document. A translation of section 5 "Translation" commits through this command and records
+  # the revision id on its own row.
+  # OPEN: whether a commit with no change since the last revision records a second revision.
+  # Taken: yes; the digest shows they are equal.
+  - name: weft.formations.CommitRevision
+    naming:
+      display: Commit a formation revision
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: empty
+        when_related:
+          entity: weft.formations.Component
+          where: formation_id == input.formation_id
+          exists: false
+        error: weft.formations.EmptyFormation
+      - name: committed
+        creates: weft.formations.FormationRevision
+        instance: revision_id
+        sets:
+          formation_id: input.formation_id
+          number: {generated: true}
+          document_digest: {generated: true}
+        emits: [weft.formations.RevisionCommitted]
+        payload:
+          weft.formations.RevisionCommitted:
+            revision_id: {generated: true}
+            formation_id: input.formation_id
+            number: {generated: true}
+            document_digest: {generated: true}
+
+  # Section 3, `Environment`.
+  - name: weft.formations.CreateEnvironment
+    naming:
+      display: Create an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.EnvironmentName}
+      # Design ci-cd-support § Security: production is marked when the environment is made.
+      - {name: protected, type: Boolean}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: name-taken
+        when_related:
+          entity: weft.formations.Environment
+          where:
+            all:
+              - formation_id == input.formation_id
+              - name == input.name
+          exists: true
+        error: weft.formations.EnvironmentNameTaken
+      - name: created
+        creates: weft.formations.Environment
+        instance: environment_id
+        sets:
+          formation_id: input.formation_id
+          name: input.name
+          quota_slice: []
+          origin: Manual
+          protected: input.protected
+          source_repository: {cleared: true}
+          pull_request: {cleared: true}
+          expires_at: {cleared: true}
+        emits: [weft.formations.EnvironmentCreated]
+        payload:
+          weft.formations.EnvironmentCreated:
+            environment_id: {generated: true}
+            formation_id: input.formation_id
+            name: input.name
+
+  # Section 3, `Environment`: "its own ... quotas". An environment's slice is at most what the
+  # formation's slice has left after the other environments (section 1, `Quota`); the sum over
+  # environments is not a guard ESS states here, so the check is external.
+  - name: weft.formations.SetEnvironmentQuota
+    naming:
+      display: Set an environment's quota slice
+    input:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: quota_slice, type: List<weft.shared.ResourceAmount>}
+    outcomes:
+      # Was the `amount >= 0` invariant of the local QuotaAmount type.
+      - name: negative-amount
+        when:
+          exists: {in: quota_slice, as: q, that: q.amount < 0}
+        error: weft.formations.NegativeQuotaAmount
+      - name: no-such-environment
+        unknown_instance: true
+        error: weft.formations.NoSuchEnvironment
+      - name: retired
+        when_subject: {predicate: state == Retired}
+        error: weft.formations.EnvironmentStateConflict
+      - name: over-quota
+        external: the slice exceeds what the formation's slice has left after its other environments
+        error: weft.formations.QuotaExceeded
+      - name: set
+        updates: weft.formations.Environment
+        instance: environment_id
+        sets:
+          quota_slice: input.quota_slice
+        emits: [weft.formations.EnvironmentQuotaSet]
+        payload:
+          weft.formations.EnvironmentQuotaSet:
+            environment_id: input.environment_id
+            quota_slice: input.quota_slice
+
+  # Design ci-cd-support § Stage 1.3: "`weft deploy --preview` from a pull-request job creates
+  # or updates it". A preview is never protected. Its name is `pr-<number>`, chosen by the CLI.
+  # OPEN: a sleep policy by default (design § Stage 1.3) is the workloads' scale setting, not set
+  # here. Taken: the CLI sets it after the create.
+  - name: weft.formations.CreatePreviewEnvironment
+    naming:
+      display: Create a preview environment for a pull request
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.EnvironmentName}
+      - {name: source_repository, type: String}
+      - {name: pull_request, type: Integer}
+      - {name: expires_at, type: Timestamp}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: name-taken
+        when_related:
+          entity: weft.formations.Environment
+          where:
+            all:
+              - formation_id == input.formation_id
+              - name == input.name
+          exists: true
+        error: weft.formations.EnvironmentNameTaken
+      - name: created
+        creates: weft.formations.Environment
+        instance: environment_id
+        sets:
+          formation_id: input.formation_id
+          name: input.name
+          quota_slice: []
+          origin: PullRequest
+          protected: false
+          source_repository: input.source_repository
+          pull_request: input.pull_request
+          expires_at: input.expires_at
+        emits: [weft.formations.EnvironmentCreated]
+        payload:
+          weft.formations.EnvironmentCreated:
+            environment_id: {generated: true}
+            formation_id: input.formation_id
+            name: input.name
+
+  # Design ci-cd-support § Stage 1.3: "closing the pull request (forge webhook, stage 2) or the
+  # expiry retires it". Time form (sketch § 14): a system actor calls it for each preview past its
+  # expiry. Only previews end this way; the releases-live check of RetireEnvironment does not
+  # apply: an expired preview's release ends with it.
+  # OPEN: the pull-request-closed webhook calls RetireEnvironment (no edge domain yet, sketch § 14).
+  - name: weft.formations.ExpirePreviewEnvironment
+    naming:
+      display: Retire a preview environment past its expiry
+    input:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    outcomes:
+      - name: no-such-environment
+        unknown_instance: true
+        error: weft.formations.NoSuchEnvironment
+      - name: not-a-preview
+        when_subject:
+          predicate: origin == Manual
+        error: weft.formations.EnvironmentStateConflict
+      - name: not-yet
+        when_subject:
+          predicate: expires_at > now
+        error: weft.formations.EnvironmentStateConflict
+      - name: expired
+        moves: weft.formations.Environment.retire
+        instance: environment_id
+        emits: [weft.formations.EnvironmentRetired]
+        payload:
+          weft.formations.EnvironmentRetired:
+            environment_id: input.environment_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.formations.EnvironmentStateConflict
+
+  # OPEN: the sketch names no removal of an environment. Taken: retire, refused while a release
+  # to it is live (`weft.deployments`, external).
+  - name: weft.formations.RetireEnvironment
+    naming:
+      display: Retire an environment
+    input:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    outcomes:
+      # Releases are `weft.deployments`' (layer 6, section 5 "Releases"): a higher layer, so no
+      # guard here may read them, and the check stays external.
+      # `before_row: true` (soundness pass, 2026-11-26): a release names an environment that
+      # exists and is Active (this command refuses to retire one while a release is live), so for
+      # an unknown or retired id the fact is false and answering it first changes no reply. Set so
+      # the injected scenario does not depend on arranging an Environment: ESS 0.99.2 cannot arrange
+      # one (CreateEnvironment's `name-taken` row set beside its `via` guards) and sent the injected
+      # scenario to an id no row has, which the interpreted target answered `no-such-environment`.
+      # OPEN: confirm with the owner that the external answers before the existence check.
+      - name: releases-live
+        external: a release to this environment is live
+        before_row: true
+        error: weft.formations.ReleasesLive
+      - name: no-such-environment
+        unknown_instance: true
+        error: weft.formations.NoSuchEnvironment
+      - name: retired
+        moves: weft.formations.Environment.retire
+        instance: environment_id
+        emits: [weft.formations.EnvironmentRetired]
+        payload:
+          weft.formations.EnvironmentRetired:
+            environment_id: input.environment_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.formations.EnvironmentStateConflict
+
+  # Section 3, `Component`; the example's `components:`. The component starts internal: not on the border,
+  # reached by no link. Its InternalName (section 3, `InternalName`) is minted as `<name>.<formation>.internal`.
+  - name: weft.formations.AddComponent
+    naming:
+      display: Add a component
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.shared.ComponentName}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: name-taken
+        when_related:
+          entity: weft.formations.Component
+          where:
+            all:
+              - formation_id == input.formation_id
+              - name == input.name
+          exists: true
+        error: weft.formations.ComponentNameTaken
+      - name: added
+        creates: weft.formations.Component
+        instance: component_id
+        sets:
+          formation_id: input.formation_id
+          name: input.name
+          internal_name: {generated: true}
+          on_border: false
+        emits: [weft.formations.ComponentAdded]
+        payload:
+          weft.formations.ComponentAdded:
+            component_id: {generated: true}
+            formation_id: input.formation_id
+            name: input.name
+            internal_name: {generated: true}
+
+  # Section 3, "Topology as data": "splitting a component is an edit". A component still named by a link,
+  # route, mount or scale setting is refused: those go first, so no access outlives an edit by
+  # accident.
+  - name: weft.formations.RemoveComponent
+    naming:
+      display: Remove a component
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component_id, type: weft.shared.ComponentId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      # weft-sim, 2026-11-26: the interpreter answers an unknown subject id before any guard and,
+      # with no `unknown_instance` outcome, with a refusal no outcome declares. `unknown-<x>` is
+      # that answer, here and in every command of this file that updates, moves or deletes the
+      # row its input names. `no-such-<x>` stays: ESS 0.99.2 requires it for the `foreign-<x>`
+      # guard that reads the row through `via` (ESS-COMMAND-005); `when_subject` cannot replace
+      # that guard beside a row set (ESS-COMMAND-009) or after `no-such-formation`
+      # (ESS-COMMAND-004).
+      - name: unknown-component
+        unknown_instance: true
+        error: weft.formations.NoSuchComponent
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      # A link names the component as its caller (`linked`) or as its target (`linked-as-target`).
+      # Two row sets with one equality each, not one with `any:`: synthesis scopes a row set only
+      # by an equality with the input (soundness pass, 2026-11-26).
+      - name: linked
+        when_related:
+          entity: weft.formations.Link
+          where: caller_component_id == input.component_id
+          exists: true
+        error: weft.formations.ComponentInUse
+      - name: linked-as-target
+        when_related:
+          entity: weft.formations.Link
+          where: target_component_id == input.component_id
+          exists: true
+        error: weft.formations.ComponentInUse
+      - name: routed
+        when_related:
+          entity: weft.formations.Route
+          where: component_id == input.component_id
+          exists: true
+        error: weft.formations.ComponentInUse
+      - name: mounted
+        when_related:
+          entity: weft.formations.ConfigMount
+          where: component_id == input.component_id
+          exists: true
+        error: weft.formations.ComponentInUse
+      - name: scaled
+        when_related:
+          entity: weft.formations.ScaleSetting
+          where: component_id == input.component_id
+          exists: true
+        error: weft.formations.ComponentInUse
+      - name: removed
+        deletes: weft.formations.Component
+        instance: component_id
+        emits: [weft.formations.ComponentRemoved]
+        payload:
+          weft.formations.ComponentRemoved:
+            component_id: input.component_id
+            formation_id: input.formation_id
+
+  # Section 3, `Border`, and the example's `border: [gateway]`: put a component on the
+  # border. This widens access, so it is its own command; a route to the component still needs
+  # AddRoute.
+  - name: weft.formations.AddToBorder
+    naming:
+      display: Put a component on the border
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component_id, type: weft.shared.ComponentId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-component
+        unknown_instance: true
+        error: weft.formations.NoSuchComponent
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: bordered
+        updates: weft.formations.Component
+        instance: component_id
+        sets:
+          on_border: true
+        emits: [weft.formations.ComponentBordered]
+        payload:
+          weft.formations.ComponentBordered:
+            component_id: input.component_id
+            formation_id: input.formation_id
+
+  # Section 3, `Border`: "Everything else is internal": take a component off the border. Refused
+  # while a route still sends traffic to it.
+  - name: weft.formations.RemoveFromBorder
+    naming:
+      display: Take a component off the border
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component_id, type: weft.shared.ComponentId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-component
+        unknown_instance: true
+        error: weft.formations.NoSuchComponent
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: routed
+        when_related:
+          entity: weft.formations.Route
+          where: component_id == input.component_id
+          exists: true
+        error: weft.formations.RoutesRemain
+      - name: unbordered
+        updates: weft.formations.Component
+        instance: component_id
+        sets:
+          on_border: false
+        emits: [weft.formations.ComponentUnbordered]
+        payload:
+          weft.formations.ComponentUnbordered:
+            component_id: input.component_id
+            formation_id: input.formation_id
+
+  # Section 3, `Link`; the example's `links:` (`gateway -> orders`). Allows the caller to
+  # resolve and call the target on one protocol and port; nothing else is allowed between them.
+  # Both components must be of this formation (a foreign component answers as not found, so its
+  # existence is not disclosed).
+  # OPEN: whether a link to a port the target's workload does not serve is refused here, or by
+  # the simulation of `weft.deployments` (section 5 "Releases", `Simulation`). Taken: by the simulation.
+  - name: weft.formations.AddLink
+    naming:
+      display: Allow a link
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: caller_component_id, type: weft.shared.ComponentId}
+      - {name: target_component_id, type: weft.shared.ComponentId}
+      - {name: protocol, type: weft.formations.LinkProtocol}
+      - {name: port, type: weft.formations.Port}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: no-such-caller
+        when_related: {via: input.caller_component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: no-such-target
+        when_related: {via: input.target_component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-caller
+        when_related: {via: input.caller_component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: foreign-target
+        when_related: {via: input.target_component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: exists
+        when_related:
+          entity: weft.formations.Link
+          where:
+            all:
+              - caller_component_id == input.caller_component_id
+              - target_component_id == input.target_component_id
+              - protocol == input.protocol
+              - port == input.port
+          exists: true
+        error: weft.formations.LinkExists
+      - name: added
+        creates: weft.formations.Link
+        instance: link_id
+        sets:
+          formation_id: input.formation_id
+          caller_component_id: input.caller_component_id
+          target_component_id: input.target_component_id
+          protocol: input.protocol
+          port: input.port
+        emits: [weft.formations.LinkAdded]
+        payload:
+          weft.formations.LinkAdded:
+            link_id: {generated: true}
+            formation_id: input.formation_id
+            caller_component_id: input.caller_component_id
+            target_component_id: input.target_component_id
+            protocol: input.protocol
+            port: input.port
+
+  # Section 3, `Link`: "Components without a link cannot reach each other": removing the link
+  # takes the reach away.
+  - name: weft.formations.RemoveLink
+    naming:
+      display: Remove a link
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: link_id, type: weft.shared.LinkId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-link
+        unknown_instance: true
+        error: weft.formations.NoSuchLink
+      - name: no-such-link
+        when_related: {via: input.link_id, exists: false}
+        error: weft.formations.NoSuchLink
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-link
+        when_related: {via: input.link_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchLink
+      - name: removed
+        deletes: weft.formations.Link
+        instance: link_id
+        emits: [weft.formations.LinkRemoved]
+        payload:
+          weft.formations.LinkRemoved:
+            link_id: input.link_id
+            formation_id: input.formation_id
+
+  # Section 3, `Border`: "their public `Endpoint`s". A host is held by one endpoint in the
+  # cluster. The account must have shown it controls the host.
+  # OPEN: how an account proves it controls a host (DNS record, delegated zone) and which domain
+  # keeps that proof. Taken: external check, refused by default.
+  - name: weft.formations.AddEndpoint
+    naming:
+      display: Add a public endpoint
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: host, type: weft.formations.Host}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: host-taken
+        when_related:
+          entity: weft.formations.Endpoint
+          where: host == input.host
+          exists: true
+        error: weft.formations.HostTaken
+      - name: host-not-verified
+        external: the formation's account has not shown that it controls the host
+        error: weft.formations.HostNotVerified
+      - name: added
+        creates: weft.formations.Endpoint
+        instance: endpoint_id
+        sets:
+          formation_id: input.formation_id
+          host: input.host
+        emits: [weft.formations.EndpointAdded]
+        payload:
+          weft.formations.EndpointAdded:
+            endpoint_id: {generated: true}
+            formation_id: input.formation_id
+            host: input.host
+
+  # Section 3, `Border`. Refused while a route or an active export still uses the endpoint.
+  - name: weft.formations.RemoveEndpoint
+    naming:
+      display: Remove a public endpoint
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-endpoint
+        unknown_instance: true
+        error: weft.formations.NoSuchEndpoint
+      - name: no-such-endpoint
+        when_related: {via: input.endpoint_id, exists: false}
+        error: weft.formations.NoSuchEndpoint
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-endpoint
+        when_related: {via: input.endpoint_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchEndpoint
+      - name: routed
+        when_related:
+          entity: weft.formations.Route
+          where: endpoint_id == input.endpoint_id
+          exists: true
+        error: weft.formations.RoutesRemain
+      # Integration 2 (decided): an active export names the endpoint; revoke it first.
+      - name: exported
+        when_related:
+          entity: weft.formations.Export
+          where:
+            all:
+              - endpoint_id == input.endpoint_id
+              - state == Active
+          exists: true
+        error: weft.formations.ExportsRemain
+      - name: removed
+        deletes: weft.formations.Endpoint
+        instance: endpoint_id
+        emits: [weft.formations.EndpointRemoved]
+        payload:
+          weft.formations.EndpointRemoved:
+            endpoint_id: input.endpoint_id
+            formation_id: input.formation_id
+
+  # Section 1 "Accounts", sketch lines 139-140: an Export names one endpoint shared to another
+  # account. Exporting widens access to the endpoint, so it is refused unless both accounts are
+  # open and in the caller's tenant, the endpoint is the exporting account's, and the caller may
+  # export. `tenant_id` is the tenant both accounts must belong to; each is checked against it.
+  # The accounts are `weft.accounts`' rows; this domain holds only their identifiers, so every
+  # check on them is external, as in CreateFormation.
+  - name: weft.formations.CreateExport
+    naming:
+      display: Export an endpoint to another account
+    input:
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: from_account_id, type: weft.shared.AccountId}
+      - {name: to_account_id, type: weft.shared.AccountId}
+    outcomes:
+      - name: same-account
+        when: from_account_id == to_account_id
+        error: weft.formations.SelfExport
+      - name: no-such-from-account
+        external: the exporting account does not exist or is closed
+        before_row: true
+        error: weft.formations.NoSuchAccount
+      # hardening pass 1 D3: the exporting account is the account the request acts in; another
+      # account answers as a missing one.
+      - name: from-not-callers-account
+        when: from_account_id != caller.account_id
+        error: weft.formations.NoSuchAccount
+      # hardening pass 1 D3: the tenant named is the caller's; another tenant answers as a
+      # missing account.
+      - name: not-callers-tenant
+        when: tenant_id != caller.tenant_id
+        error: weft.formations.NoSuchAccount
+      # hardening pass 1 disclosure (formations.yaml:1440): was CrossTenantExport, which told the
+      # caller that an account of another tenant exists; now it answers as a missing account.
+      - name: from-other-tenant
+        external: the exporting account does not belong to the tenant named
+        before_row: true
+        error: weft.formations.NoSuchAccount
+      - name: no-such-to-account
+        external: the receiving account does not exist or is closed
+        before_row: true
+        error: weft.formations.NoSuchAccount
+      # hardening pass 1 disclosure (formations.yaml:1444): was CrossTenantExport, which told the
+      # caller that an account of another tenant exists; now it answers as a missing account.
+      - name: to-other-tenant
+        external: the receiving account does not belong to the tenant named
+        before_row: true
+        error: weft.formations.NoSuchAccount
+      # The endpoint's formation names its account; the account check reads two rows and the
+      # account is `weft.accounts`', so it stays external. A missing endpoint answers the same.
+      # hardening pass 1 disclosure: moved before `already-exported` and answered before the rows
+      # (`before_row`, like the account checks above), so the active exports of another account's
+      # endpoint are not read out before the ownership refusal.
+      - name: endpoint-not-in-account
+        external: the endpoint does not belong to a formation of the exporting account
+        before_row: true
+        error: weft.formations.EndpointNotInAccount
+      - name: already-exported
+        when_related:
+          entity: weft.formations.Export
+          where:
+            all:
+              - endpoint_id == input.endpoint_id
+              - to_account_id == input.to_account_id
+              - state == Active
+          exists: true
+        error: weft.formations.ExportExists
+      # OPEN: which role may export. Taken: owner, and admin of the exporting account or an
+      # account above it; deployer may not.
+      - name: export-not-permitted
+        external: the caller holds no role on the exporting account or above it that may export
+        error: weft.formations.ExportNotPermitted
+      - name: exported
+        creates: weft.formations.Export
+        instance: export_id
+        sets:
+          tenant_id: input.tenant_id
+          endpoint_id: input.endpoint_id
+          from_account_id: input.from_account_id
+          to_account_id: input.to_account_id
+        emits: [weft.formations.ExportCreated]
+        payload:
+          weft.formations.ExportCreated:
+            export_id: {generated: true}
+            tenant_id: input.tenant_id
+            endpoint_id: input.endpoint_id
+            from_account_id: input.from_account_id
+            to_account_id: input.to_account_id
+
+  # Section 1 "Accounts", sketch lines 139-140. Revoking an export narrows access and is never
+  # refused for that.
+  - name: weft.formations.RevokeExport
+    naming:
+      display: Revoke an export
+    input:
+      - {name: export_id, type: weft.shared.ExportId}
+    outcomes:
+      - name: no-such-export
+        unknown_instance: true
+        error: weft.formations.ExportNotFound
+      # hardening pass 1 D3: only the exporting account revokes its export; an export of another
+      # account answers as a missing one, before its state is read.
+      # OPEN: whether the receiving account may revoke an export into it. Taken: no (deny by
+      # default).
+      - name: not-callers-export
+        when_subject: {predicate: from_account_id != caller.account_id}
+        error: weft.formations.ExportNotFound
+      - name: revoked
+        moves: weft.formations.Export.revoke
+        instance: export_id
+        emits: [weft.formations.ExportRevoked]
+        payload:
+          weft.formations.ExportRevoked:
+            export_id: input.export_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.formations.ExportNotActive
+
+  # Sketch § 14 line 590, R6: "account closed -> its exports revoked". Sketch lines 139-140: an
+  # export names two accounts, and closing either one ends it. Decided (wave 4, open question
+  # "Account close vs active exports" in docs/open-questions.md): the close proceeds and this
+  # cascade revokes every active export from or to the account, invoked by one binding on
+  # weft.accounts.AccountClosed (account_id). Many-rows form: `instances:` selects the rows.
+  # Only a closed account's exports are revoked this way; an open account's exports are revoked
+  # one by one with RevokeExport. A repeated delivery finds no active export and revokes none.
+  - name: weft.formations.RevokeAccountExports
+    naming:
+      display: Revoke every export of a closed account
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+    outcomes:
+      - name: no-such-account
+        when_related: {via: input.account_id, exists: false}
+        error: weft.formations.AccountNotClosed
+      - name: account-open
+        when_related: {via: input.account_id, predicate: state != Closed}
+        error: weft.formations.AccountNotClosed
+      - name: revoked
+        moves: weft.formations.Export.revoke
+        instances:
+          where:
+            all:
+              - any:
+                  - from_account_id == input.account_id
+                  - to_account_id == input.account_id
+              - state == Active
+        emits:
+          - weft.formations.AccountExportsRevoked
+          - {event: weft.formations.ExportRevoked, each: changed}
+        payload:
+          weft.formations.AccountExportsRevoked:
+            account_id: input.account_id
+            revoked: {count: changed}
+          weft.formations.ExportRevoked:
+            export_id: {changed: export_id}
+
+  # Section 3, `Border`: "host and path to a component and port". Only a component on the
+  # border may be routed to (section 3, `Border`: "Everything else is internal").
+  - name: weft.formations.AddRoute
+    naming:
+      display: Add a route
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: path, type: String}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: port, type: weft.formations.Port}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: no-such-endpoint
+        when_related: {via: input.endpoint_id, exists: false}
+        error: weft.formations.NoSuchEndpoint
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-endpoint
+        when_related: {via: input.endpoint_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchEndpoint
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: not-on-border
+        when_related: {via: input.component_id, predicate: on_border == false}
+        error: weft.formations.NotOnBorder
+      - name: exists
+        when_related:
+          entity: weft.formations.Route
+          where:
+            all:
+              - endpoint_id == input.endpoint_id
+              - path == input.path
+          exists: true
+        error: weft.formations.RouteExists
+      - name: added
+        creates: weft.formations.Route
+        instance: route_id
+        sets:
+          formation_id: input.formation_id
+          endpoint_id: input.endpoint_id
+          path: input.path
+          component_id: input.component_id
+          port: input.port
+        emits: [weft.formations.RouteAdded]
+        payload:
+          weft.formations.RouteAdded:
+            route_id: {generated: true}
+            formation_id: input.formation_id
+            endpoint_id: input.endpoint_id
+            path: input.path
+            component_id: input.component_id
+            port: input.port
+
+  # Section 3, `Border`.
+  - name: weft.formations.RemoveRoute
+    naming:
+      display: Remove a route
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: route_id, type: weft.shared.RouteId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-route
+        unknown_instance: true
+        error: weft.formations.NoSuchRoute
+      - name: no-such-route
+        when_related: {via: input.route_id, exists: false}
+        error: weft.formations.NoSuchRoute
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-route
+        when_related: {via: input.route_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchRoute
+      - name: removed
+        deletes: weft.formations.Route
+        instance: route_id
+        emits: [weft.formations.RouteRemoved]
+        payload:
+          weft.formations.RouteRemoved:
+            route_id: input.route_id
+            formation_id: input.formation_id
+
+  # Section 3, `Config`.
+  - name: weft.formations.CreateConfig
+    naming:
+      display: Create a config
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.ConfigName}
+      - {name: data, type: "Map<String, String>"}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: name-taken
+        when_related:
+          entity: weft.formations.Config
+          where:
+            all:
+              - formation_id == input.formation_id
+              - name == input.name
+          exists: true
+        error: weft.formations.ConfigNameTaken
+      - name: created
+        creates: weft.formations.Config
+        instance: config_id
+        sets:
+          formation_id: input.formation_id
+          name: input.name
+          data: input.data
+        emits: [weft.formations.ConfigCreated]
+        payload:
+          weft.formations.ConfigCreated:
+            config_id: {generated: true}
+            formation_id: input.formation_id
+            name: input.name
+
+  # Section 3, `Config`: replace a config's data.
+  - name: weft.formations.ChangeConfig
+    naming:
+      display: Change a config's data
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: data, type: "Map<String, String>"}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-config
+        unknown_instance: true
+        error: weft.formations.NoSuchConfig
+      - name: no-such-config
+        when_related: {via: input.config_id, exists: false}
+        error: weft.formations.NoSuchConfig
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-config
+        when_related: {via: input.config_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchConfig
+      - name: changed
+        updates: weft.formations.Config
+        instance: config_id
+        sets:
+          data: input.data
+        emits: [weft.formations.ConfigChanged]
+        payload:
+          weft.formations.ConfigChanged:
+            config_id: input.config_id
+            formation_id: input.formation_id
+
+  # Section 3, `Config`. Refused while a mount or an environment's values name the config.
+  - name: weft.formations.RemoveConfig
+    naming:
+      display: Remove a config
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: config_id, type: weft.shared.ConfigId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-config
+        unknown_instance: true
+        error: weft.formations.NoSuchConfig
+      - name: no-such-config
+        when_related: {via: input.config_id, exists: false}
+        error: weft.formations.NoSuchConfig
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-config
+        when_related: {via: input.config_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchConfig
+      - name: mounted
+        when_related:
+          entity: weft.formations.ConfigMount
+          where: config_id == input.config_id
+          exists: true
+        error: weft.formations.ConfigInUse
+      - name: overridden
+        when_related:
+          entity: weft.formations.ConfigOverride
+          where: config_id == input.config_id
+          exists: true
+        error: weft.formations.ConfigInUse
+      - name: removed
+        deletes: weft.formations.Config
+        instance: config_id
+        emits: [weft.formations.ConfigRemoved]
+        payload:
+          weft.formations.ConfigRemoved:
+            config_id: input.config_id
+            formation_id: input.formation_id
+
+  # Section 3, `Config` "mounted into components as files or environment variables".
+  # A component receives only the configs mounted into it (default deny).
+  - name: weft.formations.MountConfig
+    naming:
+      display: Mount a config into a component
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: kind, type: weft.formations.MountKind}
+      - {name: target, type: String}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: no-such-config
+        when_related: {via: input.config_id, exists: false}
+        error: weft.formations.NoSuchConfig
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: foreign-config
+        when_related: {via: input.config_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchConfig
+      - name: exists
+        when_related:
+          entity: weft.formations.ConfigMount
+          where:
+            all:
+              - component_id == input.component_id
+              - config_id == input.config_id
+          exists: true
+        error: weft.formations.MountExists
+      - name: mounted
+        creates: weft.formations.ConfigMount
+        instance: mount_id
+        sets:
+          formation_id: input.formation_id
+          component_id: input.component_id
+          config_id: input.config_id
+          kind: input.kind
+          target: input.target
+        emits: [weft.formations.ConfigMounted]
+        payload:
+          weft.formations.ConfigMounted:
+            mount_id: {generated: true}
+            formation_id: input.formation_id
+            component_id: input.component_id
+            config_id: input.config_id
+            kind: input.kind
+            target: input.target
+
+  # Section 3, `Config`.
+  - name: weft.formations.UnmountConfig
+    naming:
+      display: Unmount a config
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: mount_id, type: weft.shared.ConfigMountId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-mount
+        unknown_instance: true
+        error: weft.formations.NoSuchMount
+      - name: no-such-mount
+        when_related: {via: input.mount_id, exists: false}
+        error: weft.formations.NoSuchMount
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-mount
+        when_related: {via: input.mount_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchMount
+      - name: unmounted
+        deletes: weft.formations.ConfigMount
+        instance: mount_id
+        emits: [weft.formations.ConfigUnmounted]
+        payload:
+          weft.formations.ConfigUnmounted:
+            mount_id: input.mount_id
+            formation_id: input.formation_id
+
+  # Section 3, `Environment` "its own ... config values": one config's values in one environment.
+  - name: weft.formations.SetConfigOverride
+    naming:
+      display: Set a config's values for an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: data, type: "Map<String, String>"}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: no-such-config
+        when_related: {via: input.config_id, exists: false}
+        error: weft.formations.NoSuchConfig
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.formations.NoSuchEnvironment
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-config
+        when_related: {via: input.config_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchConfig
+      - name: foreign-environment
+        when_related: {via: input.environment_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchEnvironment
+      - name: environment-retired
+        when_related: {via: input.environment_id, predicate: state == Retired}
+        error: weft.formations.EnvironmentStateConflict
+      - name: exists
+        when_related:
+          entity: weft.formations.ConfigOverride
+          where:
+            all:
+              - config_id == input.config_id
+              - environment_id == input.environment_id
+          exists: true
+        error: weft.formations.OverrideExists
+      - name: set
+        creates: weft.formations.ConfigOverride
+        instance: override_id
+        sets:
+          formation_id: input.formation_id
+          config_id: input.config_id
+          environment_id: input.environment_id
+          data: input.data
+        emits: [weft.formations.ConfigOverrideSet]
+        payload:
+          weft.formations.ConfigOverrideSet:
+            override_id: {generated: true}
+            formation_id: input.formation_id
+            config_id: input.config_id
+            environment_id: input.environment_id
+
+  # Section 3, `Environment`.
+  - name: weft.formations.ChangeConfigOverride
+    naming:
+      display: Change a config's values for an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: override_id, type: weft.shared.ConfigOverrideId}
+      - {name: data, type: "Map<String, String>"}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-override
+        unknown_instance: true
+        error: weft.formations.NoSuchOverride
+      - name: no-such-override
+        when_related: {via: input.override_id, exists: false}
+        error: weft.formations.NoSuchOverride
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-override
+        when_related: {via: input.override_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchOverride
+      - name: changed
+        updates: weft.formations.ConfigOverride
+        instance: override_id
+        sets:
+          data: input.data
+        emits: [weft.formations.ConfigOverrideChanged]
+        payload:
+          weft.formations.ConfigOverrideChanged:
+            override_id: input.override_id
+            formation_id: input.formation_id
+
+  # Section 3, `Environment`. Without its values the environment reads the config's own data.
+  - name: weft.formations.RemoveConfigOverride
+    naming:
+      display: Remove a config's values for an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: override_id, type: weft.shared.ConfigOverrideId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-override
+        unknown_instance: true
+        error: weft.formations.NoSuchOverride
+      - name: no-such-override
+        when_related: {via: input.override_id, exists: false}
+        error: weft.formations.NoSuchOverride
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-override
+        when_related: {via: input.override_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchOverride
+      - name: removed
+        deletes: weft.formations.ConfigOverride
+        instance: override_id
+        emits: [weft.formations.ConfigOverrideRemoved]
+        payload:
+          weft.formations.ConfigOverrideRemoved:
+            override_id: input.override_id
+            formation_id: input.formation_id
+
+  # Section 3, `Environment` "its own ... scale settings". Replicas times the component's claims must
+  # fit the environment's quota slice; the claims are `weft.workloads`', so that check is
+  # external.
+  - name: weft.formations.SetScale
+    naming:
+      display: Set a component's scale in an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: min_replicas, type: Integer}
+      - {name: max_replicas, type: Integer}
+    outcomes:
+      - name: bad-bounds
+        when:
+          any:
+            - min_replicas < 0
+            - max_replicas < 1
+            - min_replicas > max_replicas
+        error: weft.formations.InvalidScaleBounds
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.formations.NoSuchEnvironment
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.formations.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-environment
+        when_related: {via: input.environment_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchEnvironment
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchComponent
+      - name: environment-retired
+        when_related: {via: input.environment_id, predicate: state == Retired}
+        error: weft.formations.EnvironmentStateConflict
+      - name: exists
+        when_related:
+          entity: weft.formations.ScaleSetting
+          where:
+            all:
+              - environment_id == input.environment_id
+              - component_id == input.component_id
+          exists: true
+        error: weft.formations.ScaleSettingExists
+      - name: over-quota
+        external: the maximum replicas times the component's claims exceed the environment's quota slice
+        error: weft.formations.QuotaExceeded
+      - name: set
+        creates: weft.formations.ScaleSetting
+        instance: scale_setting_id
+        sets:
+          formation_id: input.formation_id
+          environment_id: input.environment_id
+          component_id: input.component_id
+          min_replicas: input.min_replicas
+          max_replicas: input.max_replicas
+        emits: [weft.formations.ScaleSet]
+        payload:
+          weft.formations.ScaleSet:
+            scale_setting_id: {generated: true}
+            formation_id: input.formation_id
+            environment_id: input.environment_id
+            component_id: input.component_id
+            min_replicas: input.min_replicas
+            max_replicas: input.max_replicas
+
+  # Section 3, `Environment`.
+  - name: weft.formations.ChangeScale
+    naming:
+      display: Change a component's scale in an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scale_setting_id, type: weft.shared.ScaleSettingId}
+      - {name: min_replicas, type: Integer}
+      - {name: max_replicas, type: Integer}
+    outcomes:
+      - name: bad-bounds
+        when:
+          any:
+            - min_replicas < 0
+            - max_replicas < 1
+            - min_replicas > max_replicas
+        error: weft.formations.InvalidScaleBounds
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-scale-setting
+        unknown_instance: true
+        error: weft.formations.NoSuchScaleSetting
+      - name: no-such-scale-setting
+        when_related: {via: input.scale_setting_id, exists: false}
+        error: weft.formations.NoSuchScaleSetting
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-scale-setting
+        when_related: {via: input.scale_setting_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchScaleSetting
+      - name: over-quota
+        external: the maximum replicas times the component's claims exceed the environment's quota slice
+        error: weft.formations.QuotaExceeded
+      - name: changed
+        updates: weft.formations.ScaleSetting
+        instance: scale_setting_id
+        sets:
+          min_replicas: input.min_replicas
+          max_replicas: input.max_replicas
+        emits: [weft.formations.ScaleChanged]
+        payload:
+          weft.formations.ScaleChanged:
+            scale_setting_id: input.scale_setting_id
+            formation_id: input.formation_id
+            min_replicas: input.min_replicas
+            max_replicas: input.max_replicas
+
+  # Section 3, `Environment`. Without a setting the component scales by its workload's own ScaleRule.
+  - name: weft.formations.RemoveScale
+    naming:
+      display: Remove a component's scale in an environment
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scale_setting_id, type: weft.shared.ScaleSettingId}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      - name: unknown-scale-setting
+        unknown_instance: true
+        error: weft.formations.NoSuchScaleSetting
+      - name: no-such-scale-setting
+        when_related: {via: input.scale_setting_id, exists: false}
+        error: weft.formations.NoSuchScaleSetting
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.formations.FormationStateConflict
+      - name: foreign-scale-setting
+        when_related: {via: input.scale_setting_id, predicate: formation_id != input.formation_id}
+        error: weft.formations.NoSuchScaleSetting
+      - name: removed
+        deletes: weft.formations.ScaleSetting
+        instance: scale_setting_id
+        emits: [weft.formations.ScaleRemoved]
+        payload:
+          weft.formations.ScaleRemoved:
+            scale_setting_id: input.scale_setting_id
+            formation_id: input.formation_id
+
+views:
+  # Section 3, `Formation`.
+  - name: weft.formations.Formations
+    source: weft.formations.Formation
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
+    fields:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: name, type: weft.formations.FormationName}
+      - {name: internal_domain, type: String}
+      - {name: quota_slice, type: List<weft.shared.ResourceAmount>}
+      # Sketch line 46 (`cluster`: "tenant clusters an account creates and deploys formations
+      # into"), design:tenant-clusters step 3: the cluster the formation deploys into, so a reader
+      # checks a placement against the formation's own cluster rather than the copy on
+      # scheduling.SchedulingRequest (weft-sim full setup, 2026-11-26).
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: state, type: weft.formations.Formation.State}
+
+  # Section 3, `FormationRevision`: the revisions of one formation, for `weft.deployments` to pick from.
+  - name: weft.formations.FormationRevisions
+    source: weft.formations.FormationRevision
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: revision_id, type: weft.shared.FormationRevisionId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: number, type: Integer}
+      - {name: document_digest, type: weft.shared.ArtifactDigest}
+
+  # Section 3, `Environment`.
+  - name: weft.formations.Environments
+    source: weft.formations.Environment
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.EnvironmentName}
+      - {name: quota_slice, type: List<weft.shared.ResourceAmount>}
+      - {name: state, type: weft.formations.Environment.State}
+
+  # Formation topology (section 3 and its "Topology as data"): components, links and border. A view
+  # reads one source entity, so the topology is the three views FormationComponents,
+  # FormationLinks and FormationBorder, all filtered by the formation.
+  - name: weft.formations.FormationComponents
+    source: weft.formations.Component
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.shared.ComponentName}
+      - {name: internal_name, type: weft.formations.InternalName}
+      - {name: on_border, type: Boolean}
+
+  # Topology: links, with both ends by name (the example's `links:`).
+  - name: weft.formations.FormationLinks
+    source: weft.formations.Link
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: link_id, type: weft.shared.LinkId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: caller_component_id, type: weft.shared.ComponentId}
+      - name: caller_name
+        type: Optional<weft.shared.ComponentName>
+        field: {related: {via: caller_component_id, field: name}}
+      - {name: target_component_id, type: weft.shared.ComponentId}
+      - name: target_name
+        type: Optional<weft.shared.ComponentName>
+        field: {related: {via: target_component_id, field: name}}
+      - {name: protocol, type: weft.formations.LinkProtocol}
+      - {name: port, type: weft.formations.Port}
+
+  # Topology: the border's routes, with the endpoint's host and the component's name (section 3,
+  # `Border`). The border's components are FormationComponents rows with `on_border`.
+  - name: weft.formations.FormationBorder
+    source: weft.formations.Route
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - name: host
+        type: Optional<weft.formations.Host>
+        field: {related: {via: endpoint_id, field: host}}
+      - {name: path, type: String}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - name: component_name
+        type: Optional<weft.shared.ComponentName>
+        field: {related: {via: component_id, field: name}}
+      - {name: port, type: weft.formations.Port}
+
+  # Section 3, `Border`: the formation's public hosts.
+  - name: weft.formations.Endpoints
+    source: weft.formations.Endpoint
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: host, type: weft.formations.Host}
+
+  # Section 1 "Accounts", sketch lines 139-140: the exports of one account, out of it and into it.
+  - name: weft.formations.AccountExports
+    source: weft.formations.Export
+    consistency: read_your_writes
+    params:
+      - {name: account_id, type: weft.shared.AccountId}
+    filter:
+      any:
+        - from_account_id == param.account_id
+        - to_account_id == param.account_id
+    fields:
+      - {name: export_id, type: weft.shared.ExportId}
+      - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: from_account_id, type: weft.shared.AccountId}
+      - {name: to_account_id, type: weft.shared.AccountId}
+      - {name: state, type: weft.formations.Export.State}
+
+  # Reachability of a component, inside (section 3, `Link` and `InternalName`): every component that
+  # may call it, on which protocol and port. No row, no reach.
+  - name: weft.formations.ComponentCallers
+    source: weft.formations.Link
+    consistency: read_your_writes
+    params:
+      - {name: component_id, type: weft.shared.ComponentId}
+    filter: target_component_id == param.component_id
+    fields:
+      - {name: link_id, type: weft.shared.LinkId}
+      - {name: caller_component_id, type: weft.shared.ComponentId}
+      - name: caller_name
+        type: Optional<weft.shared.ComponentName>
+        field: {related: {via: caller_component_id, field: name}}
+      - {name: protocol, type: weft.formations.LinkProtocol}
+      - {name: port, type: weft.formations.Port}
+
+  # Reachability of a component, from outside (section 3, `Border`): every host and path
+  # routed to it. No row, not reachable from outside.
+  - name: weft.formations.ComponentRoutes
+    source: weft.formations.Route
+    consistency: read_your_writes
+    params:
+      - {name: component_id, type: weft.shared.ComponentId}
+    filter: component_id == param.component_id
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - name: host
+        type: Optional<weft.formations.Host>
+        field: {related: {via: endpoint_id, field: host}}
+      - {name: path, type: String}
+      - {name: port, type: weft.formations.Port}
+
+  # Section 3, `Config`.
+  - name: weft.formations.Configs
+    source: weft.formations.Config
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: name, type: weft.formations.ConfigName}
+      - {name: data, type: "Map<String, String>"}
+
+  # Section 3, `Config`: which component mounts which config, and how.
+  - name: weft.formations.ConfigMounts
+    source: weft.formations.ConfigMount
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: mount_id, type: weft.shared.ConfigMountId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: kind, type: weft.formations.MountKind}
+      - {name: target, type: String}
+
+  # Section 3, `Environment`: an environment's config values.
+  - name: weft.formations.ConfigOverrides
+    source: weft.formations.ConfigOverride
+    consistency: read_your_writes
+    params:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    filter: environment_id == param.environment_id
+    fields:
+      - {name: override_id, type: weft.shared.ConfigOverrideId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: config_id, type: weft.shared.ConfigId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: data, type: "Map<String, String>"}
+
+  # Section 3, `Environment`: an environment's scale settings.
+  - name: weft.formations.ScaleSettings
+    source: weft.formations.ScaleSetting
+    consistency: read_your_writes
+    params:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    filter: environment_id == param.environment_id
+    fields:
+      - {name: scale_setting_id, type: weft.shared.ScaleSettingId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: min_replicas, type: Integer}
+      - {name: max_replicas, type: Integer}
