@@ -55,7 +55,7 @@ entities:
         type: weft.shared.InstanceId
       # § 4: the name of the process in the instance's `processes`.
       - name: process
-        type: String
+        type: weft.shared.ProcessName
       # § 4 `RestartPolicy`, read from the instance when the process starts; the node applies it.
       - name: restart_policy
         type: weft.workloads.RestartPolicy
@@ -222,7 +222,7 @@ events:
       - {name: node_id, type: weft.shared.NodeId}
       - {name: assignment_id, type: weft.shared.AssignmentId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   # § 14 R9: weft-control recorded the process's alive check failed past its threshold; the node
   # restarts it once its backoff passed (RestartsDue, the node's own level step).
@@ -231,7 +231,7 @@ events:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   # § 14 R9 "(node-local, recorded)": every field workloads.RecordProcessRestarted takes, so the
   # binding r9-record-process-restarted guesses nothing.
@@ -240,7 +240,7 @@ events:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: reason, type: weft.workloads.RestartReason}
       - {name: restarts, type: Integer}
       - {name: restarts_in_window, type: Integer}
@@ -255,7 +255,7 @@ events:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
 
@@ -264,7 +264,7 @@ events:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   - name: weft.node.LocalEndpointSessionOpened
     fields:
@@ -307,7 +307,7 @@ commands:
       - {name: node_id, type: weft.shared.NodeId}
       - {name: assignment_id, type: weft.shared.AssignmentId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
     outcomes:
       - name: no-such-assignment
         when_related: {via: input.assignment_id, exists: false}
@@ -373,7 +373,7 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
     outcomes:
       - name: not-running
         when_related:
@@ -720,7 +720,7 @@ views:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: assignment_id, type: weft.shared.AssignmentId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: restarts, type: Integer}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
@@ -736,7 +736,7 @@ views:
     fields:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: restarts, type: Integer}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
@@ -753,7 +753,7 @@ views:
       - {name: local_process_id, type: weft.shared.LocalProcessId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: restarts, type: Integer}
       - {name: restarts_in_window, type: Integer}
 

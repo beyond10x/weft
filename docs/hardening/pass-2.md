@@ -791,3 +791,39 @@ above per seed as a slot job (`slot --tokens 4 --timeout 30m --fetch sim/out/<di
   in `ReleaseAssignment` per seed); outcomes 1393 / 2444 (one seed: inside the seed band).
 - Gate: `weft v1 — 25 file(s), valid`; layers green; stamped-time and its negative pass; all 5
   experiments exit 0.
+
+## Pass 7: open items of pass 6 (2026-11-26)
+
+Run: `task sim-explore-from` (seed 1, 1024 walks x 300 steps, 8 threads, settle 12) on main
+`4138723` and after the changes below.
+
+- Before: outcomes 1557 / 2444, states 196 / 328, transitions 114 / 221, 0 violations, 531
+  `Unsupported` answers (one guard), 239 s.
+- After: outcomes 1568 / 2444, states 198 / 328, transitions 117 / 221, 0 `Unsupported` answers,
+  686 `idempotency` violations on one command (finding 3), 200 s.
+- `weft.node` outcomes 22 -> 34 of 38; `weft.workloads` 262 -> 271. Other domains moved by 1-3
+  either way, inside the seed variance of the walk (section "Seed variance of explore").
+
+### Findings and what changed
+
+1. `observability.ExpireLogStream/not-yet-expired` compared `retained_until > now` with
+   `retained_until` absent on an Open stream: 531 `Unsupported` answers. The 8 `OpenLogStream`
+   answers of pass 6 were gone already (pass 6 fixes). Changed: `defined(retained_until)` first in
+   the guard and in the view `LogStreamsPastRetention`. The same guard went before the 3 other
+   comparisons of an Optional field with `now` (`pipelines.TimeOutRunnerJob/not-yet`, the view
+   `OverdueRunnerJobs`, the window check of `pipelines` deploy gates); explore had not reached
+   them.
+2. `node.StartProcess/started` had 0 hits (2076 `process-not-declared`): a process name was a
+   plain `String`, so the walk never named a process an instance declares. Changed: a newtype
+   `weft.shared.ProcessName` for `workloads.Process.name` and every `process` field and input of
+   `weft.workloads`, `weft.node` and `weft.observability` (25 declarations). After: `started` 814
+   hits, `RestartProcess/restarted` 389, `StopProcess/stopped` 204, `MarkRestartDue/due` 88.
+3. Open, found through finding 2: a repeated delivery of `node.ProcessRestarted` makes
+   `workloads.RecordProcessRestarted` count the restart twice (`restarts: {increment: 1}`), 686
+   violations of the `idempotency` check (binding `r9-record-process-restarted`, at least once).
+   It was an OPEN in `ess/components.yaml` already. The command can refuse a restart it counted only
+   if the instance records which restarts it counted; the node counts per process, the instance per
+   instance. Next change: a restart ledger in `weft.workloads`.
+4. Walks reach Active assignments now: `nodes.Assign/assigned` 2901 hits, `CompleteDrain/drained`
+   34, `RemoveNode/not-empty` 1 (the pool open items of pass 4). A Draining pool going back to
+   Active stays an OPEN at `ess/1-infrastructure/infrastructure.yaml:874`.

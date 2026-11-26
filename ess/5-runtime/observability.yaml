@@ -108,7 +108,7 @@ entities:
         type: weft.observability.LogStreamKind
       # The process's name in its workload (weft.workloads.Process.name); absent for Events.
       - name: process
-        type: Optional<String>
+        type: Optional<weft.shared.ProcessName>
       # Days the stored lines are kept after the stream closes. The opener takes it from the
       # telemetry policy of the instance's environment, else of its formation.
       # OPEN: the value when neither has a policy (a cluster default), and whether the sketch's
@@ -694,7 +694,7 @@ commands:
       - {name: node_id, type: weft.shared.NodeId}
       - {name: account_id, type: weft.shared.AccountId}
       - {name: kind, type: weft.observability.LogStreamKind}
-      - {name: process, type: Optional<String>}
+      - {name: process, type: Optional<weft.shared.ProcessName>}
       - {name: retention_days, type: Integer}
     outcomes:
       - name: invalid-source
@@ -808,7 +808,8 @@ commands:
         error: weft.observability.NotFound
       - name: not-yet-expired
         when_subject:
-          predicate: retained_until > now
+          predicate:
+            all: [defined(retained_until), retained_until > now]
         error: weft.observability.NotYetExpired
       - name: expired
         moves: weft.observability.LogStream.expire
@@ -1975,7 +1976,7 @@ views:
       - {name: log_stream_id, type: weft.shared.LogStreamId}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: kind, type: weft.observability.LogStreamKind}
-      - {name: process, type: Optional<String>}
+      - {name: process, type: Optional<weft.shared.ProcessName>}
       - {name: retention_days, type: Integer}
       - {name: opened_at, type: Timestamp}
       - {name: closed_at, type: Optional<Timestamp>}
@@ -1991,6 +1992,7 @@ views:
     filter:
       all:
         - state == Closed
+        - defined(retained_until)
         - retained_until <= now
     fields:
       - {name: log_stream_id, type: weft.shared.LogStreamId}

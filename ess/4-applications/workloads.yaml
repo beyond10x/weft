@@ -237,7 +237,7 @@ types:
     kind: struct
     fields:
       - name: name
-        type: String
+        type: weft.shared.ProcessName
       - name: role
         type: weft.workloads.ProcessRole
       # Absent: the workload's own package. A Kubernetes Pod's containers each name an image.
@@ -1489,7 +1489,7 @@ events:
   - name: weft.workloads.CheckObserved
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: role, type: weft.workloads.CheckRole}
       - {name: passed, type: Boolean}
 
@@ -1498,7 +1498,7 @@ events:
   - name: weft.workloads.ProcessRestarted
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: reason, type: weft.workloads.RestartReason}
       - {name: restarts, type: Integer}
       - {name: restarts_in_window, type: Integer}
@@ -1532,7 +1532,7 @@ events:
   - name: weft.workloads.StartupCheckFailed
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: consecutive_failures, type: Integer}
 
   # Section 14 R9: an alive check failed `failure_threshold` times in a row: the node restarts the
@@ -1545,7 +1545,7 @@ events:
   - name: weft.workloads.AliveCheckFailed
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: consecutive_failures, type: Integer}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: workload_id, type: weft.shared.WorkloadId}
@@ -1557,7 +1557,7 @@ events:
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
 
@@ -1567,13 +1567,13 @@ events:
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   # A restarted process started successfully while the instance was not backing off.
   - name: weft.workloads.ProcessStarted
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   - name: weft.workloads.InstancePaused
     fields:
@@ -2553,7 +2553,7 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: role, type: weft.workloads.CheckRole}
       - {name: passed, type: Boolean}
       - {name: consecutive, type: Integer}
@@ -2785,7 +2785,7 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: reason, type: weft.workloads.RestartReason}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
@@ -2908,7 +2908,7 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
     outcomes:
       - name: no-such-instance
         unknown_instance: true
