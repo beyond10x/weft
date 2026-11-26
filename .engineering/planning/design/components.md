@@ -4,7 +4,7 @@ id: design:components
 kind: design
 status: draft
 title: 'weft components: api, control, node, edge and their contracts'
-revision: 1
+revision: 3
 ---
 ## Goal
 
@@ -43,7 +43,7 @@ publishes and consumes, the actors it acts as, its channels, and the loop steps 
 - Owns: access, accounts, artifacts, formations (unchanged).
 - Accepts: every user command of those domains; reached by network (`surfaces/http/weft-api.yaml`).
 - Acts as: `ManagementApi`; authorizes every management call (caller attributes, pass 1).
-- Forwards (decision D1): user commands of control-owned domains to `weft-control`.
+- Forwards (D1, the owner 2026-11-26): user commands of control-owned domains to `weft-control`.
 
 ### weft-control (control plane, sketch line 73)
 
@@ -102,17 +102,15 @@ A component declares level and time steps (`steps: [{form: level|time, view, com
 that `validate` checks (view and command exist, the actor may run the command and read the view) and
 the interpreter can run.
 
-## Decisions (architecture, the owner's)
+## Decisions (the owner, 2026-11-26 about 12:20 CET, relayed by the host operator)
 
 - D1, user commands of control-owned domains (DefineWorkload, CreateSecret, SubmitDeploymentSource):
-  - A (recommended): `weft-api` forwards them to `weft-control` over an internal HTTP binding; the
-    user sees one API, one owner per domain stays. Costs one internal surface.
-  - B: move those domains to `weft-api`; node reports then land on `weft-api` (against sketch line 96).
-- D2, `secrets` and `deployments`:
-  - A (recommended): keep each whole in `weft-control`; with D1-A the user still reaches them
-    through `weft-api`. No domain split.
-  - B: split custody and sources (weft-api) from delivery, translation and releases (weft-control);
-    two more domain files and a binding between them.
+  The owner picked "A: weft-api forwards". `weft-api` forwards them to `weft-control` over an internal
+  HTTP binding; the user sees one API, one owner per domain stays. Not taken: B, move those domains
+  to `weft-api` (node reports would land on `weft-api`, against sketch line 96).
+- D2, `secrets` and `deployments`: the owner picked "A: whole in weft-control". No domain split; with D1
+  the user reaches them through `weft-api`. Not taken: B, split custody and sources (weft-api) from
+  delivery, translation and releases (weft-control).
 
 ## Open questions (default taken until answered)
 
