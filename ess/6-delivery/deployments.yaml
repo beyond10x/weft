@@ -2,7 +2,7 @@
 # revision reaches an environment as a release. Source: docs/domain-sketch.md section
 # "5. Deployments" (all of it), with "Goals, in order" items 2 to 5 and "Ecosystem formats".
 #
-# Goalpost (sketch, section 5, the owner 2026-11-26): the Helm chart of a Kubernetes SaaS product
+# Goalpost (sketch, section 5, the owner, 2026-11-26): the Helm chart of a Kubernetes SaaS product
 # deploys and runs on weft unchanged. The enum weft.deployments.KubernetesKind carries, per
 # object kind the sketch lists, whether it maps, is refused or is OPEN, so a coverage report
 # answers the goalpost per chart.

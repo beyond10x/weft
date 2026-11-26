@@ -4,7 +4,7 @@ id: design:components
 kind: design
 status: draft
 title: 'weft components: api, control, node, edge and their contracts'
-revision: 4
+revision: 5
 ---
 ## Goal
 
@@ -43,7 +43,7 @@ publishes and consumes, the actors it acts as, its channels, and the loop steps 
 - Owns: access, accounts, artifacts, formations (unchanged).
 - Accepts: every user command of those domains; reached by network (`surfaces/http/weft-api.yaml`).
 - Acts as: `ManagementApi`; authorizes every management call (caller attributes, pass 1).
-- Forwards (D1, the owner 2026-11-26): user commands of control-owned domains to `weft-control`.
+- Forwards (D1, the owner, 2026-11-26): user commands of control-owned domains to `weft-control`.
 
 ### weft-control (control plane, sketch line 73)
 

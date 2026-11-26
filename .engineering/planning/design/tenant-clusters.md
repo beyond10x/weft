@@ -4,7 +4,7 @@ id: design:tenant-clusters
 kind: design
 status: draft
 title: 'Clusters as tenant resources: rename the installation to Cloud, account-owned clusters, workloads deploy into a cluster'
-revision: 3
+revision: 4
 ---
 ## Goal
 
