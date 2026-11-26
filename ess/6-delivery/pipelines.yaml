@@ -181,6 +181,9 @@ entities:
     fields:
       - name: runner_pool_id
         type: weft.shared.RunnerPoolId
+      # Isolation pass 2: copied from the pool at queue.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: forge_job_id
         type: String
       - name: forge_run_id
@@ -209,6 +212,11 @@ entities:
       - name: ended_at
         type: Optional<Timestamp>
     relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       # Many jobs per pool. A job is an audit record and outlives the link.
       - name: runner_pool
         kind: references
@@ -265,6 +273,10 @@ entities:
     fields:
       - name: runner_pool_id
         type: weft.shared.RunnerPoolId
+      # Isolation pass 2: the account the cache was created in (CreateBuildCache ties the pool
+      # to it).
+      - name: account_id
+        type: weft.shared.AccountId
       - name: cache_key
         type: String
       - name: protected
@@ -278,6 +290,11 @@ entities:
       - name: last_used_at
         type: Timestamp
     relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       # UNMAPPED: "per pool" reads as the pool owning its caches (no meaning without it), but no
       # source says what retiring a pool does to them. Written as references.
       - name: runner_pool
@@ -327,6 +344,10 @@ entities:
     fields:
       - name: environment_id
         type: weft.shared.EnvironmentId
+      # Isolation pass 2: the account the gate was added in (AddDeployGate ties the environment
+      # to it).
+      - name: account_id
+        type: weft.shared.AccountId
       - name: kind
         type: weft.pipelines.GateKind
       - name: approver_role
@@ -345,6 +366,11 @@ entities:
       - name: created_by
         type: weft.shared.PrincipalId
     relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       - name: environment
         kind: references
         target: weft.formations.Environment
@@ -378,6 +404,9 @@ entities:
     fields:
       - name: deploy_gate_id
         type: weft.shared.DeployGateId
+      # Isolation pass 2: copied from the gate at open.
+      - name: account_id
+        type: weft.shared.AccountId
       - name: plan_id
         type: weft.shared.PlanId
       # The gate's environment, stored so deployments selects the checks of a plan's environment
@@ -397,6 +426,11 @@ entities:
       - name: decided_at
         type: Optional<Timestamp>
     relations:
+      - name: account
+        kind: references
+        target: weft.accounts.Account
+        cardinality: one
+        via: account_id
       # Many checks per gate and per plan; each check one of each.
       - name: deploy_gate
         kind: references
@@ -897,6 +931,7 @@ commands:
         instance: runner_job_id
         returns: true
         sets:
+          account_id: {related: {via: input.runner_pool_id, field: account_id}}
           runner_pool_id: input.runner_pool_id
           forge_job_id: input.forge_job_id
           forge_run_id: input.forge_run_id
@@ -1094,6 +1129,11 @@ commands:
       - name: no-such-job
         unknown_instance: true
         error: weft.pipelines.NotFound
+      # Isolation pass 2: only the job's own account acts on it; another account's job
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.pipelines.NotFound
       - name: cancelled
         moves: weft.pipelines.RunnerJob.cancel
         instance: runner_job_id
@@ -1180,6 +1220,7 @@ commands:
         instance: build_cache_id
         returns: true
         sets:
+          account_id: input.account_id
           runner_pool_id: input.runner_pool_id
           cache_key: input.cache_key
           protected: input.protected
@@ -1353,6 +1394,11 @@ commands:
       - name: no-such-cache
         unknown_instance: true
         error: weft.pipelines.NotFound
+      # Isolation pass 2: only the cache's own account acts on it; another account's cache
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.pipelines.NotFound
       - name: busy
         when_subject:
           predicate: defined(writer_job_id)
@@ -1377,6 +1423,9 @@ commands:
       display: Add a deploy gate to an environment
     input:
       - {name: environment_id, type: weft.shared.EnvironmentId}
+      # Isolation pass 2: the account the request acts in, so the environment can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: kind, type: weft.pipelines.GateKind}
       - {name: approver_role, type: Optional<weft.shared.Role>}
       - {name: signer_key_id, type: Optional<String>}
@@ -1387,6 +1436,11 @@ commands:
     response:
       - {name: deploy_gate_id, type: weft.shared.DeployGateId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing environment (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.pipelines.EnvironmentUnavailable
       - name: approval-settings
         when:
           all:
@@ -1456,6 +1510,21 @@ commands:
       - name: no-such-environment
         when_related: {via: input.environment_id, exists: false}
         error: weft.pipelines.EnvironmentUnavailable
+      # Isolation pass 2: an environment of another account's formation answers like a missing
+      # one, before its state is read. The environment stores no account; its formation does.
+      - name: environment-of-other-account
+        when_related:
+          entity: weft.formations.Environment
+          where:
+            all:
+              - environment_id == input.environment_id
+              - not:
+                  exists:
+                    as: f
+                    in: {entity: weft.formations.Formation}
+                    that: {all: [{f.formation_id: {eq: {fact: formation_id}}}, f.account_id == input.account_id]}
+          exists: true
+        error: weft.pipelines.EnvironmentUnavailable
       - name: environment-retired
         when_related: {via: input.environment_id, predicate: state == Retired}
         error: weft.pipelines.EnvironmentUnavailable
@@ -1464,6 +1533,7 @@ commands:
         instance: deploy_gate_id
         returns: true
         sets:
+          account_id: input.account_id
           environment_id: input.environment_id
           kind: input.kind
           approver_role: input.approver_role
@@ -1490,6 +1560,11 @@ commands:
     outcomes:
       - name: no-such-gate
         unknown_instance: true
+        error: weft.pipelines.NotFound
+      # Isolation pass 2: only the gate's own account acts on it; another account's gate
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.pipelines.NotFound
       - name: removed
         moves: weft.pipelines.DeployGate.remove
@@ -1548,6 +1623,7 @@ commands:
         instance: gate_check_id
         returns: true
         sets:
+          account_id: {related: {via: input.deploy_gate_id, field: account_id}}
           deploy_gate_id: input.deploy_gate_id
           plan_id: input.plan_id
           environment_id: input.environment_id
@@ -1676,6 +1752,11 @@ commands:
       - name: no-such-check
         unknown_instance: true
         error: weft.pipelines.NotFound
+      # Isolation pass 2: only the check's own account acts on it; another account's check
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
+        error: weft.pipelines.NotFound
       - name: gate-mismatch
         when_subject:
           predicate: deploy_gate_id != input.deploy_gate_id
@@ -1722,6 +1803,11 @@ commands:
     outcomes:
       - name: no-such-check
         unknown_instance: true
+        error: weft.pipelines.NotFound
+      # Isolation pass 2: only the check's own account acts on it; another account's check
+      # answers like a missing one, before its state is read.
+      - name: not-callers-account
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.pipelines.NotFound
       - name: gate-mismatch
         when_subject:
