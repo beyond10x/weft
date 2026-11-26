@@ -922,10 +922,11 @@ weft-sim binary on a snapshot of `4ce56ee`.
 `not-callers-account` was: weft-sim takes the caller's account from the request's `account_id`
 (`tools/sim/src/explore.rs:106`). Outcomes that existed before: 1564 reached against 1566, and no
 changed command lost an accepting outcome. States and transitions moved by 2 each, inside the
-seed variance. The one `unsupported` answer is
+seed variance. The one `unsupported` answer was
 `observability.OpenLogStream/instance-not-on-node` (`ess/5-runtime/observability.yaml:720-723`,
-`node_id != input.node_id` on an Instance with no node yet, walk 550): a guard of a file this pass
-does not own, unchanged since pass 7, reached because the walks shifted. Fix for its owner, as in
-pass 7 finding 1: `any: [not defined(node_id), node_id != input.node_id]` (an instance with no
-node is on no node), and the same in the guard at :1167-1171.
+`node_id != input.node_id` on an Instance with no node yet, walk 550), unchanged since pass 7 and
+reached because the walks shifted. Fixed by the integrator in this branch, as in pass 7 finding 1:
+`any: [not defined(node_id), node_id != input.node_id]` (an instance with no node is on no node),
+and the same in the guard at :1167-1171. After, rebased on main `3946ced` (step 2b): 0 `unsupported`, 0
+violations, outcomes 1590 / 2525, 288 s.
 `task sim-experiments`: 0 violations in all 5. `slot task check`: exit 0.
