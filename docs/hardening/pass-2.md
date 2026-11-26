@@ -553,3 +553,42 @@ Left (the next step): run `task sim-explore-from` (1024 walks, `--settle 12`) an
 `task sim-explore-ticks`, fill a 1024-walk after row and the share row from `result.json`
 `commands`, then every experiment with `--exit-when-done`, validate and layers. Not run in this
 pass.
+
+## Seed variance of explore (2026-11-26)
+
+Asked by the owner (relayed by the host operator, 11:55 CET): "could we run multiple seeds in parallell ?", after
+pass 4 reported 1312 -> 1327 outcomes from one seed each.
+
+Run: `weft-sim explore --spec ess --from sim/experiments/full-setup.yaml --seed <s> --walks 1024
+--steps 300 --threads 4`, seeds 1-8, without `--settle`, default `--retry-bound 16`. Each seed was its
+own slot job (`slot --tokens 4 --timeout 30m`) on build node `build-1d`, all 8 at once, spec and binary at
+commit `f0b7278` (binary sha256 prefix `2f5da953462cb6d7`, the same on the node and here). Every seed ran
+307,295 steps; 0 violations in every seed.
+
+Per seed: outcomes reached of 2359, states of 311, transitions of 206, abstract states, wall time.
+
+- seed 1: 1341, 161, 91, 76,453, 212 s
+- seed 2: 1344, 163, 93, 76,207, 215 s
+- seed 3: 1332, 161, 92, 76,419, 216 s
+- seed 4: 1341, 163, 93, 76,297, 212 s
+- seed 5: 1316, 158, 89, 75,491, 214 s
+- seed 6: 1333, 162, 93, 76,301, 215 s
+- seed 7: 1295, 156, 89, 75,377, 215 s
+- seed 8: 1330, 159, 90, 76,218, 215 s
+
+Band over 8 seeds:
+
+- outcomes: min 1295, median 1332.5, max 1344 (spread 49, 2.1 % of 2359).
+- states: min 156, median 161, max 163.
+- transitions: min 89, median 91.5, max 93.
+
+What it shows:
+
+- The pass-4 step 1312 -> 1327 (+15, one seed each, on an earlier spec with 2347 outcomes) is smaller
+  than the spread between seeds of one spec (49). It is not evidence that the guards fix raised
+  coverage; within this band a single-seed change under about 49 outcomes says nothing.
+- Seed 1 reproduces the pass-4 pools number (1341) on the same spec: one seed is deterministic, the
+  variance is between seeds.
+- For a ratchet KPI on "outcomes reached", use the minimum (or median) of 8 seeds with fixed seeds 1-8,
+  not one seed.
+- 8 seeds in parallel take one seed's wall time on the build node (212-216 s).
