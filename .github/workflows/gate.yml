@@ -1,0 +1,68 @@
+# The weft gate: the same `task check` a session runs locally (`slot task check`).
+# A pull request that changes only planning or prose files (tools/planning-only.sh) passes without
+# building (~/beyond10x/AGENTS.md "Planning-only pull requests skip the tests").
+name: Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Planning-only change
+        id: paths
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed.txt"
+            if tools/planning-only.sh < "$RUNNER_TEMP/changed.txt"; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: steps.paths.outputs.skip != 'true'
+        with:
+          toolchain: "1.98.1"
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        if: steps.paths.outputs.skip != 'true'
+        with:
+          workspaces: tools/sim
+
+      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        if: steps.paths.outputs.skip != 'true'
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        if: steps.paths.outputs.skip != 'true'
+        with:
+          tool: cargo-nextest
+
+      - name: Install the ESS CLI this repository validates with (ess 0.99.2)
+        if: steps.paths.outputs.skip != 'true'
+        run: cargo install --git https://github.com/beyond10x/ess --tag 0.99.2 --locked ess-cli
+
+      - name: Run the gate
+        if: steps.paths.outputs.skip != 'true'
+        run: task check
