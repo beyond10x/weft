@@ -4,7 +4,7 @@ id: design:protocol-ports
 kind: design
 status: draft
 title: Protocol ports from RFCs, adapters as managed products, sessions above
-revision: 2
+revision: 3
 ---
 ## Goal
 
@@ -14,7 +14,7 @@ different various entrypoints, then loadbalancing, whitelisting, sip-registrar, 
 PBX/Registrar/SIP-proxy <- all managed products of the cloud platform, specified by specs created
 from real RFCs | <- this is the port layer"; "when entering the cloud higher layers we already deal
 with higher level abstractions like MediaSession (from sip, from rtvbp, from webrtc...)"; "for an
-implementation and the sip->mediaSession seam we can deploy sipx-clstr <- this needs a
+implementation and the sip->mediaSession seam we can deploy [sipx-clstr] <- this needs a
 lot conformance testing or even a more code-generation like approach".
 
 ## Before this design
