@@ -1,0 +1,209 @@
+format: ratchet/1
+project: weft
+
+subjects:
+  specification:
+    kind: codebase
+    audiences: [developer, coding-agent]
+  simulator:
+    kind: codebase
+    audiences: [developer, coding-agent]
+
+assessments:
+  explore-from-setup:
+    subject: specification
+    assessor: weft-sim-report@1
+    inputs: {report: sim/out/explore-from/result.json}
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-explore-from
+      coverage: {executed: {min: 1024}, skipped: {max: 0}}
+    measurements:
+      outcomes-reached:
+        kind: exact
+        output: outcomes_reached
+        scope: run
+        identity: [outcome]
+      invariant-violations:
+        kind: exact
+        output: violations
+        scope: run
+        identity: [kind, command]
+      unsupported-answers:
+        kind: exact
+        output: unsupported_answers
+        scope: run
+        identity: [command]
+      undeclared-refusals:
+        kind: exact
+        output: undeclared_refusals
+        scope: run
+        identity: [command]
+      abstract-states:
+        kind: exact
+        output: abstract_states
+        scope: run
+      explore-time:
+        kind: sampled
+        output: elapsed
+        scope: run
+
+  experiment-cluster-pool-lifecycle:
+    subject: specification
+    assessor: weft-sim-report@1
+    inputs: {report: sim/out/cluster-pool-lifecycle/result.json}
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-experiments
+      coverage: {skipped: {max: 0}}
+    measurements:
+      invariant-violations:
+        kind: exact
+        output: violations
+        scope: run
+        identity: [kind, command]
+
+  experiment-duplicate-delivery:
+    subject: specification
+    assessor: weft-sim-report@1
+    inputs: {report: sim/out/duplicate-delivery/result.json}
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-experiments
+      coverage: {skipped: {max: 0}}
+    measurements:
+      invariant-violations:
+        kind: exact
+        output: violations
+        scope: run
+        identity: [kind, command]
+
+  experiment-full-setup:
+    subject: specification
+    assessor: weft-sim-report@1
+    inputs: {report: sim/out/full-setup/result.json}
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-experiments
+      coverage: {skipped: {max: 0}}
+    measurements:
+      invariant-violations:
+        kind: exact
+        output: violations
+        scope: run
+        identity: [kind, command]
+
+  experiment-node-loss:
+    subject: specification
+    assessor: weft-sim-report@1
+    inputs: {report: sim/out/node-loss/result.json}
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-experiments
+      coverage: {skipped: {max: 0}}
+    measurements:
+      invariant-violations:
+        kind: exact
+        output: violations
+        scope: run
+        identity: [kind, command]
+
+  experiment-stuck-placement:
+    subject: specification
+    assessor: weft-sim-report@1
+    inputs: {report: sim/out/stuck-placement/result.json}
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-experiments
+      coverage: {skipped: {max: 0}}
+    measurements:
+      invariant-violations:
+        kind: exact
+        output: violations
+        scope: run
+        identity: [kind, command]
+
+  simulator-tests:
+    subject: simulator
+    assessor: command-timing@1
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task sim-test
+      coverage: {skipped: {max: 0}}
+    measurements:
+      test-time:
+        kind: sampled
+        output: duration
+        scope: test
+
+requirements:
+  no-invariant-violations:
+    assessment: explore-from-setup
+    measurement: invariant-violations
+    condition: {operator: lte, value: 0}
+  no-violations-cluster-pool-lifecycle:
+    assessment: experiment-cluster-pool-lifecycle
+    measurement: invariant-violations
+    condition: {operator: lte, value: 0}
+  no-violations-duplicate-delivery:
+    assessment: experiment-duplicate-delivery
+    measurement: invariant-violations
+    condition: {operator: lte, value: 0}
+  no-violations-full-setup:
+    assessment: experiment-full-setup
+    measurement: invariant-violations
+    condition: {operator: lte, value: 0}
+  no-violations-node-loss:
+    assessment: experiment-node-loss
+    measurement: invariant-violations
+    condition: {operator: lte, value: 0}
+  no-violations-stuck-placement:
+    assessment: experiment-stuck-placement
+    measurement: invariant-violations
+    condition: {operator: lte, value: 0}
+  no-undeclared-refusals:
+    assessment: explore-from-setup
+    measurement: undeclared-refusals
+    condition: {operator: lte, value: 0}
+  no-new-unsupported-answers:
+    assessment: explore-from-setup
+    measurement: unsupported-answers
+    condition: {operator: no_new_items}
+    reference: {kind: accepted_value}
+  no-lost-outcomes:
+    assessment: explore-from-setup
+    measurement: outcomes-reached
+    condition: {operator: no_lost_items}
+    reference: {kind: accepted_value}
+  explore-within-budget:
+    assessment: explore-from-setup
+    measurement: explore-time
+    condition: {operator: lte, value: 300, unit: s}
+  test-within-budget:
+    assessment: simulator-tests
+    measurement: test-time
+    condition: {operator: lte, value: 60, unit: s}
+
+gates:
+  merge:
+    stage: pre-merge
+    qualifying_environments: [local]
+    requires:
+      - no-invariant-violations
+      - no-violations-cluster-pool-lifecycle
+      - no-violations-duplicate-delivery
+      - no-violations-full-setup
+      - no-violations-node-loss
+      - no-violations-stuck-placement
+      - no-undeclared-refusals
+      - no-new-unsupported-answers
+      - no-lost-outcomes
+      - explore-within-budget
+      - test-within-budget

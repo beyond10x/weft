@@ -1,0 +1,41 @@
+format: ratchet-assessor/1
+name: weft-sim-report
+version: "1"
+command: weft-sim-report
+targets: [revision]
+inputs:
+  report: {type: path, required: true}
+conditions: []
+coverage_unit: walk
+coverage: [executed, skipped]
+outputs:
+  outcomes_reached:
+    value_type: identity_set
+    kind: exact
+    scopes: []
+    identity_key: [outcome]
+  violations:
+    value_type: identity_set
+    kind: exact
+    scopes: []
+    identity_key: [kind, command]
+  unsupported_answers:
+    value_type: identity_set
+    kind: exact
+    scopes: []
+    identity_key: [command]
+  undeclared_refusals:
+    value_type: identity_set
+    kind: exact
+    scopes: []
+    identity_key: [command]
+  abstract_states:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: states
+  elapsed:
+    value_type: number
+    kind: sampled
+    scopes: []
+    unit: s
