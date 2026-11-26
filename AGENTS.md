@@ -25,6 +25,8 @@ none is written before the specification of what it implements.
 - `tools/check-overlay.sh`: validates the whole system from a frozen snapshot with only named
   files from the working tree, for parallel edits (`--freeze` takes the snapshot).
 - `tools/check-layers.sh [--graph]`: fails on a reference to a higher layer (`task layers`).
+- `tools/check-stamped-time.sh [--inventory | --negative]`: fails when a command with a
+  `weft.shared.StampedAt` input is granted outside `tools/stamped-time-actors` (`task stamped-time`).
 - `tools/synth-domain.sh [--snapshot] <name> [paths]`: synthesizes the conformance suite of one
   domain on the subset of domains it needs (about 80 s; the whole system takes 451 s) and runs it
   against the interpreted target. Synthesis goes through `slot` with `--jobs 2`, one run at a time
@@ -46,6 +48,12 @@ none is written before the specification of what it implements.
 - Every command, view and entity names the line of `docs/domain-sketch.md` it comes from in a
   comment. What the sketch does not decide is written as `# OPEN:` with the question.
 - Isolation, secrets and identity default to deny: a guard refuses, never a silent fallback.
+- A time weft-control decides on from its own clock (a receipt, a decision, its clock plus a
+  length) is a command input of type `weft.shared.StampedAt`, and only the actors in
+  `tools/stamped-time-actors` (weft-control's: ControlPlane, Scheduler, ReleaseController) are
+  granted such a command; a node's or a user's request carries no such time, and an instant a
+  user chooses stays `Timestamp`. `tools/check-stamped-time.sh` holds it in `task check` (a node
+  that names its own `received_at` postpones its own loss, hardening pass 5).
 - `ess specify validate --path ess --strict-requires` is the gate, run as `slot task check` (the
   slot hook refuses a bare `task check`). `tools/check-domain.sh` calls `ess` directly and runs
   without `slot`.

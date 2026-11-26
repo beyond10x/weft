@@ -812,7 +812,7 @@ commands:
       - {name: agent_version, type: String}
       # The instant weft-control's node-channel endpoint received the frame, stamped by the control
       # plane, never read from the frame (see Heartbeat).
-      - {name: received_at, type: Timestamp}
+      - {name: received_at, type: weft.shared.StampedAt}
     outcomes:
       - name: received-in-future
         when: received_at > now
@@ -860,13 +860,20 @@ commands:
   # carries no time (docs/ess-gaps.md gap 14). The guard bounds it by the decision instant: an
   # instant after `now` is refused, so no caller can postpone its own loss; an earlier one only
   # makes the session look older.
+  # Hardening pass 5 (2026-11-26): the caller is that endpoint, the ControlPlane, not the node
+  # agent (ess/9-actors/actors.yaml; `received_at` is weft.shared.StampedAt, held by
+  # tools/check-stamped-time.sh). The endpoint records the node's heartbeat frame only over the
+  # session it holds open for the node: session_id is that session, node_id the node its
+  # mutual-TLS certificate named at the dial, and `not-own-node` and `not-open` refuse a
+  # session of another node or one no longer Open. The same holds for OpenNodeSession,
+  # SupersedeNodeSession (the dial) and RenewLease.
   - name: weft.nodes.Heartbeat
     naming:
       display: Record a node heartbeat
     input:
       - {name: session_id, type: weft.shared.NodeSessionId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: received_at, type: Timestamp}
+      - {name: received_at, type: weft.shared.StampedAt}
     outcomes:
       - name: received-in-future
         when: received_at > now
@@ -1012,7 +1019,7 @@ commands:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: placement_decision_id, type: weft.shared.PlacementDecisionId}
-      - {name: assigned_at, type: Timestamp}
+      - {name: assigned_at, type: weft.shared.StampedAt}
     outcomes:
       - name: assigned-in-future
         when: assigned_at > now
@@ -1238,13 +1245,19 @@ commands:
   # UNMAPPED: the renewal does not check that the node's session is Open: in ess/37 a guard on
   # the related session answers after the assignment's held state, so the accepting branch would
   # claim every Active assignment first. The node is proved by its client certificate instead.
+  # Hardening pass 5 (2026-11-26): the caller is weft-control's node-channel endpoint (the
+  # ControlPlane), which records a renewal frame only from a session it holds open and takes
+  # node_id from that session's certificate (see Heartbeat). Tried again: a `session_id` input
+  # with `session-of-other-node` and `session-not-open` guards is refused by ess 0.99.2
+  # (ESS-COMMAND-004: `lease-expired` and `renewed` answer at precedence step 3, a related-row
+  # guard at step 4), so the session's check stays the endpoint's.
   - name: weft.nodes.RenewLease
     naming:
       display: Renew an assignment's lease
     input:
       - {name: assignment_id, type: weft.shared.AssignmentId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: received_at, type: Timestamp}
+      - {name: received_at, type: weft.shared.StampedAt}
     outcomes:
       - name: received-in-future
         when: received_at > now

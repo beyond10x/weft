@@ -387,6 +387,16 @@ types:
     kind: newtype
     of: Uuid
 
+  # Hardening pass 5 (2026-11-26): an instant weft-control reads from its own clock (a receipt,
+  # a decision, its clock plus a length) and passes as a command input, because ESS 0.99.2
+  # refuses `now` as a value. A caller outside weft-control could name its own time and postpone
+  # a loss or a lease end, so tools/check-stamped-time.sh fails when a command with an input of
+  # this type is granted to an actor outside the set in tools/stamped-time-actors. An instant a
+  # user chooses (an expiry, a deadline, a window) stays Timestamp.
+  - name: weft.shared.StampedAt
+    kind: newtype
+    of: Timestamp
+
   - name: weft.shared.IsolationLevel
     kind: enum
     ordered: true

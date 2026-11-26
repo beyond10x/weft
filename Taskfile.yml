@@ -5,10 +5,11 @@ tasks:
     cmds: [{task: check}]
 
   check:
-    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers, test the CI path filter and weft-sim.
+    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter and weft-sim.
     cmds:
       - task: spec
       - task: layers
+      - task: stamped-time
       - task: ci-paths
       - task: sim-test
 
@@ -26,6 +27,12 @@ tasks:
     desc: Fail when a domain refers to a domain of a higher layer (docs/layers.md).
     cmds:
       - tools/check-layers.sh
+
+  stamped-time:
+    desc: Fail when a command with a weft.shared.StampedAt input is granted outside tools/stamped-time-actors; then its negative case.
+    cmds:
+      - tools/check-stamped-time.sh
+      - tools/check-stamped-time.sh --negative
 
   graph:
     desc: Print the domain reference graph with counts, then the layer check.

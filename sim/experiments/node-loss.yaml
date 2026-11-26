@@ -49,13 +49,15 @@ setup:
     expect: joined
   - label: open-session-0
     command: weft.nodes.OpenNodeSession
-    actor: weft.actors.NodeAgent
+    actor: weft.actors.ControlPlane
+    relays: weft.actors.NodeAgent
     input: {node_id: "${node_0}", agent_version: "1.0", received_at: "${now}"}
     expect: opened
     bind: {session_0: session_id}
   - label: open-session-1
     command: weft.nodes.OpenNodeSession
-    actor: weft.actors.NodeAgent
+    actor: weft.actors.ControlPlane
+    relays: weft.actors.NodeAgent
     input: {node_id: "${node_1}", agent_version: "1.0", received_at: "${now}"}
     expect: opened
     bind: {session_1: session_id}
@@ -73,14 +75,16 @@ traffic:
     step:
       label: heartbeat-0
       command: weft.nodes.Heartbeat
-      actor: weft.actors.NodeAgent
+      actor: weft.actors.ControlPlane
+      relays: weft.actors.NodeAgent
       input: {session_id: "${session_0}", node_id: "${node_0}", received_at: "${now}"}
   - name: heartbeat-node-1
     every: "${hb_every}"
     step:
       label: heartbeat-1
       command: weft.nodes.Heartbeat
-      actor: weft.actors.NodeAgent
+      actor: weft.actors.ControlPlane
+      relays: weft.actors.NodeAgent
       input: {session_id: "${session_1}", node_id: "${node_1}", received_at: "${now}"}
 
 ticks: 8

@@ -125,7 +125,8 @@ setup:
   - label: session-shared
     repeat: "${per_pool}"
     command: weft.nodes.OpenNodeSession
-    actor: weft.actors.NodeAgent
+    actor: weft.actors.ControlPlane
+    relays: weft.actors.NodeAgent
     input: {node_id: "${node_s_${i}}", agent_version: "1.0", received_at: "${now}"}
     expect: opened
   - label: create-default-cluster
@@ -245,9 +246,9 @@ setup:
   - {label: observe-g0, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
   - {label: observe-g1, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
   - {label: observe-g2, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
-  - {label: session-g0, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened, bind: {"session_g0_${i}": session_id}}
-  - {label: session-g1, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
-  - {label: session-g2, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
+  - {label: session-g0, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened, bind: {"session_g0_${i}": session_id}}
+  - {label: session-g1, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
+  - {label: session-g2, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
   - label: create-topology
     command: weft.cluster.CreateClusterTopology
     actor: weft.actors.TenantOwner
@@ -412,7 +413,8 @@ controllers:
     view: weft.nodes.NodeSessions
     filter: {state: Open}
     command: weft.nodes.Heartbeat
-    actor: weft.actors.NodeAgent
+    actor: weft.actors.ControlPlane
+    relays: weft.actors.NodeAgent
     input: {session_id: row.session_id, node_id: row.node_id, received_at: "${now}"}
   - name: r3-lose-silent-sessions
     view: weft.nodes.SilentNodeSessions
@@ -474,7 +476,8 @@ controllers:
     view: weft.nodes.Assignments
     filter: {state: Active}
     command: weft.nodes.RenewLease
-    actor: weft.actors.NodeAgent
+    actor: weft.actors.ControlPlane
+    relays: weft.actors.NodeAgent
     input: {assignment_id: row.assignment_id, node_id: row.node_id, received_at: "${now}"}
 converge_within: 8
 

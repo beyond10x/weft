@@ -48,7 +48,8 @@ setup:
     expect: joined
   - label: open-session-0
     command: weft.nodes.OpenNodeSession
-    actor: weft.actors.NodeAgent
+    actor: weft.actors.ControlPlane
+    relays: weft.actors.NodeAgent
     input: {node_id: "${node_0}", agent_version: "1.0", received_at: "${now}"}
     expect: opened
     bind: {session_0: session_id}

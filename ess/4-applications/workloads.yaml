@@ -5289,7 +5289,7 @@ commands:
       display: Record a schedule fired
     input:
       - {name: schedule_id, type: weft.shared.ScheduleId}
-      - {name: fired_at, type: Timestamp}
+      - {name: fired_at, type: weft.shared.StampedAt}
     outcomes:
       - name: no-such-schedule
         unknown_instance: true

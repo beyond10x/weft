@@ -89,7 +89,8 @@ actors:
       - weft.nodes.CancelDrain
       # identity
       - weft.identity.CreateTrustDomain
-      - weft.identity.RotateSigningKey
+      # Asks for the rotation; ControlPlane rotates with its clock (hardening pass 5).
+      - weft.identity.RequestKeyRotation
       - weft.identity.FinishKeyRotation
       - weft.identity.RetireTrustDomain
       - weft.identity.RevokeIdentityDocument
@@ -726,11 +727,12 @@ actors:
       - weft.workloads.FailInvocation
       - weft.workloads.RetryTask
       # nodes
-      - weft.nodes.OpenNodeSession
-      - weft.nodes.SupersedeNodeSession
-      - weft.nodes.Heartbeat
+      # Hardening pass 5 (2026-11-26): OpenNodeSession, SupersedeNodeSession, Heartbeat and
+      # RenewLease are ControlPlane's. They take `received_at` (weft.shared.StampedAt), and a node
+      # granted them could name its own time and postpone its own loss or lease end. The node's
+      # dial, heartbeat and renewal frames carry no time; weft-control's node-channel endpoint
+      # records them (tools/check-stamped-time.sh).
       - weft.nodes.CloseNodeSession
-      - weft.nodes.RenewLease
       - weft.nodes.InstanceObserved
       - weft.nodes.NodeObserved
       - weft.nodes.UsageReported
@@ -1000,9 +1002,19 @@ actors:
       - weft.scheduling.ReleasePlacement
       # nodes
       - weft.nodes.LoseNodeSession
+      # weft-control's node-channel endpoint records the node agent's frames with the time it
+      # stamped on receipt; node identity is the session's mutual-TLS certificate (hardening
+      # pass 5, see NodeAgent).
+      - weft.nodes.OpenNodeSession
+      - weft.nodes.SupersedeNodeSession
+      - weft.nodes.Heartbeat
+      - weft.nodes.RenewLease
       # identity: see the OPEN on NodeAgent.
       - weft.identity.IssueIdentityDocument
       - weft.identity.ExpireIdentityDocument
+      # The rotation the operator asked for, with the issuer's clock (hardening pass 5).
+      - weft.identity.RotateSigningKey
+      - weft.identity.RequestedKeyRotations
       # secrets
       # OPEN: the draft's secrets line gives DeliverSecret to NodeAgent; sketch line 127, the
       # draft's own ControlPlane line and secrets.yaml ("this command is the control plane's
