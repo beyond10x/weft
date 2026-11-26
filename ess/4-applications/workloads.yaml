@@ -237,7 +237,7 @@ types:
     kind: struct
     fields:
       - name: name
-        type: String
+        type: weft.shared.ProcessName
       - name: role
         type: weft.workloads.ProcessRole
       # Absent: the workload's own package. A Kubernetes Pod's containers each name an image.
@@ -575,7 +575,9 @@ entities:
         type: List<weft.workloads.Process>
       - name: restart_policy
         type: weft.workloads.RestartPolicy
-      # Section 4: process restarts under the RestartPolicy, counted over the instance's life.
+      # Section 4: process restarts under the RestartPolicy over the instance's life: the most restarts
+      # any one of its processes made, as its node counts them (node.LocalProcess.restarts). A
+      # maximum, so a repeated report of one restart changes nothing (hardening pass 7).
       - name: restarts
         type: Integer
       # Section 15: restarts within the policy's window, as the node counted them at the last
@@ -1489,7 +1491,7 @@ events:
   - name: weft.workloads.CheckObserved
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: role, type: weft.workloads.CheckRole}
       - {name: passed, type: Boolean}
 
@@ -1498,7 +1500,7 @@ events:
   - name: weft.workloads.ProcessRestarted
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: reason, type: weft.workloads.RestartReason}
       - {name: restarts, type: Integer}
       - {name: restarts_in_window, type: Integer}
@@ -1532,7 +1534,7 @@ events:
   - name: weft.workloads.StartupCheckFailed
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: consecutive_failures, type: Integer}
 
   # Section 14 R9: an alive check failed `failure_threshold` times in a row: the node restarts the
@@ -1545,7 +1547,7 @@ events:
   - name: weft.workloads.AliveCheckFailed
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: consecutive_failures, type: Integer}
       - {name: node_id, type: weft.shared.NodeId}
       - {name: workload_id, type: weft.shared.WorkloadId}
@@ -1557,7 +1559,7 @@ events:
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
 
@@ -1567,13 +1569,13 @@ events:
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   # A restarted process started successfully while the instance was not backing off.
   - name: weft.workloads.ProcessStarted
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
 
   - name: weft.workloads.InstancePaused
     fields:
@@ -2553,7 +2555,7 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
       - {name: role, type: weft.workloads.CheckRole}
       - {name: passed, type: Boolean}
       - {name: consecutive, type: Integer}
@@ -2785,13 +2787,14 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
+      - {name: restarts, type: Integer}
       - {name: reason, type: weft.workloads.RestartReason}
       - {name: restarts_in_window, type: Integer}
       - {name: backoff_seconds, type: Integer}
     outcomes:
       - name: invalid-count
-        when: restarts_in_window < 1
+        when: {any: [restarts_in_window < 1, restarts < 1]}
         error: weft.workloads.InvalidCount
       - name: no-such-instance
         unknown_instance: true
@@ -2809,7 +2812,7 @@ commands:
         when_subject: {predicate: restart_policy.mode == Never}
         error: weft.workloads.RestartNotAllowed
       - name: count-above-total
-        when_subject: {predicate: input.restarts_in_window > restarts + 1}
+        when_subject: {predicate: input.restarts_in_window > input.restarts}
         error: weft.workloads.InvalidCount
       - name: backoff-out-of-range
         when_subject:
@@ -2829,7 +2832,7 @@ commands:
         updates: weft.workloads.Instance
         instance: instance_id
         sets:
-          restarts: {increment: 1}
+          restarts: {expr: "max(subject.restarts, input.restarts)"}
           restarts_in_window: input.restarts_in_window
           backoff_seconds: input.backoff_seconds
           health: BackingOff
@@ -2840,7 +2843,7 @@ commands:
             instance_id: input.instance_id
             process: input.process
             reason: input.reason
-            restarts: {expr: "subject.restarts + 1"}
+            restarts: {expr: "max(subject.restarts, input.restarts)"}
             restarts_in_window: input.restarts_in_window
             backoff_seconds: input.backoff_seconds
           weft.workloads.InstanceBackingOff:
@@ -2859,7 +2862,7 @@ commands:
         updates: weft.workloads.Instance
         instance: instance_id
         sets:
-          restarts: {increment: 1}
+          restarts: {expr: "max(subject.restarts, input.restarts)"}
           restarts_in_window: input.restarts_in_window
           backoff_seconds: input.backoff_seconds
           ready: false
@@ -2869,7 +2872,7 @@ commands:
             instance_id: input.instance_id
             process: input.process
             reason: input.reason
-            restarts: {expr: "subject.restarts + 1"}
+            restarts: {expr: "max(subject.restarts, input.restarts)"}
             restarts_in_window: input.restarts_in_window
             backoff_seconds: input.backoff_seconds
       - name: restarted
@@ -2877,7 +2880,7 @@ commands:
         updates: weft.workloads.Instance
         instance: instance_id
         sets:
-          restarts: {increment: 1}
+          restarts: {expr: "max(subject.restarts, input.restarts)"}
           restarts_in_window: input.restarts_in_window
           backoff_seconds: input.backoff_seconds
           health: Starting
@@ -2888,7 +2891,7 @@ commands:
             instance_id: input.instance_id
             process: input.process
             reason: input.reason
-            restarts: {expr: "subject.restarts + 1"}
+            restarts: {expr: "max(subject.restarts, input.restarts)"}
             restarts_in_window: input.restarts_in_window
             backoff_seconds: input.backoff_seconds
           weft.workloads.InstanceHealthStarting:
@@ -2908,7 +2911,7 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: process, type: String}
+      - {name: process, type: weft.shared.ProcessName}
     outcomes:
       - name: no-such-instance
         unknown_instance: true

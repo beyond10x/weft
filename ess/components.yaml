@@ -1984,6 +1984,7 @@ bindings:
       instance_id: event.instance_id
       node_id: event.node_id
       process: event.process
+      restarts: event.restarts
       reason: event.reason
       restarts_in_window: event.restarts_in_window
       backoff_seconds: event.backoff_seconds
@@ -1995,9 +1996,10 @@ bindings:
       # invalid-count, count-above-total, backoff-out-of-range and restart-never cannot follow:
       # weft.node.RestartProcess checks the same bounds against the same policy, read from the
       # instance. no-such-instance, wrong-node and no-such-process cannot follow (StartProcess read
-      # the instance and its assignment to this node). OPEN: a repeated delivery is recorded twice
-      # (`restarts` counts it again); workloads.RecordProcessRestarted would take the node's
-      # `restarts` to refuse a count it already holds. A transport failure is retried.
+      # the instance and its assignment to this node). A repeated delivery changes nothing: the
+      # instance keeps the larger of its count and the node's (hardening pass 7). Left: a repeat that
+      # arrives after the process started again sets health back to Starting until its next ready
+      # check. A transport failure is retried.
       retry: {except: [other-state]}
 
   # ---------------------------------------------------------------------------------------------

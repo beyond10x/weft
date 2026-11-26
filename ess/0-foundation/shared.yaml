@@ -44,6 +44,9 @@ types:
   - name: weft.shared.InstanceId
     kind: newtype
     of: Uuid
+  - name: weft.shared.ProcessName
+    kind: newtype
+    of: String
   - name: weft.shared.InvocationId
     kind: newtype
     of: Uuid

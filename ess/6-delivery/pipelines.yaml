@@ -1063,7 +1063,8 @@ commands:
         error: weft.pipelines.NotFound
       - name: not-yet
         when_subject:
-          predicate: deadline >= now
+          predicate:
+            all: [defined(deadline), deadline >= now]
         error: weft.pipelines.NotYetTimedOut
       - name: timed-out
         moves: weft.pipelines.RunnerJob.time_out
@@ -1594,6 +1595,8 @@ commands:
           predicate:
             all:
               - kind == Window
+              - defined(window_opens_at)
+              - defined(window_closes_at)
               - any:
                   - window_opens_at > now
                   - window_closes_at <= now
@@ -1843,6 +1846,7 @@ views:
     filter:
       all:
         - state == Running
+        - defined(deadline)
         - deadline < now
     fields: *job-fields
 
