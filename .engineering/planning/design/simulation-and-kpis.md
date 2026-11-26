@@ -4,7 +4,7 @@ id: design:simulation-and-kpis
 kind: design
 status: draft
 title: 'Simulation on the in-memory ESS runtime: experiments, fault injection, system invariants, KPIs (ratchet), state-space hill climbing'
-revision: 2
+revision: 3
 ---
 ## Goal
 

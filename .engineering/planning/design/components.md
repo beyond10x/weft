@@ -4,11 +4,11 @@ id: design:components
 kind: design
 status: draft
 title: 'weft components: api, control, node, edge and their contracts'
-revision: 4
+revision: 6
 ---
 ## Goal
 
-The owner, 2026-11-26 (relayed by the host operator, about 12:05 CET): "we also need to start defining the
+The owner, 2026-11-26 (about 12:05 CET): "we also need to start defining the
 components - this seems to be gotten lost somehow". Every running part of weft named by
 `docs/domain-sketch.md` § Structure "Components" (lines 72-78) gets a definition in
 `ess/components.yaml` with a contract: the domain it owns, the commands it accepts, the events it
@@ -43,7 +43,7 @@ publishes and consumes, the actors it acts as, its channels, and the loop steps 
 - Owns: access, accounts, artifacts, formations (unchanged).
 - Accepts: every user command of those domains; reached by network (`surfaces/http/weft-api.yaml`).
 - Acts as: `ManagementApi`; authorizes every management call (caller attributes, pass 1).
-- Forwards (D1, the owner 2026-11-26): user commands of control-owned domains to `weft-control`.
+- Forwards (D1, the owner, 2026-11-26): user commands of control-owned domains to `weft-control`.
 
 ### weft-control (control plane, sketch line 73)
 
@@ -96,13 +96,13 @@ publishes and consumes, the actors it acts as, its channels, and the loop steps 
    experiment may still override one for a fault.
 4. Settle D1 and D2 in `ess/components.yaml` and `surfaces/http/weft-api.yaml`.
 
-## ESS ask (one line, to the host operator)
+## ESS ask (one line)
 
 A component declares level and time steps (`steps: [{form: level|time, view, command, actor, every}]`)
 that `validate` checks (view and command exist, the actor may run the command and read the view) and
 the interpreter can run.
 
-## Decisions (the owner, 2026-11-26 about 12:20 CET, relayed by the host operator)
+## Decisions (the owner, 2026-11-26 about 12:20 CET)
 
 - D1, user commands of control-owned domains (DefineWorkload, CreateSecret, SubmitDeploymentSource):
   The owner picked "A: weft-api forwards". `weft-api` forwards them to `weft-control` over an internal

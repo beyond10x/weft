@@ -456,7 +456,7 @@ First line of each marker in the new entities and commands; the full text and th
 - Not green. 0 failed scenarios of deployments; the release chain past Planned gets no scenario.
 - Run 1 (original file): subset 1763 scenarios, deployments refusals 001x6, 003x31, 004x49, 008x1; synthesis 442 s.
 - Last complete probe (deployments + shared only): 73 scenarios, 73 passed; refusals 001x10, 003x17, 004x18, 008x2; 403 s (original: 39 scenarios, 288 s). Not re-measured after the last revert.
-- Runs 3-6 did not finish (600-1500 s caps); one of them held 22 GB and ran the host out of memory (host operator, 05:14 CET).
+- Runs 3-6 did not finish (600-1500 s caps); one of them held 22 GB and ran the host out of memory (05:14 CET).
 - `external`: 0 before, 0 after.
 - StartRelease 001x3: its row sets on `subject.plan_id` and `subject.environment_id` stay undetermined, so no release reaches Applying. A variant that reaches it ran past 1200 s; reverted.
 - AddReleaseStep/release-not-planned 001: beside a row set only the creator's state is arranged.
