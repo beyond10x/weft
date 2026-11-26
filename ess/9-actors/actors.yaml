@@ -710,7 +710,9 @@ actors:
       - weft.workloads.RecordArtifactRejected
       - weft.workloads.RecordInstanceRunning
       - weft.workloads.RecordCheckResult
-      - weft.workloads.RecordProcessRestarted
+      # RecordProcessRestarted is no grant since design:components (2026-11-26): the node records a
+      # restart in weft.node (RestartProcess), and the binding r9-record-process-restarted carries
+      # it to workloads, so the restart has one source (§ 14 line 607).
       - weft.workloads.RecordInstancePaused
       - weft.workloads.RecordInstanceResumed
       - weft.workloads.RecordInstanceExited
@@ -744,6 +746,18 @@ actors:
       # ControlPlane issues; NodeAgent renews and revokes.
       - weft.identity.RenewIdentityDocument
       - weft.identity.RevokeIdentityDocument # an instance of its node ended
+      # node (design:components, 2026-11-26): the processes of its own node, their restarts and
+      # backoff (R9), and the views of its work list and its R9 level step (RestartsDue). Own node
+      # only; StartProcess is checked against the assignment it holds. MarkRestartDue,
+      # StopAssignmentProcesses and CloseAssignmentEndpointSessions are no grant: only their
+      # bindings in ess/components.yaml run them, so a node marks no restart due that weft-control
+      # did not record and ends no assignment's processes on its own word.
+      - weft.node.StartProcess
+      - weft.node.RestartProcess
+      - weft.node.StopProcess
+      - weft.node.LocalProcessesOfNode
+      - weft.node.LocalProcessesOfInstance
+      - weft.node.RestartsDue
 
   # Sketch line 118: places instances, preempts; scales pools and drains idle nodes (draft,
   # decided: the operator sets pool bounds).
@@ -868,6 +882,34 @@ actors:
       - weft.workloads.WakeService # source `link_request` only
       - weft.identity.ExchangeToken
       - weft.catalog.CheckServiceAccess
+      # node (sketch line 100, design:components): its own node's local endpoint, for its identity
+      # document and its secrets; own instance only (`not-from-instance`, `other-instance`).
+      - weft.node.OpenLocalEndpointSession
+      - weft.node.RequestIdentityDocument
+      - weft.node.RequestSecret
+      - weft.node.LocalEndpointSessionsOfInstance
+
+  # Sketch line 75 (weft-edge, data plane), design:components 2026-11-26: the gateway in front of
+  # public endpoints acting on its own. It holds a request while a sleeping service wakes and ends
+  # it past its deadline (R8, § 4 "Sleep and wake"), records what the certificate issuer answered,
+  # and reads the ready backends of a route (§ 15). Not in the sketch's actor list (lines 103-127).
+  # The edge's other commands (RecordBackendReady, RestoreBackend, RecordBackendNotReady,
+  # RemoveBackend, ForwardHeldRequests, DropRouteHeldRequests, RequestCertificate,
+  # RetireEndpointCertificates) are no grant: only their bindings in ess/components.yaml run them,
+  # from readiness, route and endpoint events, so the edge invents no backend and no endpoint.
+  - name: weft.actors.EdgeGateway
+    naming:
+      wire: edge_gateway
+      display: Edge gateway
+    may:
+      - weft.edge.HoldRequest
+      - weft.edge.MissHeldRequest
+      - weft.edge.RecordCertificateIssued
+      - weft.edge.RecordCertificateFailed
+      - weft.edge.RetryCertificate
+      - weft.edge.RouteBackends
+      - weft.edge.HeldRequestsPastDeadline
+      - weft.edge.Certificates
 
   # Sketch line 122: weft-api acting on its own: expiry of logins and tokens, audit records.
   - name: weft.actors.ManagementApi

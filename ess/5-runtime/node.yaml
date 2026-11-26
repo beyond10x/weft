@@ -1,0 +1,774 @@
+# Node: the records weft-node keeps on its own node. The processes of the instances assigned to it
+# (their restarts and backoff, loop R9) and the calls an instance makes on its local endpoint for
+# its identity document and its secrets.
+# Sources: docs/domain-sketch.md § Structure "Components" (line 74, weft-node, the node agent,
+# worker plane), "Channels" (line 100, the local endpoint "reachable from that instance only"),
+# § 4 "Inside one instance" (Process, Check, RestartPolicy), § 14 R9 (line 593: "alive check failed
+# past its threshold -> process restart (node-local, recorded)"), § 15 "Health" (restart backoff)
+# and .engineering/planning/design/components.md (design:components, weft-node).
+#
+# Line 66: a worker "holds no state the control plane does not know". Every fact here reaches
+# weft-control as an observation: a restart through the binding r9-record-process-restarted to
+# weft.workloads.RecordProcessRestarted (ess/components.yaml), which weft-control records and
+# checks against the instance's restart policy. The rows below are the node's state machine; the
+# wire is protocols/node-channel.yaml.
+#
+# No command here takes a time from the node (tools/check-stamped-time.sh, AGENTS.md "stamped
+# time"): an instant a row keeps is generated where it is written, and the node's own waits (the
+# backoff before a restart) are durations it reports, checked against the restart policy.
+#
+# What the node holds is checked against the assignment weft-control gave it (weft.nodes.Assignment,
+# § 11): a process starts and an instance's endpoint session opens only while the node holds an
+# Active assignment of that instance. The assignment is read, not copied (design:components open
+# question 1 keeps weft-control the owner of what it decides).
+domain: weft.node
+
+summary: >-
+  What weft-node keeps on its own node: the processes of the instances assigned to it, their
+  restarts and backoff, and the calls each instance makes on its local endpoint for its identity
+  document and its secrets.
+
+naming:
+  wire: weft
+  display: Node
+
+entities:
+  # § 4 "Inside one instance": `Process`, "an instance runs one or more processes"; `RestartPolicy`
+  # "with a backoff". § 14 R9 (line 593) and § 15 "Health": the node restarts a process whose
+  # alive check failed past its threshold and reports the restart; "past N restarts in a window
+  # the instance is `backing-off`". One row per process of one instance on this node.
+  # OPEN: the startup check (§ 15) restarts a process too (workloads.StartupCheckFailed); that event
+  # carries no node and no restart flag, so it reaches no binding here and the node restarts on its
+  # own observation (RestartProcess with reason StartupCheckFailed from Running).
+  - name: weft.node.LocalProcess
+    naming:
+      summary: One process of an instance assigned to this node, its restarts and its backoff.
+    identity:
+      name: local_process_id
+      type: weft.shared.LocalProcessId
+    fields:
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: assignment_id
+        type: weft.shared.AssignmentId
+      - name: instance_id
+        type: weft.shared.InstanceId
+      # § 4: the name of the process in the instance's `processes`.
+      - name: process
+        type: String
+      # § 4 `RestartPolicy`, read from the instance when the process starts; the node applies it.
+      - name: restart_policy
+        type: weft.workloads.RestartPolicy
+      - name: restarts
+        type: Integer
+      # § 15: the node's own count of restarts in the policy's window, this one included, and the
+      # wait it took before the last restart (seconds).
+      - name: restarts_in_window
+        type: Integer
+      - name: backoff_seconds
+        type: Integer
+      - name: last_reason
+        type: Optional<weft.workloads.RestartReason>
+      - name: started_at
+        type: Timestamp
+    relations:
+      # references: the assignment (§ 11) is weft-control's record of what this node holds.
+      - name: assignment
+        kind: references
+        target: weft.nodes.Assignment
+        cardinality: one
+        via: assignment_id
+      # references: the instance (§ 4) outlives each of its processes.
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    invariants:
+      - restarts >= 0
+      - restarts_in_window >= 0
+      - backoff_seconds >= 0
+    lifecycle:
+      initial: Running
+      states:
+        - {name: Running, summary: The process runs.}
+        - {name: RestartDue, wire: restart-due, summary: "Its alive check failed past its threshold (R9); the node waits its backoff, then restarts it."}
+        - {name: Stopped, summary: "Stopped on order, or its assignment ended or was released."}
+      terminal: [Stopped]
+      transitions:
+        - name: restart_due
+          from: [Running]
+          to: RestartDue
+        - name: restart
+          from: [Running, RestartDue]
+          to: Running
+        - name: stop
+          from: [Running, RestartDue]
+          to: Stopped
+
+  # Line 100: "Instance -> weft-node: a local endpoint inside the instance for its identity
+  # document and its secrets; reachable from that instance only." § 7 "a value reaches an instance
+  # only at start, only through a grant"; § 8 the identity document is "renewed by the node agent".
+  # One session per instance at a time, open while the node holds the instance's assignment.
+  # OPEN (design:components question 1, default taken): the node relays; weft-control decides.
+  # IdentityDocumentRequested and SecretRequested are the instance's requests as the node received
+  # them; identity.IssueIdentityDocument and secrets.DeliverSecret stay ControlPlane commands whose
+  # inputs (trust domain, grant, version, the document shown) are weft-control's choice, so no
+  # binding carries a request into them. Which node-channel frame carries the request is not yet in
+  # protocols/node-channel.yaml.
+  - name: weft.node.LocalEndpointSession
+    naming:
+      summary: One instance's session on its node's local endpoint, and what it asked for.
+    identity:
+      name: endpoint_session_id
+      type: weft.shared.LocalEndpointSessionId
+    fields:
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: assignment_id
+        type: weft.shared.AssignmentId
+      - name: instance_id
+        type: weft.shared.InstanceId
+      - name: identity_requests
+        type: Integer
+      - name: secret_requests
+        type: Integer
+      - name: opened_at
+        type: Timestamp
+    relations:
+      - name: assignment
+        kind: references
+        target: weft.nodes.Assignment
+        cardinality: one
+        via: assignment_id
+      - name: instance
+        kind: references
+        target: weft.workloads.Instance
+        cardinality: one
+        via: instance_id
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    invariants:
+      - identity_requests >= 0
+      - secret_requests >= 0
+    lifecycle:
+      initial: Open
+      states:
+        - {name: Open, summary: The instance may ask for its identity document and its secrets.}
+        - {name: Closed, summary: "The instance's assignment ended or was released; the endpoint answers nothing more."}
+      terminal: [Closed]
+      transitions:
+        - name: close
+          from: [Open]
+          to: Closed
+
+errors:
+  - name: weft.node.AssignmentNotHeld
+    summary: >-
+      The node holds no active assignment of this instance, so nothing starts and no endpoint
+      session opens. Isolation and identity default to deny.
+  - name: weft.node.InstanceNotFound
+    summary: No instance has this identifier, and nothing changed.
+  - name: weft.node.ProcessNotDeclared
+    summary: The instance declares no process of this name, and nothing changed.
+  - name: weft.node.ProcessAlreadyStarted
+    summary: This process of the instance already runs on the node; it is not started twice.
+  - name: weft.node.LocalProcessNotFound
+    summary: No local process has this identifier, and nothing changed.
+  - name: weft.node.NotOwnNode
+    summary: The process belongs to another node; a node agent acts on its own node only.
+  - name: weft.node.ProcessStopped
+    summary: The process was stopped; it takes no restart, and nothing changed.
+  - name: weft.node.ProcessNotRunning
+    summary: No running process of this name and instance is on the node, and nothing changed.
+  - name: weft.node.RestartNotAllowed
+    summary: >-
+      The restart policy is `never`; the node reports the instance failed instead of restarting a
+      process.
+  - name: weft.node.RestartNotDue
+    summary: >-
+      A restart for a failing alive check waits for weft-control to record the check failed past
+      its threshold (R9); the process still counts as running, and nothing changed.
+  - name: weft.node.InvalidCount
+    summary: >-
+      The count of restarts in the window is below 1, or above the process's restarts plus this
+      one.
+  - name: weft.node.BackoffOutOfRange
+    summary: >-
+      The wait before the restart is below the restart policy's initial backoff or above its cap.
+  - name: weft.node.NotFromInstance
+    summary: >-
+      The call did not come from inside the instance it names; the local endpoint answers that
+      instance only, and nothing changed.
+  - name: weft.node.EndpointSessionAlreadyOpen
+    summary: The instance already has an open session on the local endpoint.
+  - name: weft.node.EndpointSessionNotFound
+    summary: No local endpoint session has this identifier, and nothing changed.
+  - name: weft.node.EndpointSessionClosed
+    summary: The local endpoint session is closed; it answers nothing more, and nothing changed.
+
+events:
+  - name: weft.node.LocalProcessStarted
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+
+  # § 14 R9: weft-control recorded the process's alive check failed past its threshold; the node
+  # restarts it once its backoff passed (RestartsDue, the node's own level step).
+  - name: weft.node.ProcessRestartDue
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+
+  # § 14 R9 "(node-local, recorded)": every field workloads.RecordProcessRestarted takes, so the
+  # binding r9-record-process-restarted guesses nothing.
+  - name: weft.node.ProcessRestarted
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+      - {name: reason, type: weft.workloads.RestartReason}
+      - {name: restarts, type: Integer}
+      - {name: restarts_in_window, type: Integer}
+      - {name: backoff_seconds, type: Integer}
+
+  # § 15: "past N restarts in a window the instance is `backing-off` ... and the event is named".
+  # The node's own count passed the policy's limit. weft-control decides the instance's health from
+  # the same count (RecordProcessRestarted `backing-off`, InstanceBackingOff), so no binding
+  # carries this event; it is the node's record.
+  - name: weft.node.ProcessBackingOff
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+      - {name: restarts_in_window, type: Integer}
+      - {name: backoff_seconds, type: Integer}
+
+  - name: weft.node.LocalProcessStopped
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+
+  - name: weft.node.LocalEndpointSessionOpened
+    fields:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+
+  # § 8: the instance asked for its identity document (issued or renewed by weft-control).
+  - name: weft.node.IdentityDocumentRequested
+    fields:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+
+  # § 7: the instance asked for a secret; weft-control decides the delivery (DeliverSecret). The
+  # event names the secret, never a value.
+  - name: weft.node.SecretRequested
+    fields:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: secret_id, type: weft.shared.SecretId}
+
+  - name: weft.node.LocalEndpointSessionClosed
+    fields:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+
+commands:
+  # § 4 "Inside one instance", § 11 "starts, observes and stops instances" (line 65): the node
+  # starts a process of an instance it holds the assignment of. The assignment reaches the node
+  # over the node channel (R4, protocols/node-channel.yaml); the guard reads weft-control's record
+  # of it, so a node starts nothing it was not given.
+  - name: weft.node.StartProcess
+    naming:
+      display: Start a process of an assigned instance
+    input:
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+    outcomes:
+      - name: no-such-assignment
+        when_related: {via: input.assignment_id, exists: false}
+        error: weft.node.AssignmentNotHeld
+      - name: no-such-instance
+        when_related: {via: input.instance_id, exists: false}
+        error: weft.node.InstanceNotFound
+      - name: assignment-not-held
+        when_related:
+          via: input.assignment_id
+          predicate:
+            any:
+              - node_id != input.node_id
+              - instance_id != input.instance_id
+              - state != Active
+        error: weft.node.AssignmentNotHeld
+      - name: process-not-declared
+        when_related:
+          via: input.instance_id
+          predicate:
+            not:
+              exists: {in: processes, as: p, that: p.name == input.process}
+        error: weft.node.ProcessNotDeclared
+      - name: already-started
+        when_related:
+          entity: weft.node.LocalProcess
+          where:
+            all:
+              - instance_id == input.instance_id
+              - process == input.process
+              - state != Stopped
+          exists: true
+        error: weft.node.ProcessAlreadyStarted
+      - name: started
+        creates: weft.node.LocalProcess
+        instance: local_process_id
+        sets:
+          node_id: input.node_id
+          assignment_id: input.assignment_id
+          instance_id: input.instance_id
+          process: input.process
+          restart_policy: {related: {via: input.instance_id, field: restart_policy}}
+          restarts: 0
+          restarts_in_window: 0
+          backoff_seconds: 0
+          started_at: {generated: true}
+        emits: [weft.node.LocalProcessStarted]
+        payload:
+          weft.node.LocalProcessStarted:
+            local_process_id: {generated: true}
+            node_id: input.node_id
+            assignment_id: input.assignment_id
+            instance_id: input.instance_id
+            process: input.process
+
+  # § 14 R9 (line 593), edge from weft-control: workloads.AliveCheckFailed with `restart: true`
+  # (RecordCheckResult emits it once the count reached the check's threshold) marks the process
+  # due for a restart. Bound in ess/components.yaml (r9-mark-restart-due); the event names the
+  # instance, node and process, so the process is selected by them.
+  - name: weft.node.MarkRestartDue
+    naming:
+      display: Mark a process due for a restart
+    input:
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: process, type: String}
+    outcomes:
+      - name: not-running
+        when_related:
+          entity: weft.node.LocalProcess
+          where:
+            all:
+              - instance_id == input.instance_id
+              - node_id == input.node_id
+              - process == input.process
+              - state == Running
+          exists: false
+        error: weft.node.ProcessNotRunning
+      - name: due
+        moves: weft.node.LocalProcess.restart_due
+        instances:
+          where:
+            all:
+              - instance_id == input.instance_id
+              - node_id == input.node_id
+              - process == input.process
+              - state == Running
+        emits:
+          - {event: weft.node.ProcessRestartDue, each: changed}
+        payload:
+          weft.node.ProcessRestartDue:
+            local_process_id: {changed: local_process_id}
+            node_id: input.node_id
+            instance_id: input.instance_id
+            process: input.process
+
+  # § 14 R9 and § 15 "Health": the node restarts a process after its backoff and reports the
+  # restart with its count in the window and the wait it took; the restart policy bounds both, as
+  # workloads.RecordProcessRestarted checks them again. A restart for a failing alive check
+  # follows MarkRestartDue (state RestartDue); a process that exited or failed its startup check
+  # (reason Exited or StartupCheckFailed) is restarted from Running on the node's own observation.
+  # The event ProcessRestarted reaches weft-control through r9-record-process-restarted.
+  # OPEN: the exact wait of the n-th restart (initial * 2^(n-1), capped); only its bounds are
+  # checked, as in workloads.yaml.
+  - name: weft.node.RestartProcess
+    naming:
+      display: Restart a process
+    input:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: reason, type: weft.workloads.RestartReason}
+      - {name: restarts_in_window, type: Integer}
+      - {name: backoff_seconds, type: Integer}
+    outcomes:
+      - name: invalid-count
+        when: restarts_in_window < 1
+        error: weft.node.InvalidCount
+      - name: no-such-process
+        unknown_instance: true
+        error: weft.node.LocalProcessNotFound
+      - name: not-own-node
+        when_subject: {predicate: node_id != input.node_id}
+        error: weft.node.NotOwnNode
+      - name: stopped
+        when_subject: {predicate: state == Stopped}
+        error: weft.node.ProcessStopped
+      - name: restart-never
+        when_subject: {predicate: restart_policy.mode == Never}
+        error: weft.node.RestartNotAllowed
+      - name: count-above-total
+        when_subject: {predicate: input.restarts_in_window > restarts + 1}
+        error: weft.node.InvalidCount
+      - name: backoff-out-of-range
+        when_subject:
+          predicate:
+            any:
+              - input.backoff_seconds < restart_policy.backoff_initial_seconds
+              - input.backoff_seconds > restart_policy.backoff_max_seconds
+        error: weft.node.BackoffOutOfRange
+      - name: alive-not-due
+        when: reason == AliveCheckFailed
+        when_subject: {predicate: state == Running}
+        error: weft.node.RestartNotDue
+      - name: backing-off
+        when_subject: {predicate: input.restarts_in_window > restart_policy.backoff_limit}
+        moves: weft.node.LocalProcess.restart
+        instance: local_process_id
+        sets:
+          restarts: {increment: 1}
+          restarts_in_window: input.restarts_in_window
+          backoff_seconds: input.backoff_seconds
+          last_reason: input.reason
+        emits: [weft.node.ProcessRestarted, weft.node.ProcessBackingOff]
+        payload:
+          weft.node.ProcessRestarted:
+            local_process_id: input.local_process_id
+            node_id: input.node_id
+            instance_id: {subject: instance_id}
+            process: {subject: process}
+            reason: input.reason
+            restarts: {expr: "subject.restarts + 1"}
+            restarts_in_window: input.restarts_in_window
+            backoff_seconds: input.backoff_seconds
+          weft.node.ProcessBackingOff:
+            local_process_id: input.local_process_id
+            node_id: input.node_id
+            instance_id: {subject: instance_id}
+            process: {subject: process}
+            restarts_in_window: input.restarts_in_window
+            backoff_seconds: input.backoff_seconds
+      - name: restarted
+        moves: weft.node.LocalProcess.restart
+        instance: local_process_id
+        sets:
+          restarts: {increment: 1}
+          restarts_in_window: input.restarts_in_window
+          backoff_seconds: input.backoff_seconds
+          last_reason: input.reason
+        emits: [weft.node.ProcessRestarted]
+        payload:
+          weft.node.ProcessRestarted:
+            local_process_id: input.local_process_id
+            node_id: input.node_id
+            instance_id: {subject: instance_id}
+            process: {subject: process}
+            reason: input.reason
+            restarts: {expr: "subject.restarts + 1"}
+            restarts_in_window: input.restarts_in_window
+            backoff_seconds: input.backoff_seconds
+
+  # Line 65: the node "stops instances". A process the node stopped on order (nodes.Stop, Pause)
+  # or that ended for good.
+  - name: weft.node.StopProcess
+    naming:
+      display: Stop a process
+    input:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+    outcomes:
+      - name: no-such-process
+        unknown_instance: true
+        error: weft.node.LocalProcessNotFound
+      - name: not-own-node
+        when_subject: {predicate: node_id != input.node_id}
+        error: weft.node.NotOwnNode
+      - name: stopped
+        moves: weft.node.LocalProcess.stop
+        instance: local_process_id
+        emits: [weft.node.LocalProcessStopped]
+        payload:
+          weft.node.LocalProcessStopped:
+            local_process_id: input.local_process_id
+            node_id: input.node_id
+            instance_id: {subject: instance_id}
+            process: {subject: process}
+      - name: already-stopped
+        wrong_state: true
+        error: weft.node.ProcessStopped
+
+  # § 11 and § 14 R2, R3: an assignment that ended (the node observed the instance stopped) or was
+  # released (its lease ended) holds nothing on the node any more. Bound to nodes.AssignmentEnded
+  # and nodes.AssignmentReleased (ess/components.yaml); a release is also where a node that lost
+  # its session stops the instance itself (nodes.yaml OPEN on fencing).
+  - name: weft.node.StopAssignmentProcesses
+    naming:
+      display: Stop the processes of an assignment that ended
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: none-running
+        when_related:
+          entity: weft.node.LocalProcess
+          where: {all: [assignment_id == input.assignment_id, state != Stopped]}
+          exists: false
+        error: weft.node.ProcessNotRunning
+      - name: stopped
+        moves: weft.node.LocalProcess.stop
+        instances:
+          where: {all: [assignment_id == input.assignment_id, state != Stopped]}
+        emits:
+          - {event: weft.node.LocalProcessStopped, each: changed}
+        payload:
+          weft.node.LocalProcessStopped:
+            local_process_id: {changed: local_process_id}
+            node_id: {changed: node_id}
+            instance_id: {changed: instance_id}
+            process: {changed: process}
+
+  # Line 100: the instance calls its node's local endpoint, "reachable from that instance only".
+  # The node answers only an instance whose assignment it holds.
+  - name: weft.node.OpenLocalEndpointSession
+    naming:
+      display: Open a session on the local endpoint
+    input:
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      # Kept `external`: where a call comes from (the instance's own network namespace on this
+      # node) is a fact of the node's kernel, not of weft's records.
+      - name: not-from-instance
+        external: the call did not come from inside instance_id's own network namespace on node_id
+        before_row: true
+        error: weft.node.NotFromInstance
+      - name: no-held-assignment
+        when_related:
+          entity: weft.nodes.Assignment
+          where:
+            all:
+              - instance_id == input.instance_id
+              - node_id == input.node_id
+              - state == Active
+          exists: false
+        error: weft.node.AssignmentNotHeld
+      - name: already-open
+        when_related:
+          entity: weft.node.LocalEndpointSession
+          where: {all: [instance_id == input.instance_id, state == Open]}
+          exists: true
+        error: weft.node.EndpointSessionAlreadyOpen
+      - name: opened
+        creates: weft.node.LocalEndpointSession
+        instance: endpoint_session_id
+        sets:
+          node_id: input.node_id
+          assignment_id:
+            related:
+              entity: weft.nodes.Assignment
+              where:
+                all:
+                  - instance_id == input.instance_id
+                  - node_id == input.node_id
+                  - state == Active
+              field: assignment_id
+          instance_id: input.instance_id
+          identity_requests: 0
+          secret_requests: 0
+          opened_at: {generated: true}
+        emits: [weft.node.LocalEndpointSessionOpened]
+        payload:
+          weft.node.LocalEndpointSessionOpened:
+            endpoint_session_id: {generated: true}
+            node_id: input.node_id
+            assignment_id:
+              related:
+                entity: weft.nodes.Assignment
+                where:
+                  all:
+                    - instance_id == input.instance_id
+                    - node_id == input.node_id
+                    - state == Active
+                field: assignment_id
+            instance_id: input.instance_id
+
+  # § 8: the instance asks for its identity document at its local endpoint.
+  - name: weft.node.RequestIdentityDocument
+    naming:
+      display: Ask for the identity document
+    input:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-such-session
+        unknown_instance: true
+        error: weft.node.EndpointSessionNotFound
+      - name: other-instance
+        when_subject: {predicate: instance_id != input.instance_id}
+        error: weft.node.NotFromInstance
+      - name: requested
+        when_subject_state: Open
+        updates: weft.node.LocalEndpointSession
+        instance: endpoint_session_id
+        sets:
+          identity_requests: {increment: 1}
+        emits: [weft.node.IdentityDocumentRequested]
+        payload:
+          weft.node.IdentityDocumentRequested:
+            endpoint_session_id: input.endpoint_session_id
+            node_id: {subject: node_id}
+            instance_id: input.instance_id
+      - name: closed
+        error: weft.node.EndpointSessionClosed
+
+  # § 7: the instance asks for a secret at its local endpoint. Whether it gets it is the grant's
+  # (secrets.DeliverSecret, ControlPlane); the node refuses only what it can see itself.
+  - name: weft.node.RequestSecret
+    naming:
+      display: Ask for a secret
+    input:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: secret_id, type: weft.shared.SecretId}
+    outcomes:
+      - name: no-such-session
+        unknown_instance: true
+        error: weft.node.EndpointSessionNotFound
+      - name: other-instance
+        when_subject: {predicate: instance_id != input.instance_id}
+        error: weft.node.NotFromInstance
+      - name: requested
+        when_subject_state: Open
+        updates: weft.node.LocalEndpointSession
+        instance: endpoint_session_id
+        sets:
+          secret_requests: {increment: 1}
+        emits: [weft.node.SecretRequested]
+        payload:
+          weft.node.SecretRequested:
+            endpoint_session_id: input.endpoint_session_id
+            node_id: {subject: node_id}
+            instance_id: input.instance_id
+            secret_id: input.secret_id
+      - name: closed
+        error: weft.node.EndpointSessionClosed
+
+  # Line 100 and § 11: the endpoint answers an instance only while the node holds its assignment.
+  # Bound to nodes.AssignmentEnded and nodes.AssignmentReleased (ess/components.yaml).
+  - name: weft.node.CloseAssignmentEndpointSessions
+    naming:
+      display: Close the endpoint sessions of an assignment that ended
+    input:
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+    outcomes:
+      - name: none-open
+        when_related:
+          entity: weft.node.LocalEndpointSession
+          where: {all: [assignment_id == input.assignment_id, state == Open]}
+          exists: false
+        error: weft.node.EndpointSessionClosed
+      - name: closed
+        moves: weft.node.LocalEndpointSession.close
+        instances:
+          where: {all: [assignment_id == input.assignment_id, state == Open]}
+        emits:
+          - {event: weft.node.LocalEndpointSessionClosed, each: changed}
+        payload:
+          weft.node.LocalEndpointSessionClosed:
+            endpoint_session_id: {changed: endpoint_session_id}
+            node_id: {changed: node_id}
+            instance_id: {changed: instance_id}
+
+views:
+  # § 4: the processes on one node; the NodeAgent's own work list.
+  - name: weft.node.LocalProcessesOfNode
+    source: weft.node.LocalProcess
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+      - {name: restarts, type: Integer}
+      - {name: restarts_in_window, type: Integer}
+      - {name: backoff_seconds, type: Integer}
+      - {name: state, type: weft.node.LocalProcess.State}
+
+  # § 4: the processes of one instance.
+  - name: weft.node.LocalProcessesOfInstance
+    source: weft.node.LocalProcess
+    consistency: read_your_writes
+    params:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    filter: instance_id == param.instance_id
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: process, type: String}
+      - {name: restarts, type: Integer}
+      - {name: restarts_in_window, type: Integer}
+      - {name: backoff_seconds, type: Integer}
+      - {name: last_reason, type: Optional<weft.workloads.RestartReason>}
+      - {name: state, type: weft.node.LocalProcess.State}
+
+  # § 14 R9, level form on the node: the processes due for a restart. The NodeAgent waits each
+  # one's backoff on its own clock and runs RestartProcess (reason AliveCheckFailed) per row.
+  - name: weft.node.RestartsDue
+    source: weft.node.LocalProcess
+    consistency: read_your_writes
+    filter: state == RestartDue
+    fields:
+      - {name: local_process_id, type: weft.shared.LocalProcessId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: process, type: String}
+      - {name: restarts, type: Integer}
+      - {name: restarts_in_window, type: Integer}
+
+  # Line 100: the endpoint sessions of one instance.
+  - name: weft.node.LocalEndpointSessionsOfInstance
+    source: weft.node.LocalEndpointSession
+    consistency: read_your_writes
+    params:
+      - {name: instance_id, type: weft.shared.InstanceId}
+    filter: instance_id == param.instance_id
+    fields:
+      - {name: endpoint_session_id, type: weft.shared.LocalEndpointSessionId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: assignment_id, type: weft.shared.AssignmentId}
+      - {name: identity_requests, type: Integer}
+      - {name: secret_requests, type: Integer}
+      - {name: opened_at, type: Timestamp}
+      - {name: state, type: weft.node.LocalEndpointSession.State}
