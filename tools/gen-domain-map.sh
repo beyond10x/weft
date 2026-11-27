@@ -1,10 +1,12 @@
 #!/bin/sh
-# Usage: tools/gen-domain-map.sh [--block]
+# Usage: tools/gen-domain-map.sh [--block | --markers]
 # Generates the domain map of ess/, a Mermaid flowchart and a table, into the block between the
 # lines `<!-- domain-map -->` and `<!-- /domain-map -->` of website/docs/specification/layers.md
-# (or the page DOMAIN_MAP_PAGE names) and leaves the rest of the page as it is. --block prints the
-# block instead and writes nothing. tools/check.d/30-domain-map.sh holds the committed block equal
-# to it.
+# (or the page DOMAIN_MAP_PAGE names) and leaves the rest of the page as it is. It refuses (exit 2,
+# page unchanged) a page whose markers cannot hold the block: see markers() below. --block prints
+# the block instead and writes nothing; --markers only checks the markers of the page (exit 1 and
+# the reason when they cannot hold it). tools/check.d/30-domain-map.sh holds the committed block
+# equal to it. Tests: tools/test-domain-map.sh.
 #
 # Sources: the domains and their layers from ess/ess-inputs.yaml (the files `<n>-<layer>/*.yaml`
 # it lists and the `domain:` line of each), and the references between domains from
@@ -77,7 +79,8 @@ block() {
       for (i = 1; i <= n; i++) {
         if (split(row[i], f, " ") != 2) continue
         t = f[2]; sub(/^weft\./, "", t)
-        to[f[1]] = (f[1] in to ? to[f[1]] ", " : "") "`" t "`"
+        # test `in` before the element is read: mawk creates it while evaluating the right side
+        if (f[1] in to) to[f[1]] = to[f[1]] ", `" t "`"; else to[f[1]] = "`" t "`"
       }
     }
     { d = $3; sub(/^weft\./, "", d); printf "| %s | `%s` | %s |\n", $1, d, ($3 in to ? to[$3] : "none") }
@@ -85,14 +88,46 @@ block() {
   echo '<!-- /domain-map -->'
 }
 
-if [ "${1:-}" = "--block" ]; then
-  block
-  exit $?
-fi
-[ $# -eq 0 ] || { echo "usage: tools/gen-domain-map.sh [--block]" >&2; exit 2; }
+# markers <page>: prints why the page cannot hold the block, nothing when it can. The page needs
+# exactly one `<!-- domain-map -->` line and one `<!-- /domain-map -->` line, the opening one
+# first, and neither inside a code fence (``` or ~~~ up to 3 spaces in, closed by a run of the
+# same character at least as long), where the site prints the block as text and draws no figure.
+markers() {
+  awk '
+    {
+      match($0, /^ */); ind = RLENGTH; s = substr($0, ind + 1)
+      if (ind <= 3) {
+        if (fch == "") {
+          if (match(s, /^(```+|~~~+)/)) { fch = substr(s, 1, 1); fn = RLENGTH; next }
+        } else if (substr(s, 1, 1) == fch) {
+          if (fch == "`") match(s, /^`+/); else match(s, /^~+/)
+          if (RLENGTH >= fn && substr(s, RLENGTH + 1) ~ /^[ \t]*$/) { fch = ""; next }
+        }
+      }
+    }
+    $0 == "<!-- domain-map -->" { nopen++; at_open = NR; if (fch != "") fenced_open = 1 }
+    $0 == "<!-- /domain-map -->" { nclose++; at_close = NR; if (fch != "") fenced_close = 1 }
+    END {
+      if (nopen != 1 || nclose != 1) { printf "needs one <!-- domain-map --> and one <!-- /domain-map --> line (found %d and %d)\n", nopen, nclose; exit }
+      if (at_close < at_open) { printf "has its <!-- /domain-map --> (line %d) before its <!-- domain-map --> (line %d)\n", at_close, at_open; exit }
+      if (fenced_open) printf "has its <!-- domain-map --> (line %d) inside a code fence\n", at_open
+      else if (fenced_close) printf "has its <!-- /domain-map --> (line %d) inside a code fence\n", at_close
+    }
+  ' "$1"
+}
+
+case "${1:-}" in
+  --block) block; exit $? ;;
+  --markers)
+    [ -f "$page" ] || { echo "gen-domain-map: no page $page" >&2; exit 2; }
+    why=$(markers "$page") || exit 2
+    [ -z "$why" ] || { echo "gen-domain-map: $page $why"; exit 1; }
+    exit 0 ;;
+esac
+[ $# -eq 0 ] || { echo "usage: tools/gen-domain-map.sh [--block | --markers]" >&2; exit 2; }
 [ -f "$page" ] || { echo "gen-domain-map: no page $page" >&2; exit 2; }
-[ "$(grep -c '^<!-- domain-map -->$' "$page")" = 1 ] && [ "$(grep -c '^<!-- /domain-map -->$' "$page")" = 1 ] ||
-  { echo "gen-domain-map: $page needs one <!-- domain-map --> and one <!-- /domain-map --> line" >&2; exit 2; }
+why=$(markers "$page") || exit 2
+[ -z "$why" ] || { echo "gen-domain-map: $page $why; the page is left as it is" >&2; exit 2; }
 mkdir -p target/domain-map || exit 2
 block > target/domain-map/new-block.md || exit 2
 awk '

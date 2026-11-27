@@ -2,6 +2,8 @@
 # Check hook: the domain map of ess/ on the docs site, the generated block between
 # `<!-- domain-map -->` and `<!-- /domain-map -->` of the page DOMAIN_MAP_PAGE (default
 # website/docs/specification/layers.md). Fails (exit 1) unless
+#   0. the page has one opening and one closing marker, in that order, neither inside a code
+#      fence (tools/gen-domain-map.sh --markers);
 #   1. the block is byte for byte the one tools/gen-domain-map.sh makes from ess/ now
 #      (written to target/domain-map/block.md);
 #   2. every domain of `ess specify compile` (`.domains | keys[]`, not the generator's list) is
@@ -20,12 +22,13 @@ work=target/domain-map
 mkdir -p "$work" || exit 2
 [ -f "$page" ] || { echo "30-domain-map: no page $page" >&2; exit 2; }
 
-open=$(grep -c '^<!-- domain-map -->$' "$page")
-close=$(grep -c '^<!-- /domain-map -->$' "$page")
-if [ "$open" != 1 ] || [ "$close" != 1 ]; then
-  echo "30-domain-map: $page needs one <!-- domain-map --> and one <!-- /domain-map --> line (found $open and $close)"
-  exit 1
-fi
+# one opening and one closing marker, in that order, neither inside a code fence
+DOMAIN_MAP_PAGE=$page tools/gen-domain-map.sh --markers
+case $? in
+  0) ;;
+  1) echo "30-domain-map: $page fails"; exit 1 ;;
+  *) echo "30-domain-map: tools/gen-domain-map.sh --markers failed" >&2; exit 2 ;;
+esac
 awk '/^<!-- domain-map -->$/ { on = 1 } on { print } /^<!-- \/domain-map -->$/ { on = 0 }' \
   "$page" > "$work/committed.md" || exit 2
 

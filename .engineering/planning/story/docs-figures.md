@@ -13,15 +13,19 @@ scope:
   path: AGENTS.md
 - confidence: inferred
   path: tools/check.d/30-domain-map.sh
+- confidence: cited
+  path: tools/check.d/31-domain-map-selftest.sh
 - confidence: inferred
   path: tools/gen-domain-map.sh
+- confidence: cited
+  path: tools/test-domain-map.sh
 - confidence: cited
   path: website/docs/concepts/nodes-and-clusters.md
 - confidence: cited
   path: website/docs/index.md
 - confidence: cited
   path: website/docs/specification/layers.md
-revision: 11
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T16:03:32Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
 - {from: "proposed", to: "active", at: "2026-11-27T16:03:32Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
