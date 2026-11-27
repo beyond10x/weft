@@ -8,7 +8,7 @@ summary: Measurable KPIs per subject with direction, unit, gate or ratchet role,
 relations:
 - serves: vision:weft
 - informed_by: design:simulation-and-kpis
-revision: 2
+revision: 3
 ---
 ## Goal
 
@@ -228,13 +228,13 @@ Not built yet (`story:skeleton-node-join-session`, `-node-run-assignment`, `-nod
 | Id | Definition | Dir | Unit | Role | Measured by | Today |
 |---|---|---|---|---|---|---|
 | `repo.gate-seconds` | `slot task check`, warm cache | lower | s | ratchet, bound 600 (pool) | M1 | yes: 20 |
-| `repo.test-step-seconds` | root `tools/test-step.sh` | lower | s | gate 120 | M4 | yes: 3 (with its build) |
+| `repo.test-step-seconds` | root `tools/test-step.sh`, after `task check` built the test binaries | lower | s | gate 120 | `slot tools/test-step.sh` | yes: 0.6 |
 | `repo.slowest-test-seconds` | slowest root workspace test | lower | s | gate 60 | `target/nextest/slowest.txt` | yes: 0.008 |
 | `repo.gate-budget-cases-failed` | cases of `tools/test-gate-budget.sh` that fail | lower | cases | gate | M3 | yes: 0 of 30 |
 | `repo.test-binaries-per-crate` | integration test binaries per crate | lower | binaries | gate 1 | `ls <crate>/tests/*.rs` | yes: 1 (`weft-testkit`), 1 (`tools/sim`) |
-| `repo.python-files` | committed `*.py` | lower | files | gate 0 | `git ls-files '*.py' \| wc -l` | yes: 0 |
+| `repo.python-files` | committed `*.py` files and committed files whose first line is a python shebang, each counted once | lower | files | gate 0 | `git ls-files '*.py'` and `git grep -InE '^#!.*python'` at line 1 | yes: 0 |
 | `repo.toolchain-pins-disagree` | `rust-toolchain.toml` channels that differ (root, `tools/sim`) | lower | files | gate 0 | `grep channel` | yes: 0 (both 1.98.1) |
-| `repo.cache-bypass` | `RUSTC_WRAPPER=""`, `SCCACHE_SERVER_PORT`, `SCCACHE_DIR` in the tree | lower | lines | gate 0 | `git grep -nE` | yes: 0 |
+| `repo.cache-bypass` | a setting of the shared compile cache's server (`SCCACHE_SERVER_PORT`, `SCCACHE_DIR`, `SCCACHE_CACHE_SIZE`), or an empty compiler wrapper: `RUSTC_WRAPPER` or `CARGO_BUILD_RUSTC_WRAPPER` set to `""`, `''` or nothing in shell, YAML or TOML, or `rustc-wrapper = ""`; outside the planning store, the KPI hook and its test fixtures | lower | lines | gate 0 | `git grep -nE` with the pattern in `tools/kpis.d/10-repository.sh` | yes: 0 |
 | `repo.agents-md-dead-paths` | repository paths named in `AGENTS.md` that do not exist | lower | paths | gate 0 | probe: backticked paths, `test -e` | probe: 2 (`surfaces/http/weft-api.yaml`, `surfaces/cli/weft.yaml`; the docs site says they are planned) |
 | `repo.plan-validate-defects` | defects `aep plan artifact validate` reports | lower | defects | gate 0 | `aep plan artifact validate` | yes: 0 (18 artifacts, before this design) |
 

@@ -19,9 +19,9 @@ scope:
   path: ratchet/references
 - confidence: inferred
   path: tools/kpis.d/50-simulator.sh
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
-revision: 8
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
+revision: 11
 ---
 ## Epic
 
@@ -79,7 +79,7 @@ Shape (taken here):
   with `reference: {kind: accepted_value}`, a tolerance and an adoption rule (a sampled figure);
   `sim.ess-revisions` with `reference: {kind: accepted_value}` at 2, so it may not rise, until the
   versions agree; `sim.tests` a report.
-- Tests in `tools/sim/tests/ratchet.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::simulator_kpis_have_measurements` (the six ids above, a
   list in the test, each with a measurement under the subject `simulator`),
   `ratchet::simulator_gate_kpis_are_merge_requirements` (`sim.test-step-seconds`,

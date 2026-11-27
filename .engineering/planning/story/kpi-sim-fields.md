@@ -17,11 +17,11 @@ scope:
   path: tools/sim/tests/fixtures
 - confidence: cited
   path: tools/sim/tests/main.rs
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
 - confidence: inferred
   path: website/ux/fixtures/sim-player.html
-revision: 8
+revision: 11
 ---
 ## Epic
 
@@ -76,7 +76,7 @@ Definitions (taken here; each is a deterministic count per seed):
   infeasible when the chain stopped early, under the existing "gate is 0" rule.
 
 Test of the declaration: `ratchet::every_kpis_field_is_a_declared_output` in
-`tools/sim/tests/ratchet.rs` (the module of `story:kpi-repository`) enumerates the fields of
+`tools/sim/tests/ratchet/mod.rs` (the module of `story:kpi-repository`) enumerates the fields of
 `Kpis` from its JSON form and holds each one to an output of `weft-sim-report@1`, the direction
 `ratchet::the_ratchet_file_is_consistent` (measurement to declared output) does not cover. The
 new fields change the search rows of the fixture page that the Rust test of
@@ -121,7 +121,7 @@ again with the command that test names.
    (a weft-sim test, `task sim-test`).
 8. `weft-sim-report@1.assessor.yaml` declares one output for every field of `Kpis`, the new ones
    included, with its value type, kind and unit: `ratchet::every_kpis_field_is_a_declared_output`
-   (new, in `tools/sim/tests/ratchet.rs`) enumerates the keys of
+   (new, in `tools/sim/tests/ratchet/mod.rs`) enumerates the keys of
    `serde_json::to_value(weft_sim::simulate::Kpis::default())` and fails naming each key the
    declaration has no output for; it passes on the tree and fails on a copy of the declaration
    with the `instances_lost` output removed (`task sim-test`).

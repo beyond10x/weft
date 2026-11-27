@@ -1,0 +1,57 @@
+format: ratchet-assessor/1
+name: repo-facts
+version: "1"
+command: tools/kpis.d/10-repository.sh
+targets: [revision]
+inputs: {}
+conditions: [cache_profile]
+coverage_unit: kpi
+coverage: [executed, not_run]
+outputs:
+  gate-seconds:
+    value_type: number
+    kind: sampled
+    scopes: []
+    unit: s
+    boundaries: [run_time]
+  test-step-seconds:
+    value_type: number
+    kind: sampled
+    scopes: []
+    unit: s
+    boundaries: [run_time]
+  slowest-test-seconds:
+    value_type: number
+    kind: sampled
+    scopes: []
+    unit: s
+  gate-budget-cases-failed:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: cases
+  test-binaries-per-crate:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: binaries
+  python-files:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: files
+  toolchain-pins-disagree:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: files
+  cache-bypass:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: lines
+  plan-validate-defects:
+    value_type: number
+    kind: exact
+    scopes: []
+    unit: defects

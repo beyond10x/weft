@@ -1,0 +1,21 @@
+{
+  "format": "ratchet-reference/1",
+  "requirement": "repo-gate-time-not-worse",
+  "kind": "accepted_value",
+  "revision": "82eadb31c756ce5882b51f5a72b156007f729b61",
+  "values": [
+    {"scope": "run", "value": "50.0", "unit": "s"}
+  ],
+  "conditions": {
+    "tools": {"rustc": "1.98.1", "cargo-nextest": "0.9.143", "ess": "0.99.2", "task": "3.54.0"},
+    "cache_profile": "warm"
+  },
+  "evidence": [
+    "task kpis run 1 of 5: repo.gate-seconds 49.9 s",
+    "task kpis run 2 of 5: repo.gate-seconds 55.0 s",
+    "task kpis run 3 of 5: repo.gate-seconds 50.0 s",
+    "task kpis run 4 of 5: repo.gate-seconds 50.3 s",
+    "task kpis run 5 of 5: repo.gate-seconds 49.1 s"
+  ],
+  "last_change": {"kind": "first_adoption", "authorized_by": "epic:kpi-ratchet"}
+}

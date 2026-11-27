@@ -21,9 +21,9 @@ scope:
   path: ratchet/references
 - confidence: inferred
   path: tools/kpis.d/60-docs-site.sh
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
-revision: 7
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
+revision: 10
 ---
 ## Epic
 
@@ -74,7 +74,7 @@ Shape (taken here):
 - `quality/ratchet.yaml`: the assessments under the subject `docs-site`, which
   `story:kpi-repository` adds and owns (this story does not add it), the three gate KPIs as
   requirements in the `merge` gate, `docs.status-age-days` with its bound 7 and a reference record.
-- Tests in `tools/sim/tests/ratchet.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::docs_site_kpis_have_measurements` (the four ids above, a
   list in the test, each with a measurement under `docs-site` or `repository`) and
   `ratchet::docs_site_gate_kpis_are_merge_requirements` (the three gate ids, each a requirement

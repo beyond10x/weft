@@ -27,11 +27,11 @@ scope:
   path: tools/sim/src/simulate.rs
 - confidence: cited
   path: tools/sim/tests/main.rs
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
 - confidence: inferred
   path: website/ux/fixtures/sim-player.html
-revision: 8
+revision: 11
 ---
 ## Epic
 
@@ -89,7 +89,7 @@ Shape (taken here):
   `merge` gate that it is above 0 for every experiment not marked exhaustive-only.
 - `tools/kpis.d/45-search.sh` prints `sim.search-fitness-spread` per experiment with its command,
   reading the results `task sim-experiments` wrote.
-- Tests in `tools/sim/tests/ratchet.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::every_search_spread_is_measured` (every file of
   `sim/experiments/` with a `search:` block has a measurement of `sim.search-fitness-spread` in
   its assessment), `ratchet::every_unmarked_search_requires_a_spread` (each such experiment
