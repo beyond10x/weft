@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-replica-instances
 kind: story
-status: draft
+status: active
 title: 'Replica step and instance creation: R1 controller, restored r1-create-replica, CreateInstance and SubmitSchedulingRequest'
 relations:
 - decomposes: epic:walking-skeleton
@@ -34,7 +34,10 @@ scope:
   path: product/cloud/crates/weft-impl/src/lib.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/src
-revision: 22
+revision: 24
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 23, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 24, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T20:35:46Z",
+  "actor": "human:operator",
+  "artifact": "story:docs-ux-budget",
+  "kind": "story",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the host operator: further waves with no shared file start on the session's default; dependencies merged in weft#17-#21"
+  }
+}

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-workload-definitions
 kind: story
-status: active
+status: implemented
 title: 'Workload definitions: formation, artifact, workload and service obligations of the skeleton path'
 relations:
 - decomposes: epic:walking-skeleton
@@ -27,10 +27,11 @@ scope:
   path: product/cloud/crates/weft-testkit/src
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
-revision: 25
+revision: 26
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 24, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 25, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 26, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
