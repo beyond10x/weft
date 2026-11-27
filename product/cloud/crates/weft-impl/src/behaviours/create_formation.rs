@@ -14,8 +14,8 @@ use weft_types::behaviour::{AccountStorage, ClusterStorage, Context, FormationSt
 use weft_types::cluster::ClusterState;
 use weft_types::formations::obligations::CreateFormationBehavior;
 use weft_types::formations::{
-    CreateFormation, CreateFormationOutcome, FormationCreated, FormationData, FormationNameTaken, FormationSnapshot,
-    FormationState, NoSuchAccount, NoSuchCluster,
+    CreateFormation, CreateFormationOutcome, FormationCreated, FormationData, FormationNameTaken,
+    FormationSnapshot, FormationState, NoSuchAccount, NoSuchCluster,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -25,27 +25,49 @@ use crate::context::mint;
 use crate::Ports;
 
 impl CreateFormationBehavior for Ports {
-    fn create_formation(&mut self, input: CreateFormation) -> Result<CreateFormationOutcome, UnmetObligation> {
-        if AccountStorage::get(self, &input.account_id).is_none_or(|account| account.state == AccountState::Closed) {
-            return Ok(CreateFormationOutcome::NoSuchAccount { error: NoSuchAccount });
+    fn create_formation(
+        &mut self,
+        input: CreateFormation,
+    ) -> Result<CreateFormationOutcome, UnmetObligation> {
+        if AccountStorage::get(self, &input.account_id)
+            .is_none_or(|account| account.state == AccountState::Closed)
+        {
+            return Ok(CreateFormationOutcome::NoSuchAccount {
+                error: NoSuchAccount,
+            });
         }
         if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(CreateFormationOutcome::NotCallersAccount { error: NoSuchAccount });
+            return Ok(CreateFormationOutcome::NotCallersAccount {
+                error: NoSuchAccount,
+            });
         }
         let Some(cluster) = ClusterStorage::get(self, &input.cluster_id) else {
-            return Ok(CreateFormationOutcome::NoSuchCluster { error: NoSuchCluster });
+            return Ok(CreateFormationOutcome::NoSuchCluster {
+                error: NoSuchCluster,
+            });
         };
         if cluster.state == ClusterState::Deleted {
-            return Ok(CreateFormationOutcome::ClusterDeleted { error: NoSuchCluster });
+            return Ok(CreateFormationOutcome::ClusterDeleted {
+                error: NoSuchCluster,
+            });
         }
-        if cluster.data.account_id.as_ref().is_some_and(|holder| holder != &input.account_id) {
-            return Ok(CreateFormationOutcome::ClusterOfOtherAccount { error: NoSuchCluster });
+        if cluster
+            .data
+            .account_id
+            .as_ref()
+            .is_some_and(|holder| holder != &input.account_id)
+        {
+            return Ok(CreateFormationOutcome::ClusterOfOtherAccount {
+                error: NoSuchCluster,
+            });
         }
         if FormationStorage::list(self)
             .iter()
             .any(|row| row.data.account_id == input.account_id && row.data.name == input.name)
         {
-            return Ok(CreateFormationOutcome::NameTaken { error: FormationNameTaken });
+            return Ok(CreateFormationOutcome::NameTaken {
+                error: FormationNameTaken,
+            });
         }
         let formation_id = FormationId(Uuid(mint()));
         FormationStorage::put(

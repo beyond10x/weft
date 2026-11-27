@@ -32,10 +32,19 @@ fn to_value(node: &Node) -> Value {
 
 /// A request from a recorded trace step.
 pub fn request_from_trace(cat: &Catalog, step: &Value) -> Result<Request, String> {
-    let name = step["command"].as_str().ok_or("trace step without command")?;
-    let cmd = *cat.cmd_index.get(&qn(name)?).ok_or_else(|| format!("no command {name}"))?;
+    let name = step["command"]
+        .as_str()
+        .ok_or("trace step without command")?;
+    let cmd = *cat
+        .cmd_index
+        .get(&qn(name)?)
+        .ok_or_else(|| format!("no command {name}"))?;
     let actor = match step["actor"].as_str() {
-        Some(a) => Some(*cat.actor_index.get(&qn(a)?).ok_or_else(|| format!("no actor {a}"))?),
+        Some(a) => Some(
+            *cat.actor_index
+                .get(&qn(a)?)
+                .ok_or_else(|| format!("no actor {a}"))?,
+        ),
         None => None,
     };
     let caller = match &step["caller"] {
@@ -57,7 +66,13 @@ pub fn request_from_trace(cat: &Catalog, step: &Value) -> Result<Request, String
     let force = step["force"]
         .as_str()
         .and_then(|f| cat.commands[cmd].outcomes.iter().position(|o| o.name == f));
-    Ok(Request { cmd, actor, caller, input, force })
+    Ok(Request {
+        cmd,
+        actor,
+        caller,
+        input,
+        force,
+    })
 }
 
 /// One request of a recorded setup (and settle): the clock it was sent at and its answer.
@@ -86,14 +101,23 @@ pub fn replay_setup(sess: &mut Session, setup: &[Recorded]) -> usize {
 /// Sends a recorded walk again; prints each step, and counts the answers that differ and the
 /// system invariant violations (each check that starts to fail, and each duplicate that changed a
 /// view).
-pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[Recorded]) -> Result<(usize, usize), String> {
+pub fn replay(
+    cat: &Catalog,
+    cov: &Coverage,
+    walk: u64,
+    trace: &Value,
+    setup: &[Recorded],
+) -> Result<(usize, usize), String> {
     let mut sess = Session::new(cat, cov, bound_emits(cat));
     let seed = trace["seed"].as_u64().unwrap_or(0);
     sess.begin(walk, seed)?;
     // A walk of `explore --from` starts from the experiment's setup, sent with the clock held.
     let mut differ = replay_setup(&mut sess, setup);
     if !setup.is_empty() {
-        println!("setup: {} steps replayed, {differ} answers differ", setup.len());
+        println!(
+            "setup: {} steps replayed, {differ} answers differ",
+            setup.len()
+        );
     }
     sess.step_seconds = 1;
     sess.step = 0;
@@ -124,9 +148,17 @@ pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[
             i + 1,
             if same { " " } else { "!" },
             cat.commands[req.cmd].name,
-            if by.is_empty() { String::new() } else { format!(" ({by})") },
+            if by.is_empty() {
+                String::new()
+            } else {
+                format!(" ({by})")
+            },
             answer.label,
-            if same { String::new() } else { format!(" (recorded {recorded})") }
+            if same {
+                String::new()
+            } else {
+                format!(" (recorded {recorded})")
+            }
         );
         if let Some(before) = before {
             let check = idempotency_check(&before, &fingerprint(&sess), &answer);
@@ -144,7 +176,9 @@ pub fn replay(cat: &Catalog, cov: &Coverage, walk: u64, trace: &Value, setup: &[
             }
         }
     }
-    println!("walk {walk} seed {seed}: {differ} answers differ, {broken} system invariant violations");
+    println!(
+        "walk {walk} seed {seed}: {differ} answers differ, {broken} system invariant violations"
+    );
     Ok((differ, broken))
 }
 
@@ -165,7 +199,9 @@ fn expand(text: &str, vars: &BTreeMap<String, Value>) -> String {
     let mut out = text.to_owned();
     for _ in 0..16 {
         let Some(start) = out.rfind("${") else { break };
-        let Some(len) = out[start..].find('}') else { break };
+        let Some(len) = out[start..].find('}') else {
+            break;
+        };
         let name = &out[start + 2..start + len];
         let value = vars.get(name).map(var_text).unwrap_or_default();
         out.replace_range(start..start + len + 1, &value);
@@ -211,11 +247,16 @@ fn substitute(value: &Value, vars: &BTreeMap<String, Value>, scope: &Scope) -> V
             }
             if let Some(inner) = whole_var(s) {
                 // One variable, its name perhaps built from others: `${node_${i}}`.
-                return vars.get(&expand(inner, vars)).cloned().unwrap_or(Value::Null);
+                return vars
+                    .get(&expand(inner, vars))
+                    .cloned()
+                    .unwrap_or(Value::Null);
             }
             Value::String(expand(s, vars))
         }
-        Value::Array(items) => Value::Array(items.iter().map(|v| substitute(v, vars, scope)).collect()),
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|v| substitute(v, vars, scope)).collect())
+        }
         Value::Object(map) => Value::Object(
             map.iter()
                 .map(|(k, v)| (k.clone(), substitute(v, vars, scope)))
@@ -261,7 +302,9 @@ pub struct Kpis {
 impl Kpis {
     pub fn get(&self, name: &str) -> f64 {
         let v = serde_json::to_value(self).unwrap_or(Value::Null);
-        v.get(name.replace('-', "_")).and_then(Value::as_f64).unwrap_or(0.0)
+        v.get(name.replace('-', "_"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
     }
 }
 
@@ -297,12 +340,22 @@ struct Sim<'a, 'c> {
     last_work: Vec<(String, usize)>,
 }
 
-pub const ALL_INVARIANTS: [&str; 5] = ["closed-link", "idempotency", "no-double-placement", "quota-conservation", "tenant-isolation"];
+pub const ALL_INVARIANTS: [&str; 5] = [
+    "closed-link",
+    "idempotency",
+    "no-double-placement",
+    "quota-conservation",
+    "tenant-isolation",
+];
 
 /// True when `state` is a terminal state of `entity`.
 fn terminal(sess: &Session, entity: &str, state: Option<&Node>) -> bool {
-    let Some(Node::Text(s)) = state else { return false };
-    let Ok(q) = QualifiedName::new(entity) else { return false };
+    let Some(Node::Text(s)) = state else {
+        return false;
+    };
+    let Ok(q) = QualifiedName::new(entity) else {
+        return false;
+    };
     sess.cat.ent_index.get(&q).is_some_and(|e| {
         let ent = &sess.cat.entities[*e];
         ent.terminal.iter().any(|t| ent.states[*t] == *s)
@@ -317,38 +370,76 @@ fn terminal(sess: &Session, entity: &str, state: Option<&Node>) -> bool {
 pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Check, usize)> {
     let mut out = Vec::new();
     let view = |name: &str| sess.view(name, BTreeMap::new()).ok();
-    let id_of = |r: &BTreeMap<String, Node>, f: &str| r.get(f).map(|n| to_value(n).to_string()).unwrap_or_default();
+    let id_of = |r: &BTreeMap<String, Node>, f: &str| {
+        r.get(f)
+            .map(|n| to_value(n).to_string())
+            .unwrap_or_default()
+    };
     let wants = |name: &str| invariants.contains(name);
-    let assignments = if wants("no-double-placement") || wants("tenant-isolation") { view("weft.nodes.Assignments") } else { None };
-    let decisions = if wants("tenant-isolation") || wants("closed-link") { view("weft.scheduling.PlacementDecisions") } else { None };
+    let assignments = if wants("no-double-placement") || wants("tenant-isolation") {
+        view("weft.nodes.Assignments")
+    } else {
+        None
+    };
+    let decisions = if wants("tenant-isolation") || wants("closed-link") {
+        view("weft.scheduling.PlacementDecisions")
+    } else {
+        None
+    };
     if wants("no-double-placement") {
         let check = match &assignments {
-            None => (Check { name: "no-double-placement".into(), ok: true, detail: "view weft.nodes.Assignments not readable".into() }, 0),
+            None => (
+                Check {
+                    name: "no-double-placement".into(),
+                    ok: true,
+                    detail: "view weft.nodes.Assignments not readable".into(),
+                },
+                0,
+            ),
             Some(rows) => {
                 let mut active: BTreeMap<String, Vec<String>> = BTreeMap::new();
                 for r in rows {
                     if terminal(sess, "weft.nodes.Assignment", r.get("state")) {
                         continue;
                     }
-                    active.entry(id_of(r, "instance_id")).or_default().push(id_of(r, "node_id"));
+                    active
+                        .entry(id_of(r, "instance_id"))
+                        .or_default()
+                        .push(id_of(r, "node_id"));
                 }
                 let doubles: Vec<String> = active
                     .iter()
                     .filter(|(_, nodes)| nodes.len() > 1)
                     .map(|(i, nodes)| format!("instance {i} active on {}", nodes.join(", ")))
                     .collect();
-                (Check { name: "no-double-placement".into(), ok: doubles.is_empty(), detail: doubles.join("; ") }, doubles.len())
+                (
+                    Check {
+                        name: "no-double-placement".into(),
+                        ok: doubles.is_empty(),
+                        detail: doubles.join("; "),
+                    },
+                    doubles.len(),
+                )
             }
         };
         out.push(check);
     }
     if wants("quota-conservation") {
         let check = match view("weft.accounts.QuotaIndex") {
-            None => (Check { name: "quota-conservation".into(), ok: true, detail: "view weft.accounts.QuotaIndex not readable".into() }, 0),
+            None => (
+                Check {
+                    name: "quota-conservation".into(),
+                    ok: true,
+                    detail: "view weft.accounts.QuotaIndex not readable".into(),
+                },
+                0,
+            ),
             Some(rows) => {
                 let num = |r: &BTreeMap<String, Node>, f: &str| -> Option<i64> {
                     match r.get(f) {
-                        Some(Node::Number(n)) => n.to_string().parse::<f64>().ok().map(|v| v as i64),
+                        Some(Node::Number(n)) => {
+                            n.to_string().parse::<f64>().ok().map(|v| v as i64)
+                        }
                         _ => None,
                     }
                 };
@@ -358,11 +449,15 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
                     let id = id_of(r, "quota_id");
                     if let (Some(limit), Some(remaining)) = (num(r, "limit"), num(r, "remaining")) {
                         if remaining < 0 || remaining > limit {
-                            bad.push(format!("quota {id}: remaining {remaining} outside 0..={limit}"));
+                            bad.push(format!(
+                                "quota {id}: remaining {remaining} outside 0..={limit}"
+                            ));
                         }
                     }
                     if let (Some(p), Some(limit)) = (r.get("parent_quota_id"), num(r, "limit")) {
-                        if *p != Node::Null && !terminal(sess, "weft.accounts.Quota", r.get("state")) {
+                        if *p != Node::Null
+                            && !terminal(sess, "weft.accounts.Quota", r.get("state"))
+                        {
                             *children.entry(to_value(p).to_string()).or_default() += limit;
                         }
                     }
@@ -371,11 +466,20 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
                     let id = id_of(r, "quota_id");
                     if let (Some(sum), Some(limit)) = (children.get(&id), num(r, "limit")) {
                         if *sum > limit {
-                            bad.push(format!("quota {id}: sub-accounts hold {sum} of a limit {limit}"));
+                            bad.push(format!(
+                                "quota {id}: sub-accounts hold {sum} of a limit {limit}"
+                            ));
                         }
                     }
                 }
-                (Check { name: "quota-conservation".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())
+                (
+                    Check {
+                        name: "quota-conservation".into(),
+                        ok: bad.is_empty(),
+                        detail: bad.join("; "),
+                    },
+                    bad.len(),
+                )
             }
         };
         out.push(check);
@@ -389,7 +493,10 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
                     .filter_map(|r| {
                         let id = to_value(r.get("decision_id")?).to_string();
                         let tenant = to_value(r.get("tenant_id")?).to_string();
-                        let isolation = match r.get("isolation") { Some(Node::Text(t)) => t.clone(), _ => String::new() };
+                        let isolation = match r.get("isolation") {
+                            Some(Node::Text(t)) => t.clone(),
+                            _ => String::new(),
+                        };
                         Some((id, (tenant, isolation)))
                     })
                     .collect();
@@ -399,22 +506,49 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
                         continue;
                     }
                     let d = id_of(r, "placement_decision_id");
-                    let (tenant, isolation) = decision.get(&d).cloned().unwrap_or_else(|| ("?".into(), String::new()));
-                    per_node.entry(id_of(r, "node_id")).or_default().push((tenant, isolation));
+                    let (tenant, isolation) = decision
+                        .get(&d)
+                        .cloned()
+                        .unwrap_or_else(|| ("?".into(), String::new()));
+                    per_node
+                        .entry(id_of(r, "node_id"))
+                        .or_default()
+                        .push((tenant, isolation));
                 }
                 // Two tenants share a kernel when each has an instance below MicroVm on the node;
                 // a MicroVm has its own (scheduling.yaml `shared-kernel`, hardening pass 6: a
                 // MicroVm beside another tenant's container is no breach).
                 let mut bad = Vec::new();
                 for (node_id, list) in &per_node {
-                    let sharing: BTreeSet<&String> = list.iter().filter(|(t, iso)| t != "?" && iso != "MicroVm").map(|(t, _)| t).collect();
+                    let sharing: BTreeSet<&String> = list
+                        .iter()
+                        .filter(|(t, iso)| t != "?" && iso != "MicroVm")
+                        .map(|(t, _)| t)
+                        .collect();
                     if sharing.len() > 1 {
-                        bad.push(format!("node {node_id}: {} tenants share its kernel (instances below MicroVm)", sharing.len()));
+                        bad.push(format!(
+                            "node {node_id}: {} tenants share its kernel (instances below MicroVm)",
+                            sharing.len()
+                        ));
                     }
                 }
-                (Check { name: "tenant-isolation".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())
+                (
+                    Check {
+                        name: "tenant-isolation".into(),
+                        ok: bad.is_empty(),
+                        detail: bad.join("; "),
+                    },
+                    bad.len(),
+                )
             }
-            _ => (Check { name: "tenant-isolation".into(), ok: true, detail: "views not readable".into() }, 0),
+            _ => (
+                Check {
+                    name: "tenant-isolation".into(),
+                    ok: true,
+                    detail: "views not readable".into(),
+                },
+                0,
+            ),
         };
         out.push(check);
     }
@@ -429,13 +563,23 @@ pub fn system_checks(sess: &Session, invariants: &BTreeSet<String>) -> Vec<(Chec
 /// direction. Reads weft.scheduling.PlacementDecisions (a decision that is not Released, with a
 /// group) and, for an account with a formation placed in two groups or more,
 /// weft.cluster.TopologyLinks.
-fn closed_link_check(sess: &Session, decisions: Option<&[BTreeMap<String, Node>]>) -> (Check, usize) {
+fn closed_link_check(
+    sess: &Session,
+    decisions: Option<&[BTreeMap<String, Node>]>,
+) -> (Check, usize) {
     let text = |r: &BTreeMap<String, Node>, f: &str| match r.get(f) {
         None | Some(Node::Null) => String::new(),
         Some(n) => key_text(&to_value(n)),
     };
     let Some(decisions) = decisions else {
-        return (Check { name: "closed-link".into(), ok: true, detail: "view weft.scheduling.PlacementDecisions not readable".into() }, 0);
+        return (
+            Check {
+                name: "closed-link".into(),
+                ok: true,
+                detail: "view weft.scheduling.PlacementDecisions not readable".into(),
+            },
+            0,
+        );
     };
     // formation -> group -> the decisions placed there; formation -> its account's raw id.
     let mut groups_of: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
@@ -451,7 +595,12 @@ fn closed_link_check(sess: &Session, decisions: Option<&[BTreeMap<String, Node>]
         if let Some(a) = r.get("account_id") {
             account_of.insert(formation.clone(), a.clone());
         }
-        groups_of.entry(formation).or_default().entry(group).or_default().push(text(r, "decision_id"));
+        groups_of
+            .entry(formation)
+            .or_default()
+            .entry(group)
+            .or_default()
+            .push(text(r, "decision_id"));
     }
     let mut accounts: BTreeMap<String, Node> = BTreeMap::new();
     for (formation, groups) in &groups_of {
@@ -461,7 +610,12 @@ fn closed_link_check(sess: &Session, decisions: Option<&[BTreeMap<String, Node>]
     }
     let mut closed: BTreeSet<(String, String)> = BTreeSet::new();
     for account in accounts.values() {
-        let Ok(links) = sess.view("weft.cluster.TopologyLinks", [("account_id".to_owned(), account.clone())].into()) else { continue };
+        let Ok(links) = sess.view(
+            "weft.cluster.TopologyLinks",
+            [("account_id".to_owned(), account.clone())].into(),
+        ) else {
+            continue;
+        };
         for l in links {
             if text(&l, "state") == "Declared" && text(&l, "crossable") == "false" {
                 let (a, b) = (text(&l, "from_group_id"), text(&l, "to_group_id"));
@@ -473,14 +627,23 @@ fn closed_link_check(sess: &Session, decisions: Option<&[BTreeMap<String, Node>]
     let mut bad = Vec::new();
     for (formation, groups) in &groups_of {
         for (a, da) in groups {
-            for (b, db) in groups.range::<String, _>((std::ops::Bound::Excluded(a), std::ops::Bound::Unbounded)) {
+            for (b, db) in groups
+                .range::<String, _>((std::ops::Bound::Excluded(a), std::ops::Bound::Unbounded))
+            {
                 if closed.contains(&(a.clone(), b.clone())) {
                     bad.push(format!("formation {formation}: placements {} in group {a} and {} in group {b} across a closed link", da.join(","), db.join(",")));
                 }
             }
         }
     }
-    (Check { name: "closed-link".into(), ok: bad.is_empty(), detail: bad.join("; ") }, bad.len())
+    (
+        Check {
+            name: "closed-link".into(),
+            ok: bad.is_empty(),
+            detail: bad.join("; "),
+        },
+        bad.len(),
+    )
 }
 
 /// The rows of every parameterless read-your-writes view.
@@ -491,7 +654,9 @@ pub type Fingerprint = BTreeMap<String, Vec<BTreeMap<String, Node>>>;
 pub fn fingerprint(sess: &Session) -> Fingerprint {
     let mut out = BTreeMap::new();
     for (name, view) in sess.cat.ir.views() {
-        if view.consistency != ess_domain::view::Consistency::ReadYourWrites || !view.params.is_empty() {
+        if view.consistency != ess_domain::view::Consistency::ReadYourWrites
+            || !view.params.is_empty()
+        {
             continue;
         }
         if let Ok(rows) = sess.view(&name.to_string(), BTreeMap::new()) {
@@ -507,9 +672,18 @@ pub fn idempotency_check(before: &Fingerprint, after: &Fingerprint, answer: &Ans
     let changed: Vec<String> = after
         .iter()
         .filter(|(k, v)| before.get(*k) != Some(*v))
-        .map(|(k, v)| format!("{k}: {} -> {} rows", before.get(k).map_or(0, Vec::len), v.len()))
+        .map(|(k, v)| {
+            format!(
+                "{k}: {} -> {} rows",
+                before.get(k).map_or(0, Vec::len),
+                v.len()
+            )
+        })
         .collect();
-    let unchecked = matches!(answer.error.as_ref().map(|e| e.0.as_str()), Some("unsupported" | "unavailable"));
+    let unchecked = matches!(
+        answer.error.as_ref().map(|e| e.0.as_str()),
+        Some("unsupported" | "unavailable")
+    );
     let ok = unchecked || (changed.is_empty() && answer.outcome.is_some());
     Check {
         name: "idempotency".into(),
@@ -519,7 +693,15 @@ pub fn idempotency_check(before: &Fingerprint, after: &Fingerprint, answer: &Ans
         } else if ok {
             format!("answered {}", answer.label)
         } else {
-            format!("answered {}; changed {}", answer.label, if changed.is_empty() { "nothing".to_owned() } else { changed.join(", ") })
+            format!(
+                "answered {}; changed {}",
+                answer.label,
+                if changed.is_empty() {
+                    "nothing".to_owned()
+                } else {
+                    changed.join(", ")
+                }
+            )
         },
     }
 }
@@ -549,7 +731,11 @@ impl<'a, 'c> Sim<'a, 'c> {
             .ok_or_else(|| format!("no command `{}`", step.command))?;
         let info = &cat.commands[cmd];
         let actor = match &step.actor {
-            Some(a) => Some(*cat.actor_index.get(&qn(a)?).ok_or_else(|| format!("no actor `{a}`"))?),
+            Some(a) => Some(
+                *cat.actor_index
+                    .get(&qn(a)?)
+                    .ok_or_else(|| format!("no actor `{a}`"))?,
+            ),
             None => info.actors.first().copied(),
         };
         // `${now}`: the simulated clock as the step is built, before its send moves it.
@@ -560,7 +746,10 @@ impl<'a, 'c> Sim<'a, 'c> {
         for (k, v) in &step.input {
             let value = substitute(v, &self.vars, scope);
             if !value.is_null() {
-                given.insert(k.clone(), node(&value).map_err(|e| format!("{}.{k}: {e}", step.command))?);
+                given.insert(
+                    k.clone(),
+                    node(&value).map_err(|e| format!("{}.{k}: {e}", step.command))?,
+                );
             }
         }
         let mut input = explore::input_for(&self.sess, self.cands, cmd, None, &mut self.rng);
@@ -577,13 +766,23 @@ impl<'a, 'c> Sim<'a, 'c> {
             if attributes.is_empty() {
                 return None;
             }
-            let mut values = explore::caller_for(&self.sess, a, Some(&input), &mut self.rng).unwrap_or_default();
+            let mut values =
+                explore::caller_for(&self.sess, a, Some(&input), &mut self.rng).unwrap_or_default();
             for attr in attributes {
-                if let Some(v) = step.caller.get(&attr.name).map(|v| substitute(v, &self.vars, scope)).filter(|v| !v.is_null()) {
+                if let Some(v) = step
+                    .caller
+                    .get(&attr.name)
+                    .map(|v| substitute(v, &self.vars, scope))
+                    .filter(|v| !v.is_null())
+                {
                     if let Ok(n) = node(&v) {
                         values.insert(attr.name.clone(), n);
                     }
-                } else if let Some(v) = self.vars.get(&attr.name).filter(|_| !input.contains_key(&attr.name)) {
+                } else if let Some(v) = self
+                    .vars
+                    .get(&attr.name)
+                    .filter(|_| !input.contains_key(&attr.name))
+                {
                     if let Ok(n) = node(v) {
                         values.insert(attr.name.clone(), n);
                     }
@@ -591,7 +790,13 @@ impl<'a, 'c> Sim<'a, 'c> {
             }
             Some(values)
         });
-        Ok(Request { cmd, actor, caller, input, force: None })
+        Ok(Request {
+            cmd,
+            actor,
+            caller,
+            input,
+            force: None,
+        })
     }
 
     fn bind(&mut self, step: &Step, req: &Request, answer: &Answer) {
@@ -610,7 +815,12 @@ impl<'a, 'c> Sim<'a, 'c> {
                     .as_ref()
                     .and_then(|r| r.get(field))
                     .or_else(|| answer.events.iter().find_map(|e| e.payload.get(field)))
-                    .or_else(|| answer.bound_events.iter().find_map(|e| e.payload.get(field)))
+                    .or_else(|| {
+                        answer
+                            .bound_events
+                            .iter()
+                            .find_map(|e| e.payload.get(field))
+                    })
                     .or_else(|| req.input.get(field)),
             }
             .map(to_value);
@@ -624,13 +834,20 @@ impl<'a, 'c> Sim<'a, 'c> {
         }
     }
 
-    fn view(&self, name: &str, params: BTreeMap<String, Node>) -> Option<Vec<BTreeMap<String, Node>>> {
+    fn view(
+        &self,
+        name: &str,
+        params: BTreeMap<String, Node>,
+    ) -> Option<Vec<BTreeMap<String, Node>>> {
         self.sess.view(name, params).ok()
     }
 
     fn view_with(&self, name: &str, key: &str, value: &Value) -> Vec<BTreeMap<String, Node>> {
-        let Ok(n) = node(value) else { return Vec::new() };
-        self.view(name, [(key.to_owned(), n)].into()).unwrap_or_default()
+        let Ok(n) = node(value) else {
+            return Vec::new();
+        };
+        self.view(name, [(key.to_owned(), n)].into())
+            .unwrap_or_default()
     }
 
     fn checks(&mut self) -> Vec<Check> {
@@ -680,7 +897,15 @@ impl<'a, 'c> Sim<'a, 'c> {
         }
     }
 
-    fn after(&mut self, phase: &str, label: &str, req: &Request, answer: &Answer, fault: Option<String>, extra: Vec<Check>) {
+    fn after(
+        &mut self,
+        phase: &str,
+        label: &str,
+        req: &Request,
+        answer: &Answer,
+        fault: Option<String>,
+        extra: Vec<Check>,
+    ) {
         self.kpis.steps += 1;
         if let Some(g) = answer.outcome {
             self.reached.insert(g);
@@ -689,15 +914,20 @@ impl<'a, 'c> Sim<'a, 'c> {
             self.reached.insert(*g);
         }
         if accepted(self.sess.cat, answer) {
-            self.accepted.insert(self.sess.cat.commands[req.cmd].name.to_string());
+            self.accepted
+                .insert(self.sess.cat.commands[req.cmd].name.to_string());
         }
         for g in &answer.bound {
             let (c, o) = self.sess.cat.outcome_of[*g];
             if !self.sess.cat.commands[c].outcomes[o].error {
-                self.accepted.insert(self.sess.cat.commands[c].name.to_string());
+                self.accepted
+                    .insert(self.sess.cat.commands[c].name.to_string());
             }
         }
-        if matches!(answer.error.as_ref().map(|e| e.0.as_str()), Some("unsupported" | "unavailable")) {
+        if matches!(
+            answer.error.as_ref().map(|e| e.0.as_str()),
+            Some("unsupported" | "unavailable")
+        ) {
             self.kpis.interpreter_gaps += 1;
         }
         if self.light {
@@ -722,21 +952,36 @@ impl<'a, 'c> Sim<'a, 'c> {
             let mut inner = self.sess.cov.inner.lock().expect("coverage");
             inner.timeline.push(entry);
             drop(inner);
-            self.sess.cov.feed(explore::feed_line(&self.sess, req, answer));
+            self.sess
+                .cov
+                .feed(explore::feed_line(&self.sess, req, answer));
         }
     }
 
     /// Sends one step; `None` when a silent node would send it (its actor, or the actor whose
     /// frame it `relays`, names the node as `node_id`): a lost node sends nothing.
-    fn send_step(&mut self, phase: &str, step: &Step, scope: &Scope, fault: Option<String>) -> Result<Option<Answer>, String> {
+    fn send_step(
+        &mut self,
+        phase: &str,
+        step: &Step,
+        scope: &Scope,
+        fault: Option<String>,
+    ) -> Result<Option<Answer>, String> {
         let req = self.request(step, scope)?;
         if phase != "setup" && phase != "fault" {
             if let Some(n) = req.input.get("node_id") {
                 let actor = match &step.relays {
                     Some(r) => r.clone(),
-                    None => req.actor.map(|a| self.sess.cat.actors[a].name.to_string()).unwrap_or_default(),
+                    None => req
+                        .actor
+                        .map(|a| self.sess.cat.actors[a].name.to_string())
+                        .unwrap_or_default(),
                 };
-                if self.lost.get(&key_text(&to_value(n))).is_some_and(|silent| *silent == actor) {
+                if self
+                    .lost
+                    .get(&key_text(&to_value(n)))
+                    .is_some_and(|silent| *silent == actor)
+                {
                     return Ok(None);
                 }
             }
@@ -748,16 +993,32 @@ impl<'a, 'c> Sim<'a, 'c> {
         if took > 1.0 {
             // One command that takes this long is a cost to report: a binding retrying without bound,
             // or a guard whose walk grows with the rows.
-            let line = format!("slow step: {} answered {} in {took:.1} s (walk {}, step {})", self.sess.cat.commands[req.cmd].name, answer.label, self.sess.walk, self.sess.step);
+            let line = format!(
+                "slow step: {} answered {} in {took:.1} s (walk {}, step {})",
+                self.sess.cat.commands[req.cmd].name, answer.label, self.sess.walk, self.sess.step
+            );
             eprintln!("weft-sim: {line}");
-            self.sess.cov.inner.lock().expect("coverage").notes.push(line);
+            self.sess
+                .cov
+                .inner
+                .lock()
+                .expect("coverage")
+                .notes
+                .push(line);
         }
         self.bind(step, &req, &answer);
-        let label = step.label.clone().unwrap_or_else(|| step.command.rsplit('.').next().unwrap_or("").to_owned());
+        let label = step
+            .label
+            .clone()
+            .unwrap_or_else(|| step.command.rsplit('.').next().unwrap_or("").to_owned());
         let mut extra = Vec::new();
         if let Some(expect) = &step.expect {
             if *expect != answer.label {
-                extra.push(Check { name: "expect".into(), ok: false, detail: format!("expected {expect}, answered {}", answer.label) });
+                extra.push(Check {
+                    name: "expect".into(),
+                    ok: false,
+                    detail: format!("expected {expect}, answered {}", answer.label),
+                });
             }
         }
         // A setup step is accepted as declared: it answers its `expect`, or with no `expect` an
@@ -768,12 +1029,19 @@ impl<'a, 'c> Sim<'a, 'c> {
         };
         if phase == "setup" && !as_declared {
             self.kpis.setup_failures += 1;
-            let why = answer.error.as_ref().map(|(_, w)| format!(": {}", w.chars().take(200).collect::<String>())).unwrap_or_default();
+            let why = answer
+                .error
+                .as_ref()
+                .map(|(_, w)| format!(": {}", w.chars().take(200).collect::<String>()))
+                .unwrap_or_default();
             self.kpis.setup_refusals.push(format!(
                 "{label} ({}) answered {}{}{why}",
                 step.command,
                 answer.label,
-                step.expect.as_ref().map(|e| format!(", declared {e}")).unwrap_or_default()
+                step.expect
+                    .as_ref()
+                    .map(|e| format!(", declared {e}"))
+                    .unwrap_or_default()
             ));
         }
         if self.logging {
@@ -788,9 +1056,12 @@ impl<'a, 'c> Sim<'a, 'c> {
     fn send_repeated(&mut self, phase: &str, step: &Step) -> Result<(), String> {
         let times = match &step.repeat {
             None => 1,
-            Some(v) => substitute(v, &self.vars, &[])
-                .as_u64()
-                .ok_or_else(|| format!("step {}: repeat is not a number", step.label.clone().unwrap_or_default()))? as usize,
+            Some(v) => substitute(v, &self.vars, &[]).as_u64().ok_or_else(|| {
+                format!(
+                    "step {}: repeat is not a number",
+                    step.label.clone().unwrap_or_default()
+                )
+            })? as usize,
         };
         for i in 0..times {
             self.vars.insert("i".into(), json!(i));
@@ -805,7 +1076,11 @@ impl<'a, 'c> Sim<'a, 'c> {
     fn params(&self, params: &BTreeMap<String, Value>) -> BTreeMap<String, Node> {
         params
             .iter()
-            .filter_map(|(k, v)| node(&substitute(v, &self.vars, &[])).ok().map(|n| (k.clone(), n)))
+            .filter_map(|(k, v)| {
+                node(&substitute(v, &self.vars, &[]))
+                    .ok()
+                    .map(|n| (k.clone(), n))
+            })
             .collect()
     }
 
@@ -824,7 +1099,10 @@ impl<'a, 'c> Sim<'a, 'c> {
     }
 
     fn controller_pass(&mut self, c: &Controller) -> Result<usize, String> {
-        let rows = self.sess.view(&c.view, self.params(&c.params)).map_err(|e| format!("controller {}: {e}", c.name))?;
+        let rows = self
+            .sess
+            .view(&c.view, self.params(&c.params))
+            .map_err(|e| format!("controller {}: {e}", c.name))?;
         let step = Step {
             command: c.command.clone(),
             actor: Some(c.actor.clone()),
@@ -838,12 +1116,20 @@ impl<'a, 'c> Sim<'a, 'c> {
         };
         let rows: Vec<BTreeMap<String, Node>> = rows
             .into_iter()
-            .filter(|r| c.filter.iter().all(|(k, v)| r.get(k).is_some_and(|have| to_value(have) == substitute(v, &self.vars, &[]))))
+            .filter(|r| {
+                c.filter.iter().all(|(k, v)| {
+                    r.get(k)
+                        .is_some_and(|have| to_value(have) == substitute(v, &self.vars, &[]))
+                })
+            })
             .collect();
         let mut n = 0;
         for row in rows.iter().take(c.limit) {
             let Some(each) = &c.each else {
-                if self.send_step("controller", &step, &[("row", row)], None)?.is_some() {
+                if self
+                    .send_step("controller", &step, &[("row", row)], None)?
+                    .is_some()
+                {
                     n += 1;
                 }
                 if self.stopped {
@@ -853,7 +1139,10 @@ impl<'a, 'c> Sim<'a, 'c> {
             };
             // A scheduler's choice: every candidate row with every varied value, in order (from
             // a rotating start with `spread`), until the model accepts one.
-            let cands = self.sess.view(&each.view, self.params(&each.params)).map_err(|e| format!("controller {}: {e}", c.name))?;
+            let cands = self
+                .sess
+                .view(&each.view, self.params(&each.params))
+                .map_err(|e| format!("controller {}: {e}", c.name))?;
             let mut vary: Vec<BTreeMap<String, Node>> = vec![BTreeMap::new()];
             for (k, values) in &each.vary {
                 let mut next = Vec::new();
@@ -866,12 +1155,21 @@ impl<'a, 'c> Sim<'a, 'c> {
                 }
                 vary = next;
             }
-            let start = if each.spread { *self.spread.get(&c.name).unwrap_or(&0) } else { 0 };
+            let start = if each.spread {
+                *self.spread.get(&c.name).unwrap_or(&0)
+            } else {
+                0
+            };
             let len = cands.len();
             'row: for v in &vary {
                 for k in 0..len {
                     let cand = &cands[(start + k) % len];
-                    let sent = self.send_step("controller", &step, &[("row", row), ("cand", cand), ("vary", v)], None)?;
+                    let sent = self.send_step(
+                        "controller",
+                        &step,
+                        &[("row", row), ("cand", cand), ("vary", v)],
+                        None,
+                    )?;
                     if let Some(answer) = sent {
                         n += 1;
                         if accepted(self.sess.cat, &answer) {
@@ -893,8 +1191,13 @@ impl<'a, 'c> Sim<'a, 'c> {
 
     /// The topology group of each node of an account's clusters, and the hop distance between
     /// groups (BFS over the links the topology kind derives, or the declared links of `Custom`).
-    fn topology(&self, account: &Value) -> (BTreeMap<String, String>, BTreeMap<(String, String), usize>) {
-        let text = |r: &BTreeMap<String, Node>, f: &str| r.get(f).map(|n| key_text(&to_value(n))).unwrap_or_default();
+    fn topology(
+        &self,
+        account: &Value,
+    ) -> (BTreeMap<String, String>, BTreeMap<(String, String), usize>) {
+        let text = |r: &BTreeMap<String, Node>, f: &str| {
+            r.get(f).map(|n| key_text(&to_value(n))).unwrap_or_default()
+        };
         let mut pool_of_cnp: BTreeMap<String, String> = BTreeMap::new();
         for r in self.view_with("weft.cluster.ClusterNodePools", "account_id", account) {
             if let Some(p) = r.get("node_pool_id").filter(|n| **n != Node::Null) {
@@ -910,7 +1213,9 @@ impl<'a, 'c> Sim<'a, 'c> {
         let groups: Vec<BTreeMap<String, Node>> = self
             .view_with("weft.cluster.TopologyGroups", "account_id", account)
             .into_iter()
-            .filter(|r| text(r, "state") != "Removed" && topologies.contains_key(&text(r, "topology_id")))
+            .filter(|r| {
+                text(r, "state") != "Removed" && topologies.contains_key(&text(r, "topology_id"))
+            })
             .collect();
         let mut group_of_pool: BTreeMap<String, String> = BTreeMap::new();
         for g in &groups {
@@ -923,7 +1228,10 @@ impl<'a, 'c> Sim<'a, 'c> {
             }
         }
         let mut group_of_node = BTreeMap::new();
-        for n in self.view("weft.infrastructure.Nodes", BTreeMap::new()).unwrap_or_default() {
+        for n in self
+            .view("weft.infrastructure.Nodes", BTreeMap::new())
+            .unwrap_or_default()
+        {
             if let Some(g) = group_of_pool.get(&text(&n, "node_pool_id")) {
                 group_of_node.insert(text(&n, "node_id"), g.clone());
             }
@@ -935,7 +1243,10 @@ impl<'a, 'c> Sim<'a, 'c> {
             edges.entry(b.to_owned()).or_default().insert(a.to_owned());
         };
         for (tid, kind) in &topologies {
-            let mine: Vec<&BTreeMap<String, Node>> = groups.iter().filter(|g| text(g, "topology_id") == *tid).collect();
+            let mine: Vec<&BTreeMap<String, Node>> = groups
+                .iter()
+                .filter(|g| text(g, "topology_id") == *tid)
+                .collect();
             let id = |g: &BTreeMap<String, Node>| text(g, "topology_group_id");
             let mut ordered = mine.clone();
             ordered.sort_by_key(|g| text(g, "position").parse::<i64>().unwrap_or(i64::MAX));
@@ -965,7 +1276,10 @@ impl<'a, 'c> Sim<'a, 'c> {
                 }
                 "Custom" => {
                     for l in self.view_with("weft.cluster.TopologyLinks", "account_id", account) {
-                        if text(&l, "topology_id") == *tid && text(&l, "crossable") == "true" && text(&l, "state") != "Removed" {
+                        if text(&l, "topology_id") == *tid
+                            && text(&l, "crossable") == "true"
+                            && text(&l, "state") != "Removed"
+                        {
                             link(&text(&l, "from_group_id"), &text(&l, "to_group_id"));
                         }
                     }
@@ -1005,35 +1319,73 @@ impl<'a, 'c> Sim<'a, 'c> {
     /// running instances of its two components as the pattern pairs them; each message counts
     /// the topology links between the two nodes' groups.
     fn traffic_tick(&mut self, t: &Traffic) {
-        let (Some(formation), Some(pattern)) = (t.formation.as_ref().map(|f| substitute(f, &self.vars, &[])), t.pattern.clone()) else {
+        let (Some(formation), Some(pattern)) = (
+            t.formation.as_ref().map(|f| substitute(f, &self.vars, &[])),
+            t.pattern.clone(),
+        ) else {
             return;
         };
-        let rate = t.rate.as_ref().and_then(|r| substitute(r, &self.vars, &[]).as_u64()).unwrap_or(1) as usize;
-        let account = t.account.as_ref().map(|a| substitute(a, &self.vars, &[])).unwrap_or(Value::Null);
-        let text = |r: &BTreeMap<String, Node>, f: &str| r.get(f).map(|n| key_text(&to_value(n))).unwrap_or_default();
+        let rate = t
+            .rate
+            .as_ref()
+            .and_then(|r| substitute(r, &self.vars, &[]).as_u64())
+            .unwrap_or(1) as usize;
+        let account = t
+            .account
+            .as_ref()
+            .map(|a| substitute(a, &self.vars, &[]))
+            .unwrap_or(Value::Null);
+        let text = |r: &BTreeMap<String, Node>, f: &str| {
+            r.get(f).map(|n| key_text(&to_value(n))).unwrap_or_default()
+        };
         let component: BTreeMap<String, String> = self
-            .view_with("weft.formations.FormationComponents", "formation_id", &formation)
+            .view_with(
+                "weft.formations.FormationComponents",
+                "formation_id",
+                &formation,
+            )
             .iter()
             .map(|r| (text(r, "component_id"), text(r, "name")))
             .collect();
         let links: Vec<(String, String)> = self
             .view_with("weft.formations.FormationLinks", "formation_id", &formation)
             .iter()
-            .map(|r| (component.get(&text(r, "caller_component_id")).cloned().unwrap_or_default(), component.get(&text(r, "target_component_id")).cloned().unwrap_or_default()))
+            .map(|r| {
+                (
+                    component
+                        .get(&text(r, "caller_component_id"))
+                        .cloned()
+                        .unwrap_or_default(),
+                    component
+                        .get(&text(r, "target_component_id"))
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
             .collect();
         // Running instances per component, in replica order, by node.
         let mut nodes_of: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for w in self.view_with("weft.workloads.WorkloadList", "formation_id", &formation) {
             let name = text(&w, "component");
-            let Some(id) = w.get("workload_id").map(to_value) else { continue };
+            let Some(id) = w.get("workload_id").map(to_value) else {
+                continue;
+            };
             let mut running: Vec<(i64, String)> = self
                 .view_with("weft.workloads.InstanceList", "workload_id", &id)
                 .iter()
                 .filter(|i| text(i, "state") == "Running")
-                .map(|i| (text(i, "replica_index").parse().unwrap_or(0), text(i, "node_id")))
+                .map(|i| {
+                    (
+                        text(i, "replica_index").parse().unwrap_or(0),
+                        text(i, "node_id"),
+                    )
+                })
                 .collect();
             running.sort();
-            nodes_of.entry(name).or_default().extend(running.into_iter().map(|(_, n)| n));
+            nodes_of
+                .entry(name)
+                .or_default()
+                .extend(running.into_iter().map(|(_, n)| n));
         }
         let (group_of_node, hops) = self.topology(&account);
         for (caller, target) in &links {
@@ -1046,17 +1398,31 @@ impl<'a, 'c> Sim<'a, 'c> {
             let pairs: Vec<(String, String)> = match pattern.as_str() {
                 "FanIn" => cs.iter().map(|c| (c.clone(), ts[0].clone())).collect(),
                 "FanOut" => ts.iter().map(|t| (cs[0].clone(), t.clone())).collect(),
-                "Pipeline" => cs.iter().enumerate().map(|(i, c)| (c.clone(), ts[i % ts.len()].clone())).collect(),
+                "Pipeline" => cs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (c.clone(), ts[i % ts.len()].clone()))
+                    .collect(),
                 "RequestResponse" => cs
                     .iter()
                     .enumerate()
-                    .flat_map(|(i, c)| [(c.clone(), ts[i % ts.len()].clone()), (ts[i % ts.len()].clone(), c.clone())])
+                    .flat_map(|(i, c)| {
+                        [
+                            (c.clone(), ts[i % ts.len()].clone()),
+                            (ts[i % ts.len()].clone(), c.clone()),
+                        ]
+                    })
                     .collect(),
                 "RingAllReduce" => {
                     let ring: Vec<String> = cs.iter().chain(&ts).cloned().collect();
-                    (0..ring.len()).map(|i| (ring[i].clone(), ring[(i + 1) % ring.len()].clone())).collect()
+                    (0..ring.len())
+                        .map(|i| (ring[i].clone(), ring[(i + 1) % ring.len()].clone()))
+                        .collect()
                 }
-                _ => cs.iter().flat_map(|c| ts.iter().map(move |t| (c.clone(), t.clone()))).collect(),
+                _ => cs
+                    .iter()
+                    .flat_map(|c| ts.iter().map(move |t| (c.clone(), t.clone())))
+                    .collect(),
             };
             for m in 0..rate {
                 let (a, b) = &pairs[m % pairs.len()];
@@ -1065,7 +1431,10 @@ impl<'a, 'c> Sim<'a, 'c> {
                     continue;
                 }
                 match (group_of_node.get(a), group_of_node.get(b)) {
-                    (Some(ga), Some(gb)) => match hops.get(&(ga.clone(), gb.clone())).or(if ga == gb { Some(&0) } else { None }) {
+                    (Some(ga), Some(gb)) => match hops
+                        .get(&(ga.clone(), gb.clone()))
+                        .or(if ga == gb { Some(&0) } else { None })
+                    {
                         Some(h) => {
                             self.kpis.messages += 1;
                             self.kpis.link_crossings += h;
@@ -1102,7 +1471,9 @@ impl<'a, 'c> Sim<'a, 'c> {
                         let target = fault.target.clone().unwrap_or_default();
                         let Some(req) = self.sent.get(&target).cloned() else {
                             let mut inner = self.sess.cov.inner.lock().expect("coverage");
-                            inner.notes.push(format!("duplicate at tick {tick}: no step labelled `{target}` was sent"));
+                            inner.notes.push(format!(
+                                "duplicate at tick {tick}: no step labelled `{target}` was sent"
+                            ));
                             continue;
                         };
                         let before = self.fingerprint();
@@ -1122,7 +1493,14 @@ impl<'a, 'c> Sim<'a, 'c> {
                                 step: self.sess.step,
                             });
                         }
-                        self.after("fault", &format!("{target} again"), &req, &answer, Some("duplicate".into()), vec![check]);
+                        self.after(
+                            "fault",
+                            &format!("{target} again"),
+                            &req,
+                            &answer,
+                            Some("duplicate".into()),
+                            vec![check],
+                        );
                     }
                     "clock" => self.sess.advance_clock(fault.seconds),
                     "drop" => {
@@ -1140,15 +1518,24 @@ impl<'a, 'c> Sim<'a, 'c> {
                             self.send_step("fault", step, &[], Some(fault.kind.clone()))?;
                         }
                     }
-                    other => return Err(format!("fault kind `{other}`: expected duplicate, drop, clock or node_loss")),
+                    other => {
+                        return Err(format!(
+                            "fault kind `{other}`: expected duplicate, drop, clock or node_loss"
+                        ))
+                    }
                 }
             }
             for t in self.exp.traffic.clone() {
                 let number = |v: &Value| substitute(v, &self.vars, &[]).as_u64();
                 let every = number(&t.every).unwrap_or(1) as usize;
                 let from = t.from.as_ref().and_then(number).unwrap_or(0) as usize;
-                let until = t.until.as_ref().and_then(number).map_or(usize::MAX, |u| u as usize);
-                if every > 0 && tick >= from && tick <= until && (tick - from).is_multiple_of(every) {
+                let until = t
+                    .until
+                    .as_ref()
+                    .and_then(number)
+                    .map_or(usize::MAX, |u| u as usize);
+                if every > 0 && tick >= from && tick <= until && (tick - from).is_multiple_of(every)
+                {
                     if let Some(step) = &t.step {
                         self.send_repeated("traffic", step)?;
                     }
@@ -1186,8 +1573,13 @@ impl<'a, 'c> Sim<'a, 'c> {
                 let number = |v: &Value| substitute(v, &self.vars, &[]).as_u64();
                 let every = number(&t.every).unwrap_or(1) as usize;
                 let from = t.from.as_ref().and_then(number).unwrap_or(0) as usize;
-                let until = t.until.as_ref().and_then(number).map_or(usize::MAX, |u| u as usize);
-                if every > 0 && tick >= from && tick <= until && (tick - from).is_multiple_of(every) {
+                let until = t
+                    .until
+                    .as_ref()
+                    .and_then(number)
+                    .map_or(usize::MAX, |u| u as usize);
+                if every > 0 && tick >= from && tick <= until && (tick - from).is_multiple_of(every)
+                {
                     self.traffic_tick(&t);
                 }
             }
@@ -1214,7 +1606,10 @@ impl<'a, 'c> Sim<'a, 'c> {
                 self.kpis.steps_to_converge = horizon - last_fault;
                 self.violations.push(Violation {
                     kind: "convergence".into(),
-                    detail: format!("the controllers still had work {} ticks after the last fault", self.exp.converge_within),
+                    detail: format!(
+                        "the controllers still had work {} ticks after the last fault",
+                        self.exp.converge_within
+                    ),
                     command: String::new(),
                     walk: self.sess.walk,
                     seed: self.sess.seed,
@@ -1265,7 +1660,13 @@ pub struct SetupRun {
 /// its controllers (30 s of clock each) until a tick in which no controller but a `steady` one
 /// sent anything. The outcomes it reaches count in `cov` once. A setup step not accepted as
 /// declared is in `refusals`.
-pub fn record_setup(cat: &Catalog, cov: &Coverage, cands: &Candidates, exp: &Experiment, settle: usize) -> Result<SetupRun, String> {
+pub fn record_setup(
+    cat: &Catalog,
+    cov: &Coverage,
+    cands: &Candidates,
+    exp: &Experiment,
+    settle: usize,
+) -> Result<SetupRun, String> {
     let started = std::time::Instant::now();
     let mut only = exp.clone();
     only.find.patterns.clear();
@@ -1287,12 +1688,30 @@ pub fn record_setup(cat: &Catalog, cov: &Coverage, cands: &Candidates, exp: &Exp
             }
         }
         if settle > 0 && settled_at.is_none() {
-            let detail = format!("the setup's controllers still had work after {settle} ticks: {}", sim.busy());
-            sim.violations.push(Violation { kind: "no-convergence".into(), detail, command: String::new(), walk: 0, seed: exp.seed, step: sim.sess.step });
+            let detail = format!(
+                "the setup's controllers still had work after {settle} ticks: {}",
+                sim.busy()
+            );
+            sim.violations.push(Violation {
+                kind: "no-convergence".into(),
+                detail,
+                command: String::new(),
+                walk: 0,
+                seed: exp.seed,
+                step: sim.sess.step,
+            });
         }
     }
     Ok(SetupRun {
-        steps: sim.log.drain(..).map(|(req, answer, at)| Recorded { req, answer: answer.label, at }).collect(),
+        steps: sim
+            .log
+            .drain(..)
+            .map(|(req, answer, at)| Recorded {
+                req,
+                answer: answer.label,
+                at,
+            })
+            .collect(),
         refusals: std::mem::take(&mut sim.kpis.setup_refusals),
         seconds: started.elapsed().as_secs_f64(),
         setup_steps,
@@ -1317,7 +1736,13 @@ pub struct SetupRows {
 /// per variable of `probe` (every variable when it is empty) the setup bound to a string, with
 /// that value as the parameter; a read
 /// that returns rows is kept as `<view>(<param>=$<variable>)`.
-pub fn setup_rows(cat: &Catalog, cov: &Coverage, exp: &Experiment, settle: usize, probe: &BTreeSet<String>) -> Result<SetupRows, String> {
+pub fn setup_rows(
+    cat: &Catalog,
+    cov: &Coverage,
+    exp: &Experiment,
+    settle: usize,
+    probe: &BTreeSet<String>,
+) -> Result<SetupRows, String> {
     let mut only = exp.clone();
     only.find.patterns.clear();
     let cands = Candidates::default();
@@ -1333,13 +1758,21 @@ pub fn setup_rows(cat: &Catalog, cov: &Coverage, exp: &Experiment, settle: usize
     }
     let mut rows = fingerprint(&sim.sess);
     for (name, view) in sim.sess.cat.ir.views() {
-        if view.consistency != ess_domain::view::Consistency::ReadYourWrites || view.params.len() != 1 {
+        if view.consistency != ess_domain::view::Consistency::ReadYourWrites
+            || view.params.len() != 1
+        {
             continue;
         }
         let param = view.params[0].name.clone();
-        let names: Vec<String> = if probe.is_empty() { sim.vars.keys().cloned().collect() } else { probe.iter().cloned().collect() };
+        let names: Vec<String> = if probe.is_empty() {
+            sim.vars.keys().cloned().collect()
+        } else {
+            probe.iter().cloned().collect()
+        };
         for var in &names {
-            let Some(Value::String(value)) = sim.vars.get(var) else { continue };
+            let Some(Value::String(value)) = sim.vars.get(var) else {
+                continue;
+            };
             let params = BTreeMap::from([(param.clone(), Node::Text(value.clone()))]);
             if let Ok(found) = sim.sess.view(&name.to_string(), params) {
                 if !found.is_empty() {
@@ -1378,7 +1811,11 @@ impl Sim<'_, '_> {
 
     /// The controllers that sent requests in the last tick, with the count: `placer 3, renew 1`.
     fn busy(&self) -> String {
-        self.last_work.iter().map(|(c, n)| format!("{c} {n}")).collect::<Vec<_>>().join(", ")
+        self.last_work
+            .iter()
+            .map(|(c, n)| format!("{c} {n}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 }
 
@@ -1416,7 +1853,11 @@ impl<'a, 'c> Ticker<'a, 'c> {
         sim.vars = vars.clone();
         sim.logging = true;
         sim.light = true;
-        Ok(Self { sim, ticks: 0, share: 0.0 })
+        Ok(Self {
+            sim,
+            ticks: 0,
+            share: 0.0,
+        })
     }
 
     /// Starts a walk: the controllers' choices depend on its seed only.
@@ -1428,7 +1869,10 @@ impl<'a, 'c> Ticker<'a, 'c> {
 
     /// One controller tick on the walk's session: (request, answer, clock before the send) of
     /// every request sent, and the first controller error.
-    pub fn tick(&mut self, sess: &mut Session<'a>) -> (Vec<(Request, Answer, u64)>, Option<String>) {
+    pub fn tick(
+        &mut self,
+        sess: &mut Session<'a>,
+    ) -> (Vec<(Request, Answer, u64)>, Option<String>) {
         std::mem::swap(&mut self.sim.sess, sess);
         let step_seconds = self.sim.sess.step_seconds;
         let result = self.sim.controller_tick(self.ticks);
@@ -1444,7 +1888,13 @@ impl<'a, 'c> Ticker<'a, 'c> {
     pub fn settle(&mut self, sess: &mut Session<'a>, max: usize) -> Settle {
         std::mem::swap(&mut self.sim.sess, sess);
         let step_seconds = self.sim.sess.step_seconds;
-        let mut out = Settle { sends: Vec::new(), ticks: 0, settled_at: None, busy: String::new(), error: None };
+        let mut out = Settle {
+            sends: Vec::new(),
+            ticks: 0,
+            settled_at: None,
+            busy: String::new(),
+            error: None,
+        };
         for tick in 0..max {
             out.ticks += 1;
             let result = self.sim.controller_tick(self.ticks);
@@ -1510,9 +1960,24 @@ fn new_sim<'a, 'c>(
     })
 }
 
-fn finish_one(mut sim: Sim, cov: &Coverage, exp: &Experiment, walk: u64, record: bool, result: Result<(), String>) -> Result<Kpis, String> {
-    sim.kpis.chain_reached = exp.chain.iter().take_while(|c| sim.accepted.contains(*c)).count();
-    sim.kpis.chain_stop = exp.chain.get(sim.kpis.chain_reached).cloned().unwrap_or_default();
+fn finish_one(
+    mut sim: Sim,
+    cov: &Coverage,
+    exp: &Experiment,
+    walk: u64,
+    record: bool,
+    result: Result<(), String>,
+) -> Result<Kpis, String> {
+    sim.kpis.chain_reached = exp
+        .chain
+        .iter()
+        .take_while(|c| sim.accepted.contains(*c))
+        .count();
+    sim.kpis.chain_stop = exp
+        .chain
+        .get(sim.kpis.chain_reached)
+        .cloned()
+        .unwrap_or_default();
     sim.kpis.outcomes_reached = sim.reached.len();
     sim.kpis.abstract_states = sim.states.len();
     let interpreter_violations = sim.sess.findings.violations.len();
@@ -1531,31 +1996,51 @@ fn finish_one(mut sim: Sim, cov: &Coverage, exp: &Experiment, walk: u64, record:
 fn apply_point(exp: &Experiment, point: &BTreeMap<String, Value>) -> Result<Experiment, String> {
     let mut out = exp.clone();
     for m in &exp.mutations {
-        let Some(value) = point.get(&m.name) else { continue };
+        let Some(value) = point.get(&m.name) else {
+            continue;
+        };
         match m.kind.as_str() {
             "var" | "setup" | "traffic" => {
                 out.vars.insert(m.point.clone(), value.clone());
             }
             "vars" => {
-                let map = value.as_object().ok_or_else(|| format!("mutation {}: a `vars` value is a map of variables", m.name))?;
+                let map = value.as_object().ok_or_else(|| {
+                    format!("mutation {}: a `vars` value is a map of variables", m.name)
+                })?;
                 for (k, v) in map {
                     out.vars.insert(k.clone(), v.clone());
                 }
             }
             "fault" => {
                 let parts: Vec<&str> = m.point.split('.').collect();
-                let (Some(index), Some(field)) = (parts.get(1).and_then(|i| i.parse::<usize>().ok()), parts.get(2)) else {
-                    return Err(format!("mutation {}: point `{}` is not faults.<i>.<at|target>", m.name, m.point));
+                let (Some(index), Some(field)) = (
+                    parts.get(1).and_then(|i| i.parse::<usize>().ok()),
+                    parts.get(2),
+                ) else {
+                    return Err(format!(
+                        "mutation {}: point `{}` is not faults.<i>.<at|target>",
+                        m.name, m.point
+                    ));
                 };
-                let fault = out.faults.get_mut(index).ok_or_else(|| format!("mutation {}: no fault {index}", m.name))?;
+                let fault = out
+                    .faults
+                    .get_mut(index)
+                    .ok_or_else(|| format!("mutation {}: no fault {index}", m.name))?;
                 match *field {
-                    "at" => fault.at = value.as_u64().ok_or("fault tick must be a number")? as usize,
+                    "at" => {
+                        fault.at = value.as_u64().ok_or("fault tick must be a number")? as usize
+                    }
                     "target" => fault.target = value.as_str().map(ToOwned::to_owned),
                     "ticks" => fault.ticks = value.as_u64().unwrap_or(1) as usize,
                     other => return Err(format!("mutation {}: fault field `{other}`", m.name)),
                 }
             }
-            other => return Err(format!("mutation {}: kind `{other}` (var, vars, fault; spec variants come later)", m.name)),
+            other => {
+                return Err(format!(
+                    "mutation {}: kind `{other}` (var, vars, fault; spec variants come later)",
+                    m.name
+                ))
+            }
         }
     }
     Ok(out)
@@ -1585,18 +2070,28 @@ fn evaluate(
                 if i >= points.len() {
                     break;
                 }
-                let r = apply_point(exp, &points[i]).and_then(|e| simulate_one(cat, cov, cands, &e, base_walk + i as u64, false));
+                let r = apply_point(exp, &points[i])
+                    .and_then(|e| simulate_one(cat, cov, cands, &e, base_walk + i as u64, false));
                 results.lock().expect("results")[i] = Some(r);
             });
         }
     });
-    results.into_inner().expect("results").into_iter().map(|r| r.unwrap_or_else(|| Err("not run".into()))).collect()
+    results
+        .into_inner()
+        .expect("results")
+        .into_iter()
+        .map(|r| r.unwrap_or_else(|| Err("not run".into())))
+        .collect()
 }
 
 /// `info.search`: the search's settings and its mutation axes, each with its values in order (a
 /// row's `index` points into them).
 fn search_info(exp: &Experiment, search: &crate::experiment::Search) -> Value {
-    let axes: Vec<Value> = exp.mutations.iter().map(|m| json!({"name": m.name, "kind": m.kind, "point": m.point, "values": m.values})).collect();
+    let axes: Vec<Value> = exp
+        .mutations
+        .iter()
+        .map(|m| json!({"name": m.name, "kind": m.kind, "point": m.point, "values": m.values}))
+        .collect();
     json!({
         "mode": search.mode,
         "seed": exp.seed,
@@ -1612,7 +2107,9 @@ fn search_info(exp: &Experiment, search: &crate::experiment::Search) -> Value {
 /// `info.search` until that file exists (at most 30 s), so a test reads the live snapshot before
 /// the first row.
 fn hold_search() {
-    let Some(path) = std::env::var_os("WEFT_SIM_SEARCH_HOLD").filter(|p| !p.is_empty()) else { return };
+    let Some(path) = std::env::var_os("WEFT_SIM_SEARCH_HOLD").filter(|p| !p.is_empty()) else {
+        return;
+    };
     let path = std::path::PathBuf::from(path);
     let started = std::time::Instant::now();
     while !path.exists() && started.elapsed() < std::time::Duration::from_secs(30) {
@@ -1652,7 +2149,17 @@ struct Rows<'a> {
 
 impl Rows<'_> {
     fn point(&self, index: &[usize]) -> BTreeMap<String, Value> {
-        self.exp.mutations.iter().zip(index).map(|(m, i)| (m.name.clone(), m.values.get(*i).cloned().unwrap_or(Value::Null))).collect()
+        self.exp
+            .mutations
+            .iter()
+            .zip(index)
+            .map(|(m, i)| {
+                (
+                    m.name.clone(),
+                    m.values.get(*i).cloned().unwrap_or(Value::Null),
+                )
+            })
+            .collect()
     }
 
     /// True when a point scored so would raise the best feasible fitness.
@@ -1673,7 +2180,9 @@ impl Rows<'_> {
                 let (f, feasible) = fitness(self.search, k);
                 json!({"point": point, "kpis": k, "fitness": f, "feasible": feasible})
             }
-            Err(e) => json!({"point": point, "kpis": {}, "fitness": 0, "feasible": false, "error": e}),
+            Err(e) => {
+                json!({"point": point, "kpis": {}, "fitness": 0, "feasible": false, "error": e})
+            }
         };
         row["seq"] = json!(self.seq);
         row["round"] = json!(at.round);
@@ -1687,24 +2196,47 @@ impl Rows<'_> {
     }
 }
 
-pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> Result<Value, String> {
+pub fn run(
+    cat: &Catalog,
+    cov: &Coverage,
+    exp: &Experiment,
+    threads: usize,
+) -> Result<Value, String> {
     let cands = Candidates::default();
     let Some(search) = exp.search.clone() else {
         let k = simulate_one(cat, cov, &cands, exp, 0, true)?;
-        return Ok(json!({"kpis": k, "checks": cov.inner.lock().map(|i| i.timeline.iter().map(|t| t.checks.len()).sum::<usize>()).unwrap_or(0)}));
+        return Ok(
+            json!({"kpis": k, "checks": cov.inner.lock().map(|i| i.timeline.iter().map(|t| t.checks.len()).sum::<usize>()).unwrap_or(0)}),
+        );
     };
     if exp.mutations.is_empty() {
         return Err("search: the experiment names no mutations".into());
     }
-    cov.inner.lock().expect("coverage").info.insert("search".into(), search_info(exp, &search));
+    cov.inner
+        .lock()
+        .expect("coverage")
+        .info
+        .insert("search".into(), search_info(exp, &search));
     hold_search();
-    let mut rows = Rows { cov, exp, search: &search, seq: 0, best: None };
-    let size: usize = exp.mutations.iter().fold(1usize, |n, m| n.saturating_mul(m.values.len().max(1)));
+    let mut rows = Rows {
+        cov,
+        exp,
+        search: &search,
+        seq: 0,
+        best: None,
+    };
+    let size: usize = exp
+        .mutations
+        .iter()
+        .fold(1usize, |n, m| n.saturating_mul(m.values.len().max(1)));
     match search.mode.as_str() {
         "exhaustive" => {
             eprintln!("weft-sim: exhaustive search over {} mutation points: {size} combinations (limit {})", exp.mutations.len(), search.limit);
             if size > search.limit {
-                return Err(format!("exhaustive search refused: {size} combinations exceed the limit {}", search.limit));
+                return Err(format!(
+                    "exhaustive search refused: {size} combinations exceed the limit {}",
+                    search.limit
+                ));
             }
             let mut indices = Vec::new();
             for mut n in 0..size {
@@ -1726,7 +2258,16 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
                 } else {
                     "rejected"
                 };
-                rows.record(index, r, At { round: 1, parent: None, decision, walk: 1 + i as u64 });
+                rows.record(
+                    index,
+                    r,
+                    At {
+                        round: 1,
+                        parent: None,
+                        decision,
+                        walk: 1 + i as u64,
+                    },
+                );
             }
         }
         "fit" => {
@@ -1735,10 +2276,27 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
             let mut seen: BTreeSet<Vec<usize>> = BTreeSet::new();
             let mut walk = 1u64;
             let mut round = 1;
-            let first = evaluate(cat, cov, &cands, exp, &[rows.point(&current)], threads, walk);
+            let first = evaluate(
+                cat,
+                cov,
+                &cands,
+                exp,
+                &[rows.point(&current)],
+                threads,
+                walk,
+            );
             seen.insert(current.clone());
             let mut current_score = climb_score(score(&search, &first[0]));
-            let mut current_seq = rows.record(&current, &first[0], At { round, parent: None, decision: "start", walk });
+            let mut current_seq = rows.record(
+                &current,
+                &first[0],
+                At {
+                    round,
+                    parent: None,
+                    decision: "start",
+                    walk,
+                },
+            );
             walk += 1;
             let mut evaluated = 1;
             // The last round found no improvement: the next round is a restart.
@@ -1767,7 +2325,11 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
                         break;
                     }
                     let n = loop {
-                        let n: Vec<usize> = exp.mutations.iter().map(|m| rng.below(m.values.len().max(1))).collect();
+                        let n: Vec<usize> = exp
+                            .mutations
+                            .iter()
+                            .map(|m| rng.below(m.values.len().max(1)))
+                            .collect();
                         if !seen.contains(&n) {
                             break n;
                         }
@@ -1775,7 +2337,16 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
                     let result = evaluate(cat, cov, &cands, exp, &[rows.point(&n)], threads, walk);
                     seen.insert(n.clone());
                     current_score = climb_score(score(&search, &result[0]));
-                    current_seq = rows.record(&n, &result[0], At { round, parent: None, decision: "restart", walk });
+                    current_seq = rows.record(
+                        &n,
+                        &result[0],
+                        At {
+                            round,
+                            parent: None,
+                            decision: "restart",
+                            walk,
+                        },
+                    );
                     current = n;
                     walk += 1;
                     evaluated += 1;
@@ -1796,8 +2367,21 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
                 let mut accepted_seq = None;
                 for (i, (n, r)) in neighbours.iter().zip(&results).enumerate() {
                     seen.insert(n.clone());
-                    let decision = if improved.is_some_and(|(_, at)| at == i) { "accepted" } else { "rejected" };
-                    let seq = rows.record(n, r, At { round, parent: Some(current_seq), decision, walk: walk + i as u64 });
+                    let decision = if improved.is_some_and(|(_, at)| at == i) {
+                        "accepted"
+                    } else {
+                        "rejected"
+                    };
+                    let seq = rows.record(
+                        n,
+                        r,
+                        At {
+                            round,
+                            parent: Some(current_seq),
+                            decision,
+                            walk: walk + i as u64,
+                        },
+                    );
                     if decision == "accepted" {
                         accepted_seq = Some(seq);
                     }
@@ -1821,5 +2405,7 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
     let best_exp = apply_point(exp, &best_point)?;
     let k = simulate_one(cat, cov, &cands, &best_exp, 0, true)?;
     let points = cov.inner.lock().map(|i| i.search.len()).unwrap_or(0);
-    Ok(json!({"mode": search.mode, "points": points, "best": {"point": best_point, "fitness": best_fitness, "kpis": k}, "checks": cov.inner.lock().map(|i| i.timeline.iter().map(|t| t.checks.len()).sum::<usize>()).unwrap_or(0)}))
+    Ok(
+        json!({"mode": search.mode, "points": points, "best": {"point": best_point, "fitness": best_fitness, "kpis": k}, "checks": cov.inner.lock().map(|i| i.timeline.iter().map(|t| t.checks.len()).sum::<usize>()).unwrap_or(0)}),
+    )
 }

@@ -16,12 +16,14 @@
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use weft_types::behaviour::{ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage};
+use weft_types::behaviour::{
+    ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage,
+};
 use weft_types::formations::obligations::CommitRevisionBehavior;
 use weft_types::formations::{
-    CommitRevision, CommitRevisionOutcome, EmptyFormation, FormationRevisionData, FormationRevisionSnapshot,
-    FormationRevisionState, FormationSnapshot, FormationState, FormationStateConflict, NoSuchFormation,
-    RevisionCommitted,
+    CommitRevision, CommitRevisionOutcome, EmptyFormation, FormationRevisionData,
+    FormationRevisionSnapshot, FormationRevisionState, FormationSnapshot, FormationState,
+    FormationStateConflict, NoSuchFormation, RevisionCommitted,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -31,24 +33,37 @@ use crate::context::mint;
 use crate::Ports;
 
 impl CommitRevisionBehavior for Ports {
-    fn commit_revision(&mut self, input: CommitRevision) -> Result<CommitRevisionOutcome, UnmetObligation> {
+    fn commit_revision(
+        &mut self,
+        input: CommitRevision,
+    ) -> Result<CommitRevisionOutcome, UnmetObligation> {
         if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(CommitRevisionOutcome::NotCallersAccount { error: NoSuchFormation });
+            return Ok(CommitRevisionOutcome::NotCallersAccount {
+                error: NoSuchFormation,
+            });
         }
         let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
-            return Ok(CommitRevisionOutcome::NoSuchFormation { error: NoSuchFormation });
+            return Ok(CommitRevisionOutcome::NoSuchFormation {
+                error: NoSuchFormation,
+            });
         };
         if formation.data.account_id != input.account_id {
-            return Ok(CommitRevisionOutcome::FormationOfOtherAccount { error: NoSuchFormation });
+            return Ok(CommitRevisionOutcome::FormationOfOtherAccount {
+                error: NoSuchFormation,
+            });
         }
         if formation.state == FormationState::Retired {
-            return Ok(CommitRevisionOutcome::Retired { error: FormationStateConflict });
+            return Ok(CommitRevisionOutcome::Retired {
+                error: FormationStateConflict,
+            });
         }
         if !ComponentStorage::list(self)
             .iter()
             .any(|row| row.data.formation_id == input.formation_id)
         {
-            return Ok(CommitRevisionOutcome::Empty { error: EmptyFormation });
+            return Ok(CommitRevisionOutcome::Empty {
+                error: EmptyFormation,
+            });
         }
         let revisions = FormationRevisionStorage::list(self)
             .iter()
@@ -86,7 +101,13 @@ fn document_digest(ports: &Ports, formation: &FormationSnapshot) -> ArtifactDige
     let mut components: Vec<_> = ComponentStorage::list(ports)
         .into_iter()
         .filter(|row| &row.data.formation_id == id)
-        .map(|row| json!([row.data.name.0, row.data.internal_name.0, row.data.on_border]))
+        .map(|row| {
+            json!([
+                row.data.name.0,
+                row.data.internal_name.0,
+                row.data.on_border
+            ])
+        })
         .collect();
     components.sort_by(|a, b| a[0].as_str().cmp(&b[0].as_str()));
     let mut environments: Vec<_> = EnvironmentStorage::list(ports)

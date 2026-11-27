@@ -13,7 +13,8 @@
 use weft_types::behaviour::NodeStorage;
 use weft_types::infrastructure::obligations::RecordNodeObservationBehavior;
 use weft_types::infrastructure::{
-    NodeNotJoined, NodeObserved, NodeReady, NodeState, NotFound, RecordNodeObservation, RecordNodeObservationOutcome,
+    NodeNotJoined, NodeObserved, NodeReady, NodeState, NotFound, RecordNodeObservation,
+    RecordNodeObservationOutcome,
 };
 use weft_types::obligation::UnmetObligation;
 
@@ -31,7 +32,9 @@ impl RecordNodeObservationBehavior for Ports {
             NodeState::Joining => true,
             NodeState::Ready | NodeState::Cordoned | NodeState::Draining => false,
             NodeState::Provisioning | NodeState::Gone => {
-                return Ok(RecordNodeObservationOutcome::NotJoined { error: NodeNotJoined });
+                return Ok(RecordNodeObservationOutcome::NotJoined {
+                    error: NodeNotJoined,
+                });
             }
         };
         if ready {

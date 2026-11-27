@@ -16,8 +16,9 @@
 use weft_types::behaviour::{ExecSessionStorage, NodeSessionStorage};
 use weft_types::nodes::obligations::SupersedeNodeSessionBehavior;
 use weft_types::nodes::{
-    ExecSessionState, NodeIdentityRefused, NodeSessionState, NodeSessionSuperseded, SessionNodeMismatch,
-    SessionNotFound, SessionNotOpen, SupersedeNodeSession, SupersedeNodeSessionOutcome,
+    ExecSessionState, NodeIdentityRefused, NodeSessionState, NodeSessionSuperseded,
+    SessionNodeMismatch, SessionNotFound, SessionNotOpen, SupersedeNodeSession,
+    SupersedeNodeSessionOutcome,
 };
 use weft_types::obligation::UnmetObligation;
 
@@ -34,16 +35,24 @@ impl SupersedeNodeSessionBehavior for Ports {
         input: SupersedeNodeSession,
     ) -> Result<SupersedeNodeSessionOutcome, UnmetObligation> {
         if !joined(self, &input.node_id) {
-            return Ok(SupersedeNodeSessionOutcome::IdentityRefused { error: NodeIdentityRefused });
+            return Ok(SupersedeNodeSessionOutcome::IdentityRefused {
+                error: NodeIdentityRefused,
+            });
         }
         let Some(mut session) = NodeSessionStorage::get(self, &input.session_id) else {
-            return Ok(SupersedeNodeSessionOutcome::NoSuchSession { error: SessionNotFound });
+            return Ok(SupersedeNodeSessionOutcome::NoSuchSession {
+                error: SessionNotFound,
+            });
         };
         if session.data.node_id != input.node_id {
-            return Ok(SupersedeNodeSessionOutcome::OtherNode { error: SessionNodeMismatch });
+            return Ok(SupersedeNodeSessionOutcome::OtherNode {
+                error: SessionNodeMismatch,
+            });
         }
         if session.state != NodeSessionState::Open {
-            return Ok(SupersedeNodeSessionOutcome::NotOpen { error: SessionNotOpen });
+            return Ok(SupersedeNodeSessionOutcome::NotOpen {
+                error: SessionNotOpen,
+            });
         }
         let now = timestamp(self.now());
         session.state = NodeSessionState::Superseded;

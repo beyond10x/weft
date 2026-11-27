@@ -7,8 +7,8 @@
 use weft_types::behaviour::{NodePoolStorage, ZoneStorage};
 use weft_types::infrastructure::obligations::CreateNodePoolBehavior;
 use weft_types::infrastructure::{
-    CreateNodePool, CreateNodePoolOutcome, InvalidPoolSize, NodePoolCreated, NodePoolData, NodePoolSnapshot,
-    NodePoolState, PoolAlreadyRequested, UnknownZone, ZoneState,
+    CreateNodePool, CreateNodePoolOutcome, InvalidPoolSize, NodePoolCreated, NodePoolData,
+    NodePoolSnapshot, NodePoolState, PoolAlreadyRequested, UnknownZone, ZoneState,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -18,12 +18,19 @@ use crate::context::mint;
 use crate::Ports;
 
 impl CreateNodePoolBehavior for Ports {
-    fn create_node_pool(&mut self, input: CreateNodePool) -> Result<CreateNodePoolOutcome, UnmetObligation> {
+    fn create_node_pool(
+        &mut self,
+        input: CreateNodePool,
+    ) -> Result<CreateNodePoolOutcome, UnmetObligation> {
         if input.min_size < 0 {
-            return Ok(CreateNodePoolOutcome::NegativeSize { error: InvalidPoolSize });
+            return Ok(CreateNodePoolOutcome::NegativeSize {
+                error: InvalidPoolSize,
+            });
         }
         if input.min_size > input.max_size {
-            return Ok(CreateNodePoolOutcome::MinAboveMax { error: InvalidPoolSize });
+            return Ok(CreateNodePoolOutcome::MinAboveMax {
+                error: InvalidPoolSize,
+            });
         }
         let Some(zone) = ZoneStorage::get(self, &input.zone) else {
             return Ok(CreateNodePoolOutcome::UnknownZone { error: UnknownZone });
@@ -36,7 +43,9 @@ impl CreateNodePoolBehavior for Ports {
                 .iter()
                 .any(|row| row.data.requested_for == input.requested_for)
         {
-            return Ok(CreateNodePoolOutcome::AlreadyRequested { error: PoolAlreadyRequested });
+            return Ok(CreateNodePoolOutcome::AlreadyRequested {
+                error: PoolAlreadyRequested,
+            });
         }
         let node_pool_id = NodePoolId(Uuid(mint()));
         let cloud_id = zone.data.cloud_id;
