@@ -6,6 +6,10 @@
   A compute cloud you deploy yourself, specified first in ESS.
 </p>
 
+<p align="center">
+  <a href="https://beyond10x.github.io/weft/"><strong>Documentation</strong></a>
+</p>
+
 ---
 
 One control plane and any number of worker nodes run confined workloads: a code snippet, a
@@ -23,6 +27,7 @@ Status: specification first. No code exists yet.
 | [`sim/experiments/`](sim/experiments/) | Experiments: a full setup, faults, duplicate delivery, topology |
 | [`docs/hardening/`](docs/hardening/) | The hardening passes and what each changed |
 | [`quality/ratchet.yaml`](quality/ratchet.yaml) | The KPIs a change may not make worse |
+| [`website/`](website/) | The documentation site, published at [beyond10x.github.io/weft](https://beyond10x.github.io/weft/) |
 
 ```console
 slot task check

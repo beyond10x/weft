@@ -3,3 +3,6 @@
 /.engineering/drafts/
 /tools/sim/target/
 /sim/out/
+/website/node_modules/
+/website/build/
+/website/.docusaurus/
