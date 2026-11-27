@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-node-confine
 kind: story
-status: active
+status: implemented
 title: weft-agent runs a snippet confined by substrate-daemon and observes its exit
 relations:
 - decomposes: epic:walking-skeleton
@@ -22,10 +22,11 @@ scope:
   path: tools/test-setup.d/README.md
 - confidence: cited
   path: tools/test-teardown.d/20-substrate.sh
-revision: 17
+revision: 18
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T13:13:46Z", actor: "human:operator", revision: 14, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T13:13:46Z", actor: "human:operator", revision: 15, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T16:03:30Z", actor: "human:operator", revision: 18, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

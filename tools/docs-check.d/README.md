@@ -25,4 +25,5 @@ Contract of a hook:
 - `epic:kpi-ratchet` reads the `<kpi-id> <count>` lines into `quality/ratchet.yaml`.
 
 Hooks: `10-repo-links.sh` (`docs.dead-repo-links`), `20-planned-banners.sh`
-(`docs.planned-without-banner`), `30-agents-md-paths.sh` (`repo.agents-md-dead-paths`).
+(`docs.planned-without-banner`), `30-agents-md-paths.sh` (`repo.agents-md-dead-paths`),
+`40-status-claims.sh` (`docs.status-claims-false`; its proofs in `website/data/status-proofs.json`).

@@ -31,6 +31,7 @@ none is written before the specification of what it implements.
 - `tools/check-overlay.sh`: validates the whole system from a frozen snapshot with only named
   files from the working tree, for parallel edits (`--freeze` takes the snapshot).
 - `tools/check-layers.sh [--graph]`: fails on a reference to a higher layer (`task layers`).
+- `tools/gen-domain-map.sh [--block]`: the domain map of `ess/` (layers, domains, references) as a Mermaid block; `tools/check.d/30-domain-map.sh` in `task check` fails when the block between the `domain-map` markers of `website/docs/specification/layers.md` differs from it; `tools/check.d/31-domain-map-selftest.sh` runs `tools/test-domain-map.sh` (every awk found, bad markers, checks 2 and 3 on fixture trees).
 - `tools/check-stamped-time.sh [--inventory | --negative]`: fails when a command with a
   `weft.shared.StampedAt` input is granted outside `tools/stamped-time-actors` (`task stamped-time`).
 - `tools/check-spec-diff.sh [--acknowledge | --negative]`: classifies the change of `ess/` since
@@ -69,9 +70,14 @@ none is written before the specification of what it implements.
   docs build's filter, where a `website/` path builds.
 - `tools/check-docs.sh` (`task docs-check`, part of `task check`, and the step after the
   checkout in `.github/workflows/pages.yml`, which runs on every pull request): holds
-  `docs.dead-repo-links`, `docs.planned-without-banner` and `repo.agents-md-dead-paths` at 0
-  with the hooks of `tools/docs-check.d/` (contract in its `README.md`); every hook runs and
-  prints `<kpi-id> <count>` last. `tools/test-docs-check.sh` runs every hook on its `pass` and
+  `docs.dead-repo-links`, `docs.planned-without-banner`, `repo.agents-md-dead-paths` and
+  `docs.status-claims-false` at 0 with the hooks of `tools/docs-check.d/` (contract in its
+  `README.md`); every hook runs and prints `<kpi-id> <count>` last. Every `shipped` item of
+  `website/data/status.json` and every `shipped` feature of `website/product.json` names a file
+  or a command that proves it in
+  `website/data/status-proofs.json`, which also computes the counts the site states (domains,
+  layers, components, specification files); `website/docs/status.md` renders `status.json` and
+  has no table of its own. `tools/test-docs-check.sh` runs every hook on its `pass` and
   `fail` trees in `tools/docs-check-fixture/`. A path named in this file is committed (or new
   and not ignored), is written by a tool its bullet names (`tools/synth.sh` writes
   `target/generated/`), or stands under a heading that says Planned.

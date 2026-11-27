@@ -39,6 +39,31 @@ Each worker runs a node agent (`weft-node`). It dials out to `weft-control` over
 keeps one long-lived session; a worker opens no inbound port. Exec, attach, logs and port
 forwarding from the CLI run inside that session, never as a direct connection to the node.
 
+```mermaid
+flowchart TB
+  user["weft CLI, CI"]
+  public["public traffic"]
+  subgraph host["control host: one process"]
+    api["weft-api<br/>management plane"]
+    control["weft-control<br/>control plane"]
+    api -->|"forwards user commands"| control
+  end
+  edge["weft-edge<br/>data plane"]
+  subgraph worker["worker node"]
+    agent["node agent: weft-node<br/>worker plane"]
+    daemon["substrate-daemon"]
+    instance["instance, confined"]
+    agent -->|"Unix socket"| daemon
+    daemon -->|"confines"| instance
+  end
+  user -->|HTTP| api
+  agent -->|"node channel: the node dials out"| control
+  api -.->|"exec channel, inside the node's session"| agent
+  public --> edge
+  edge -->|"ready instances of a route"| instance
+```
+*Planned: drawn from [ess/components.yaml](https://github.com/beyond10x/weft/blob/main/ess/components.yaml) and [docs/implementation.md](https://github.com/beyond10x/weft/blob/main/docs/implementation.md); neither binary is built.*
+
 | Direction | Messages |
 |---|---|
 | control plane to agent | assign, stop, pause, snapshot, drain, attach, detach, issue identity, deliver secret |

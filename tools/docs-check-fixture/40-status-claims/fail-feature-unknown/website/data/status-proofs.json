@@ -1,0 +1,33 @@
+{
+  "format": "weft-status-proofs/1",
+  "items": {
+    "The model": [
+      {"file": "spec/system.yaml"},
+      {"command": "grep -c '^  - d\\.' spec/system.yaml", "expect": "23"}
+    ],
+    "The gate": [
+      {"command": "grep -q '^layers:' spec/system.yaml"}
+    ],
+    "Later": [
+      {"file": "spec/system.yaml"}
+    ]
+  },
+  "features": {
+    "Gone": [
+      {"file": "spec/system.yaml"}
+    ],
+    "The simulator": [
+      {"file": "spec/system.yaml"}
+    ]
+  },
+  "counts": {
+    "domains": {
+      "command": "awk '/^domains:/{f=1;next} /^[^ ]/{f=0} f&&/^  - /{n++} END{print n+0}' spec/system.yaml",
+      "nouns": ["domains", "domain files"]
+    },
+    "layers": {
+      "command": "awk '/^layers:/{f=1;next} /^[^ ]/{f=0} f&&/^  - /{n++} END{print n+0}' spec/system.yaml",
+      "nouns": ["layers"]
+    }
+  }
+}

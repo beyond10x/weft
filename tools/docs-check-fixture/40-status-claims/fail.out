@@ -1,0 +1,7 @@
+website/data/status.json:27 The simulator: shipped without a proof in website/data/status-proofs.json
+website/data/status-proofs.json:5 The model: file spec/missing.yaml is not a non-empty file in the tree
+website/data/status-proofs.json:9 The gate: command `grep -q '^nothing:' spec/system.yaml` exited 1
+website/data/status-proofs.json:11 Gone: names no item of website/data/status.json
+website/docs/guide/page.mdx:3 24 domains: computed 23 (count domains of website/data/status-proofs.json)
+website/docs/guide/page.mdx:3 3 layers: computed 2 (count layers of website/data/status-proofs.json)
+docs.status-claims-false 6
