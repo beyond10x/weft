@@ -43,12 +43,20 @@ for (const theme of THEMES) {
       await page.goto(BASE);
       await settle(page, NOT_READY);
       await assertTheme(page, theme);
+      // The field reached by Tab shows that it has the focus (case first written by an adversary round).
+      const look = () =>
+        page.evaluate(() => {
+          const s = getComputedStyle(document.querySelector('input.navbar__search-input')!);
+          return [s.outlineStyle, s.outlineWidth, s.outlineColor, s.boxShadow, s.borderColor, s.borderWidth, s.backgroundColor].join('|');
+        });
+      const unfocused = await look();
       let tabs = 0;
       for (; tabs < MAX_TABS; tabs += 1) {
         await page.keyboard.press('Tab');
         if (await page.evaluate(() => document.activeElement?.matches('input.navbar__search-input') ?? false)) break;
       }
       expect(tabs, `the search field is reached within ${MAX_TABS} Tab presses`).toBeLessThan(MAX_TABS);
+      expect(await look(), 'the focused search field looks the same as the unfocused one').not.toBe(unfocused);
       await page.keyboard.type('formation');
       await page.waitForSelector('[role=option]', { timeout: 5000 });
       await page.keyboard.press('ArrowDown');

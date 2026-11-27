@@ -77,9 +77,12 @@ export async function assertTheme(page: Page, theme: Theme): Promise<void> {
   if (shown !== theme.name) throw new Error(`the page shows theme "${shown}", not "${theme.name}"`);
 }
 
-/** Every axe-core violation of the gate's tags, each with its impact. */
+/**
+ * Every axe-core violation of the gate's tags, each with its impact. Run in the page (legacy mode):
+ * the default mode opens a blank page per run to finish it, about 0.8 s each; the site has no frames.
+ */
 export async function axe(page: Page): Promise<AxeViolation[]> {
-  const result = await new AxeBuilder({ page }).withTags(AXE_TAGS).options({ resultTypes: ['violations'] }).analyze();
+  const result = await new AxeBuilder({ page }).withTags(AXE_TAGS).setLegacyMode(true).options({ resultTypes: ['violations'] }).analyze();
   return result.violations.map((v) => ({ id: v.id, impact: v.impact ?? 'unknown', help: v.help, nodes: v.nodes.map((n) => n.target.join(' ')) }));
 }
 

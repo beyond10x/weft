@@ -13,6 +13,9 @@ export default defineConfig({
   fullyParallel: true,
   workers: 2,
   timeout: 60_000,
+  // The run stops itself before the outer `timeout 120` kills it, so a run over its budget still
+  // fails with the ten slowest tests printed.
+  globalTimeout: 105_000,
   forbidOnly: true,
   retries: 0,
   reporter: [['list'], ['./ux/reporter.ts']],

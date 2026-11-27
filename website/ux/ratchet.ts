@@ -1,7 +1,8 @@
 // The ratchet (ui-iteration-loop § 6): every key lower-is-better, the measured values of a run held
 // against `ux/baseline.json`. It fails on a value worse than its baseline beyond the tolerance, on an
-// improvement not written into the baseline in the same change, and on a missing value (a key on one
-// side only).
+// improvement not written into the baseline in the same change, on a missing value (a key on one
+// side only), and on a baseline entry whose value is not a number or whose tolerance is not the
+// harness's own (`TOLERANCES`): the tolerance is never read from the file being checked.
 //
 //   node ux/ratchet.ts check  [--baseline <file>] [--measured <file>]   exit 1 on any violation
 //   node ux/ratchet.ts update [--baseline <file>] [--measured <file>]   write the measured values in
@@ -26,7 +27,7 @@ export interface Baseline {
 export type Measured = Record<string, Record<string, number>>;
 
 export interface Violation {
-  kind: 'worse' | 'improved-not-taken' | 'missing';
+  kind: 'worse' | 'improved-not-taken' | 'missing' | 'bad-baseline';
   scenario: string;
   key: string;
   detail: string;
@@ -50,13 +51,20 @@ export function check(baseline: Baseline, measured: Measured): Violation[] {
     for (const key of [...new Set([...Object.keys(base), ...Object.keys(now)])].sort()) {
       const entry = base[key];
       const value = now[key];
+      // The tolerance is the harness's own, never the one written in the file it checks.
+      const allowed = tolerance(key);
+      if (entry !== undefined && entry.tolerance !== allowed) {
+        out.push({ kind: 'bad-baseline', scenario, key, detail: `tolerance ${entry.tolerance} in baseline.json, the harness's is ${allowed}` });
+      }
       if (entry === undefined) {
         out.push({ kind: 'missing', scenario, key, detail: `no baseline value (measured ${value})` });
+      } else if (typeof entry.value !== 'number' || !Number.isFinite(entry.value)) {
+        out.push({ kind: 'bad-baseline', scenario, key, detail: `baseline value ${entry.value} is not a number` });
       } else if (value === undefined || value === null || !Number.isFinite(value)) {
         out.push({ kind: 'missing', scenario, key, detail: `no measured value (baseline ${entry.value})` });
-      } else if (value > entry.value + entry.tolerance + EPSILON) {
-        out.push({ kind: 'worse', scenario, key, detail: `${value} > ${entry.value} (tolerance ${entry.tolerance})` });
-      } else if (value < entry.value - entry.tolerance - EPSILON) {
+      } else if (value > entry.value + allowed + EPSILON) {
+        out.push({ kind: 'worse', scenario, key, detail: `${value} > ${entry.value} (tolerance ${allowed})` });
+      } else if (value < entry.value - allowed - EPSILON) {
         out.push({ kind: 'improved-not-taken', scenario, key, detail: `${value} < ${entry.value}: write it into baseline.json in this change` });
       }
     }
