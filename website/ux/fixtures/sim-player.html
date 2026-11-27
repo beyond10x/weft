@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>weft-sim</title>
+<style>
+:root { --bg:#fbfbfa; --fg:#1d1d1f; --mute:#6e6e73; --line:#d9d9de; --hit:#1f8a4c; --hitbg:#e3f4e9; --miss:#b4b4bb; --bad:#c62828; --badbg:#fde8e8; --accent:#2f5bd3; }
+@media (prefers-color-scheme: dark) { :root { --bg:#16171a; --fg:#e8e8ea; --mute:#9a9aa2; --line:#33343a; --hit:#4cc27e; --hitbg:#173525; --miss:#55565e; --bad:#ff6b6b; --badbg:#3a1a1a; --accent:#7ea2ff; } }
+* { box-sizing: border-box; }
+body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--fg); }
+header { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 16px; padding:12px 20px; border-bottom:1px solid var(--line); position: sticky; top:0; background: var(--bg); z-index: 2; }
+h1 { font-size:18px; margin:0; } h2 { font-size:14px; margin:18px 0 8px; } h3 { font-size:13px; margin:10px 0 4px; }
+main { padding: 0 20px 40px; }
+.mute { color: var(--mute); }
+#counters { display:grid; grid-template-columns: repeat(auto-fill, minmax(130px,1fr)); gap:8px; margin-top:12px; }
+.tile { border:1px solid var(--line); border-radius:6px; padding:8px 10px; }
+.tile .v { font-size:20px; font-variant-numeric: tabular-nums; font-weight:600; }
+.tile .k { color: var(--mute); font-size:11px; }
+.tile.bad .v { color: var(--bad); }
+.row { display:grid; grid-template-columns: 1.2fr 1fr; gap:16px; }
+@media (max-width: 900px) { .row { grid-template-columns: 1fr; } }
+table { border-collapse: collapse; width:100%; }
+td, th { text-align:left; padding:3px 6px; border-bottom:1px solid var(--line); vertical-align: top; }
+th { color: var(--mute); font-weight:500; font-size:11px; }
+td.n { text-align:right; font-variant-numeric: tabular-nums; }
+code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size:12px; }
+#feed { list-style:none; padding:0; margin:0; font-family: ui-monospace, monospace; font-size:12px; max-height: 260px; overflow:auto; }
+#feed li { padding:1px 0; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
+.ok { color: var(--hit); } .err { color: var(--bad); }
+details.domain { border:1px solid var(--line); border-radius:6px; margin:6px 0; padding:4px 10px; }
+details.domain > summary { cursor:pointer; font-weight:600; }
+.ents { display:flex; flex-wrap:wrap; gap:10px; margin:8px 0; }
+.ent { border:1px solid var(--line); border-radius:6px; padding:6px; }
+.ent .title { font-weight:600; font-size:12px; }
+svg text { font-size:11px; fill: var(--fg); }
+.st rect { fill: var(--bg); stroke: var(--miss); stroke-dasharray: 3 2; }
+.st.hit rect { fill: var(--hitbg); stroke: var(--hit); stroke-dasharray: none; }
+.st.init rect { stroke-width: 2; }
+.tr path { fill:none; stroke: var(--miss); stroke-dasharray: 3 2; }
+.tr.hit path { stroke: var(--hit); stroke-dasharray: none; stroke-width: 1.6; }
+.flash { animation: flash 1.4s ease-out; }
+@keyframes flash { 0% { filter: drop-shadow(0 0 6px var(--hit)); } 100% { filter: none; } }
+.chips { display:flex; flex-wrap:wrap; gap:3px; }
+.chip { border:1px dashed var(--miss); border-radius:3px; padding:0 4px; font-size:11px; color: var(--mute); }
+.chip.hit { border:1px solid var(--hit); background: var(--hitbg); color: var(--fg); }
+.chip.e { font-style: italic; }
+.cmd { margin:3px 0; }
+.cmd .name { font-family: ui-monospace, monospace; font-size:12px; }
+.bar { display:inline-block; height:6px; background: var(--hit); border-radius:3px; vertical-align: middle; }
+.barbg > .bar { display:block; }
+.barbg { display:inline-block; width:80px; height:6px; background: var(--line); border-radius:3px; vertical-align: middle; }
+#timeline .tl { display:grid; grid-template-columns: 40px 80px 1fr 1.2fr 140px; gap:6px; padding:2px 0; border-bottom:1px solid var(--line); align-items: center; }
+.fault { background: var(--badbg); color: var(--bad); border-radius:3px; padding:0 4px; font-size:11px; }
+.sq { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:2px; background: var(--hit); }
+.sq.bad { background: var(--bad); }
+input#filter { padding:4px 8px; border:1px solid var(--line); border-radius:4px; background: var(--bg); color: var(--fg); width: 260px; }
+.legend span { margin-right:12px; }
+#player .controls { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:4px 0 8px; }
+#player button, #player select, #player input { font: inherit; color: var(--fg); background: var(--bg); border:1px solid var(--line); border-radius:4px; padding:2px 8px; }
+#player .plots { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start; }
+#player .plots svg { max-width:100%; height:auto; }
+#player figure { margin:0; max-width:100%; }
+#player figcaption { max-width:34em; margin-bottom:4px; }
+#p-land text { font-size:13px; }
+svg text.an { fill: var(--mute); }
+.tscroll { overflow-x:auto; }
+.tscroll td, .tscroll th { white-space:nowrap; }
+.cell { stroke: var(--line); }
+.cell.empty { fill: none; }
+.cell.infeasible { fill: var(--badbg); stroke: var(--bad); stroke-dasharray: 3 2; }
+.cell.failed { fill: var(--bad); stroke: var(--bad); }
+.pm.off { opacity: .3; }
+#p-land text.ct { font-size:12px; fill: #1d1d1f; pointer-events: none; }
+</style>
+</head>
+<body>
+<header><h1>weft-sim <span id="mode" class="mute"></span></h1><span id="status" class="mute"></span><span id="info" class="mute"></span></header>
+<main>
+<section id="counters"></section>
+<div class="row">
+  <section><h2>Growth: distinct abstract states and outcomes reached, over steps</h2>
+    <svg id="growth" width="100%" height="220" viewBox="0 0 600 220" preserveAspectRatio="none"></svg>
+    <div class="legend mute"><span style="color:var(--accent)">&#9632; abstract states</span><span style="color:var(--hit)">&#9632; outcomes reached</span></div>
+  </section>
+  <section><h2>Live feed <span class="mute">(one thread: command &rarr; outcome)</span></h2><ol id="feed"></ol></section>
+</div>
+<section id="timeline-box" hidden><h2>Experiment timeline</h2><div id="timeline"></div></section>
+<section id="search-box" hidden><h2>Search</h2>
+  <div id="player" hidden data-frame="0" data-playing="false" data-speed="4" data-x-axis="" data-y-axis="">
+    <div class="controls">
+      <button type="button" id="p-back">Step back</button>
+      <button type="button" id="p-play">Play</button>
+      <button type="button" id="p-pause">Pause</button>
+      <button type="button" id="p-fwd">Step forward</button>
+      <label>Frame <input type="range" id="p-frame" min="0" max="0" value="0"></label>
+      <label>Speed (rows per second) <select id="p-speed"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></label>
+      <label>X axis <select id="p-x"></select></label>
+      <label>Y axis <select id="p-y"></select></label>
+    </div>
+    <p id="p-caption" class="mute"></p>
+    <div class="plots">
+      <figure><figcaption class="mute">Landscape: one cell per pair of values of the two axes, the other axes at the best point so far. Ring: start, line: accepted step, cross: rejected neighbour, dashed arc and diamond: restart; faded marks lie off this slice.</figcaption><svg id="p-land" width="200" height="100"></svg></figure>
+      <figure><figcaption class="mute">Best feasible fitness so far, over the rows</figcaption><svg id="p-curve" width="420" height="240" viewBox="0 0 420 240"></svg></figure>
+    </div>
+  </div>
+  <div id="no-climb"></div>
+  <div id="search"></div></section>
+<section id="matches-box" hidden><h2>Pattern matches</h2><table id="matches"></table></section>
+<section><h2>Violations</h2><table id="violations"></table></section>
+<section id="gaps-box" hidden><h2>Top gaps</h2><table id="gaps"></table></section>
+<section id="never-box" hidden><h2>Commands never accepted <span id="never-sum" class="mute"></span></h2>
+  <p class="mute">blocked-by: every request naming live rows got the same refusal (an inferred specification gap, at the guard's line); rare: the refusals vary, or too few requests named live rows.</p>
+  <table id="never"></table></section>
+<section><h2>Domains: lifecycles and outcomes</h2>
+  <input id="filter" placeholder="filter domains, entities, commands">
+  <span class="mute legend"><span>solid green: reached</span><span>dashed grey: not reached</span><span>thick border: initial state</span></span>
+  <div id="domains"></div></section>
+<section><h2>Branch points <span class="mute">(a command reached more than one outcome from one abstract state)</span></h2>
+  <table id="branchcmds"></table><h3>Largest fan-out</h3><table id="branch"></table></section>
+<section><h2>Interpreter answers that are not an outcome</h2><table id="errors"></table></section>
+<section id="notes-box" hidden><h2>Notes</h2><ul id="notes"></ul></section>
+</main>
+<script>
+const MODEL = {"domains":[{"commands":[{"name":"demo.box.CloseBox","outcomes":[{"error":true,"gid":0,"kind":"unknown_instance","name":"no-such-box"},{"error":false,"gid":1,"kind":"otherwise","name":"closed"},{"error":true,"gid":2,"kind":"wrong_state","name":"not-open"}]},{"name":"demo.box.OpenBox","outcomes":[{"error":false,"gid":3,"kind":"otherwise","name":"opened"}]}],"entities":[{"initial":1,"name":"demo.box.Box","state_base":0,"states":["Closed","Open"],"terminal":[0],"tr_base":0,"transitions":[{"from":[1],"name":"close","to":0}]}],"name":"demo.box"}],"outcomes_total":4,"states_total":2,"system":"demo","transitions_total":1};
+let SNAP = {"abstract_states":5,"branch_points":0,"info":{"experiment":"search-climb","search":{"axes":[{"kind":"var","name":"opens","point":"opens","values":[1,2,3,4]},{"kind":"var","name":"closes","point":"closes","values":[2,0,1,3]}],"budget":24,"gates":["setup-failures"],"limit":16,"mode":"fit","seed":7,"weights":{"steps":1.0}}},"mode":"simulate","outcome_hits":[0,13,12,44],"outcomes_declared":4,"outcomes_reached":3,"running":false,"search":[{"best":null,"decision":"start","feasible":false,"fitness":3.0,"index":[0,0],"kpis":{"abstract_states":2,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":1,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed"],"steps":3,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":null,"point":{"closes":2,"opens":1},"round":1,"seq":1,"walk":1},{"best":null,"decision":"rejected","feasible":false,"fitness":4.0,"index":[1,0],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":1,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed"],"steps":4,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":1,"point":{"closes":2,"opens":2},"round":2,"seq":2,"walk":2},{"best":1.0,"decision":"accepted","feasible":true,"fitness":1.0,"index":[0,1],"kpis":{"abstract_states":1,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":1,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":1,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":1,"point":{"closes":0,"opens":1},"round":2,"seq":3,"walk":3},{"best":2.0,"decision":"accepted","feasible":true,"fitness":2.0,"index":[1,1],"kpis":{"abstract_states":2,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":1,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":2,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":3,"point":{"closes":0,"opens":2},"round":3,"seq":4,"walk":4},{"best":2.0,"decision":"rejected","feasible":true,"fitness":2.0,"index":[0,2],"kpis":{"abstract_states":2,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":2,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":2,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":3,"point":{"closes":1,"opens":1},"round":3,"seq":5,"walk":5},{"best":3.0,"decision":"accepted","feasible":true,"fitness":3.0,"index":[2,1],"kpis":{"abstract_states":2,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":1,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":3,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":4,"point":{"closes":0,"opens":3},"round":4,"seq":6,"walk":6},{"best":3.0,"decision":"rejected","feasible":true,"fitness":3.0,"index":[1,2],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":2,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":3,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":4,"point":{"closes":1,"opens":2},"round":4,"seq":7,"walk":7},{"best":4.0,"decision":"accepted","feasible":true,"fitness":4.0,"index":[3,1],"kpis":{"abstract_states":2,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":1,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":4,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":6,"point":{"closes":0,"opens":4},"round":5,"seq":8,"walk":8},{"best":4.0,"decision":"rejected","feasible":false,"fitness":5.0,"index":[2,0],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":1,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed"],"steps":5,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":6,"point":{"closes":2,"opens":3},"round":5,"seq":9,"walk":9},{"best":4.0,"decision":"rejected","feasible":true,"fitness":4.0,"index":[2,2],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":2,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":4,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":6,"point":{"closes":1,"opens":3},"round":5,"seq":10,"walk":10},{"best":4.0,"decision":"rejected","feasible":false,"fitness":6.0,"index":[3,0],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":1,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed"],"steps":6,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":8,"point":{"closes":2,"opens":4},"round":6,"seq":11,"walk":11},{"best":5.0,"decision":"accepted","feasible":true,"fitness":5.0,"index":[3,2],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":2,"pattern_matches":0,"quota_breaches":0,"setup_failures":0,"setup_refusals":[],"steps":5,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":8,"point":{"closes":1,"opens":4},"round":6,"seq":12,"walk":12},{"best":5.0,"decision":"rejected","feasible":false,"fitness":7.0,"index":[3,3],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":2,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed","close (demo.box.CloseBox) answered not-open, declared closed"],"steps":7,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":12,"point":{"closes":3,"opens":4},"round":7,"seq":13,"walk":13},{"best":5.0,"decision":"restart","feasible":false,"fitness":6.0,"index":[2,3],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":2,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed","close (demo.box.CloseBox) answered not-open, declared closed"],"steps":6,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":null,"point":{"closes":3,"opens":3},"round":8,"seq":14,"walk":14},{"best":5.0,"decision":"rejected","feasible":false,"fitness":5.0,"index":[1,3],"kpis":{"abstract_states":3,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":2,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed","close (demo.box.CloseBox) answered not-open, declared closed"],"steps":5,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":14,"point":{"closes":3,"opens":2},"round":9,"seq":15,"walk":15},{"best":5.0,"decision":"restart","feasible":false,"fitness":4.0,"index":[0,3],"kpis":{"abstract_states":2,"chain_reached":0,"chain_stop":"","closed_link_pairs":0,"cross_tenant_reach":0,"double_placements":0,"duplicate_effects":0,"interpreter_gaps":0,"link_crossings":0,"messages":0,"messages_unrouted":0,"outcomes_reached":3,"pattern_matches":0,"quota_breaches":0,"setup_failures":2,"setup_refusals":["close (demo.box.CloseBox) answered not-open, declared closed","close (demo.box.CloseBox) answered not-open, declared closed"],"steps":4,"steps_to_converge":0,"unconverged":0,"violations":0},"parent":null,"point":{"closes":3,"opens":1},"round":10,"seq":16,"walk":16}],"state_hits":[13,44],"states_declared":2,"states_reached":2,"steps":69,"threads":2,"transition_hits":[13],"transitions_declared":1,"transitions_reached":1,"violation_count":0,"violations":[],"walks":17};
+const LIVE = false;
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const short = (n) => String(n).split('.').pop();
+const fmt = (n) => typeof n === 'number' ? (Number.isInteger(n) ? n.toLocaleString('en') : n.toFixed(1)) : esc(n);
+const SVGNS = 'http://www.w3.org/2000/svg';
+let prevHits = { s: [], t: [], o: [] };
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function lifecycle(ent) {
+  const n = ent.states.length;
+  const depth = new Array(n).fill(-1);
+  depth[ent.initial] = 0;
+  const queue = [ent.initial];
+  while (queue.length) {
+    const s = queue.shift();
+    for (const t of ent.transitions) if (t.from.includes(s) && depth[t.to] < 0) { depth[t.to] = depth[s] + 1; queue.push(t.to); }
+  }
+  let maxd = Math.max(0, ...depth);
+  for (let i = 0; i < n; i++) if (depth[i] < 0) depth[i] = maxd + 1;
+  maxd = Math.max(...depth);
+  const cols = []; for (let i = 0; i < n; i++) (cols[depth[i]] = cols[depth[i]] || []).push(i);
+  const W = 104, H = 30, GX = 34, GY = 12;
+  const pos = [];
+  cols.forEach((c, d) => c.forEach((s, r) => { pos[s] = { x: 6 + d * (W + GX), y: 6 + r * (H + GY) }; }));
+  const rows = Math.max(...cols.map(c => c ? c.length : 0));
+  const width = 12 + (maxd + 1) * (W + GX) - GX, height = 12 + rows * (H + GY) - GY + 14;
+  const svg = el('svg', { width, height, viewBox: `0 0 ${width} ${height}` });
+  const defs = el('defs', {}, svg);
+  const m = el('marker', { id: 'a' + ent.state_base, viewBox: '0 0 8 8', refX: 7, refY: 4, markerWidth: 6, markerHeight: 6, orient: 'auto' }, defs);
+  el('path', { d: 'M0,0 L8,4 L0,8 z', fill: 'currentColor' }, m);
+  ent.transitions.forEach((t, ti) => {
+    const g = el('g', { class: 'tr', id: 't-' + (ent.tr_base + ti) }, svg);
+    const title = el('title', {}, g); title.textContent = `${t.name}: ${t.from.map(f => ent.states[f]).join(', ')} -> ${ent.states[t.to]}`;
+    t.from.forEach((f, k) => {
+      const a = pos[f], b = pos[t.to];
+      let d;
+      if (f === t.to) { d = `M${a.x + W - 20},${a.y} c 10,-16 30,-6 18,6`; }
+      else if (b.x > a.x) { const x1 = a.x + W, y1 = a.y + H / 2, x2 = b.x, y2 = b.y + H / 2; d = `M${x1},${y1} C${x1 + GX / 2},${y1} ${x2 - GX / 2},${y2} ${x2 - 2},${y2}`; }
+      else { const x1 = a.x + W / 2 + 8, y1 = a.y + H, x2 = b.x + W / 2 - 8, y2 = b.y + H; const dip = Math.max(y1, y2) + 14 + 4 * (k % 3); d = `M${x1},${y1} C${x1},${dip} ${x2},${dip} ${x2},${y2 + 2}`; }
+      el('path', { d, 'marker-end': `url(#a${ent.state_base})`, style: 'color: var(--miss)' }, g);
+    });
+  });
+  ent.states.forEach((s, si) => {
+    const g = el('g', { class: 'st' + (si === ent.initial ? ' init' : ''), id: 's-' + (ent.state_base + si) }, svg);
+    const p = pos[si];
+    el('rect', { x: p.x, y: p.y, width: W, height: H, rx: ent.terminal.includes(si) ? 2 : 8 }, g);
+    const tx = el('text', { x: p.x + W / 2, y: p.y + H / 2 + 4, 'text-anchor': 'middle' }, g);
+    tx.textContent = s.length > 16 ? s.slice(0, 15) + '…' : s;
+    const title = el('title', {}, g); title.textContent = s;
+  });
+  return svg;
+}
+
+function buildDomains() {
+  const root = $('domains');
+  root.innerHTML = '';
+  for (const d of MODEL.domains) {
+    const det = document.createElement('details');
+    det.className = 'domain'; det.dataset.text = (d.name + ' ' + d.entities.map(e => e.name).join(' ') + ' ' + d.commands.map(c => c.name).join(' ')).toLowerCase();
+    const sum = document.createElement('summary');
+    sum.innerHTML = `${esc(d.name)} <span class="mute" id="dsum-${esc(d.name)}"></span>`;
+    det.appendChild(sum);
+    const ents = document.createElement('div'); ents.className = 'ents';
+    for (const e of d.entities) {
+      const box = document.createElement('div'); box.className = 'ent';
+      box.innerHTML = `<div class="title">${esc(short(e.name))} <span class="mute">${e.states.length} states, ${e.transitions.length} transitions</span></div>`;
+      box.appendChild(lifecycle(e));
+      ents.appendChild(box);
+    }
+    det.appendChild(ents);
+    const cmds = document.createElement('div');
+    for (const c of d.commands) {
+      const row = document.createElement('div'); row.className = 'cmd';
+      row.innerHTML = `<span class="name">${esc(short(c.name))}</span> <span class="chips">${c.outcomes.map(o => `<span class="chip${o.error ? ' e' : ''}" id="o-${o.gid}" title="${esc(o.kind)}">${esc(o.name)}</span>`).join('')}</span>`;
+      cmds.appendChild(row);
+    }
+    det.appendChild(cmds);
+    root.appendChild(det);
+  }
+  $('filter').addEventListener('input', (ev) => {
+    const q = ev.target.value.toLowerCase();
+    for (const det of root.children) { det.hidden = q && !det.dataset.text.includes(q); if (q && !det.hidden) det.open = true; }
+  });
+}
+
+function paintHits(prefix, hits, prev, cls) {
+  for (let i = 0; i < hits.length; i++) {
+    const now = hits[i] > 0, was = (prev[i] || 0) > 0;
+    if (now && !was) {
+      const e = $(prefix + i);
+      if (e) { e.classList.add('hit'); e.classList.add('flash'); setTimeout(() => e.classList.remove('flash'), 1500); if (cls) e.title = (e.title || '') + ` (${hits[i]})`; }
+    }
+  }
+}
+
+function tile(k, v, bad) { return `<div class="tile${bad ? ' bad' : ''}"><div class="v">${v}</div><div class="k">${k}</div></div>`; }
+
+function growth(points) {
+  const svg = $('growth'); svg.innerHTML = '';
+  if (!points || points.length < 2) return;
+  const W = 600, H = 210;
+  const maxX = Math.max(...points.map(p => p[0])) || 1;
+  const maxA = Math.max(...points.map(p => p[1])) || 1;
+  const maxO = Math.max(...points.map(p => p[2])) || 1;
+  const line = (i, max, color) => el('polyline', { points: points.map(p => `${(p[0] / maxX * (W - 10) + 5).toFixed(1)},${(H - p[i] / max * (H - 20) + 5).toFixed(1)}`).join(' '), fill: 'none', stroke: color, 'stroke-width': 2, 'vector-effect': 'non-scaling-stroke' }, svg);
+  line(1, maxA, 'var(--accent)'); line(2, maxO, 'var(--hit)');
+  const t1 = el('text', { x: 8, y: 14 }, svg); t1.textContent = `${maxA.toLocaleString('en')} states`;
+  t1.setAttribute('style', 'fill: var(--accent)');
+  const t2 = el('text', { x: 8, y: 28 }, svg); t2.textContent = `${maxO.toLocaleString('en')} outcomes`;
+  t2.setAttribute('style', 'fill: var(--hit)');
+  const t3 = el('text', { x: W - 8, y: H + 2, 'text-anchor': 'end' }, svg); t3.textContent = `${maxX.toLocaleString('en')} steps`;
+}
+
+/** A KPI in the points table on one line: a list as its length, a long text cut; the whole value in the tooltip. */
+function kcell(v) {
+  if (Array.isArray(v)) return `<span title="${esc(v.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join('\n'))}">${v.length}</span>`;
+  if (typeof v === 'string' && v.length > 32) return `<span title="${esc(v)}">${esc(v.slice(0, 31))}…</span>`;
+  return fmt(v);
+}
+
+/** Keeps what is scrolled into view below the sticky header, whatever its height. */
+function headerPadding() { document.documentElement.style.scrollPaddingTop = `${document.querySelector('header').offsetHeight + 8}px`; }
+addEventListener('resize', headerPadding);
+
+function table(id, head, rows) {
+  $(id).innerHTML = rows.length ? `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>` + rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') : '<tr><td class="mute">none</td></tr>';
+}
+
+function render(s) {
+  if (!s) return;
+  SNAP = s;
+  $('mode').textContent = s.mode + (s.info && s.info.experiment ? ' · ' + s.info.experiment : '');
+  $('status').textContent = s.running ? 'running' : 'done';
+  $('info').textContent = s.info ? `spec compile ${fmt(s.info.compile_s || 0)} s` : '';
+  headerPadding();
+  const pct = (a, b) => b ? ` <span class="mute" style="font-size:12px">${(100 * a / b).toFixed(0)}%</span>` : '';
+  $('counters').innerHTML = [
+    tile('walks', fmt(s.walks)), tile('steps', fmt(s.steps)), tile('steps/s', fmt(s.steps_per_s)),
+    tile(`outcomes reached / ${fmt(s.outcomes_declared)}`, fmt(s.outcomes_reached) + pct(s.outcomes_reached, s.outcomes_declared)),
+    tile(`states reached / ${fmt(s.states_declared)}`, fmt(s.states_reached) + pct(s.states_reached, s.states_declared)),
+    tile(`transitions / ${fmt(s.transitions_declared)}`, fmt(s.transitions_reached) + pct(s.transitions_reached, s.transitions_declared)),
+    tile('distinct abstract states', fmt(s.abstract_states)), tile('branch points', fmt(s.branch_points)),
+    tile('violations', fmt(s.violation_count), s.violation_count > 0), tile('threads', fmt(s.threads)),
+  ].join('');
+  paintHits('s-', s.state_hits || [], prevHits.s);
+  paintHits('t-', s.transition_hits || [], prevHits.t);
+  paintHits('o-', s.outcome_hits || [], prevHits.o);
+  prevHits = { s: s.state_hits || [], t: s.transition_hits || [], o: s.outcome_hits || [] };
+  for (const d of MODEL.domains) {
+    let r = 0, n = 0, sr = 0, sn = 0;
+    for (const c of d.commands) for (const o of c.outcomes) { n++; if ((s.outcome_hits[o.gid] || 0) > 0) r++; }
+    for (const e of d.entities) for (let i = 0; i < e.states.length; i++) { sn++; if ((s.state_hits[e.state_base + i] || 0) > 0) sr++; }
+    const span = document.getElementById('dsum-' + d.name);
+    if (span) span.innerHTML = `outcomes ${r}/${n} <span class="barbg"><span class="bar" style="width:${n ? 80 * r / n : 0}px"></span></span> · states ${sr}/${sn}`;
+  }
+  growth(s.growth);
+  $('feed').innerHTML = (s.feed || []).slice().reverse().map(f => {
+    const bad = ['unsupported', 'unavailable', 'invariant', 'undeclared', 'not_granted'].includes(f.outcome);
+    return `<li><span class="mute">w${f.walk}·${f.step}</span> ${esc(short(f.command))} &rarr; <span class="${bad ? 'err' : 'ok'}">${esc(f.outcome)}</span> <span class="mute">${esc(f.events.join(' '))} ${esc(f.note || '')}</span></li>`;
+  }).join('');
+  if (s.timeline && s.timeline.length) {
+    $('timeline-box').hidden = false;
+    $('timeline').innerHTML = s.timeline.map(t => `<div class="tl"><span class="mute">${t.index}</span><span class="mute">${esc(t.phase)}</span><span>${t.fault ? `<span class="fault">${esc(t.fault)}</span> ` : ''}${esc(t.label)}</span><span class="mono">${esc(short(t.command))} &rarr; <span class="${/^(unsupported|unavailable|invariant|undeclared|skipped)/.test(t.outcome) ? 'err' : 'ok'}">${esc(t.outcome)}</span></span><span>${t.checks.map(c => `<span class="sq${c.ok ? '' : ' bad'}" title="${esc(c.name + (c.detail ? ': ' + c.detail : ''))}"></span>`).join('')}</span></div>`).join('');
+  }
+  if ((s.search && s.search.length) || (s.info && s.info.search)) $('search-box').hidden = false;
+  if (s.search && s.search.length) {
+    const keys = Object.keys(s.search[0].point || {});
+    const kpis = Object.keys(s.search[0].kpis || {});
+    let best = null; for (const p of s.search) if (p.feasible && (best === null || p.fitness > best.fitness)) best = p;
+    $('search').innerHTML = `<p class="mute">${s.search.length} points visited${best ? `; best fitness ${fmt(best.fitness)} at ${esc(JSON.stringify(best.point))}` : ''}</p><div class="tscroll"><table><tr><th>#</th>${keys.map(k => `<th>${esc(k)}</th>`).join('')}${kpis.map(k => `<th>${esc(k)}</th>`).join('')}<th>fitness</th></tr>` +
+      s.search.map((p, i) => `<tr${p === best ? ' style="background:var(--hitbg)"' : ''}><td>${i + 1}</td>${keys.map(k => `<td class="mono">${esc(JSON.stringify(p.point[k]))}</td>`).join('')}${kpis.map(k => `<td class="n">${kcell(p.kpis[k])}</td>`).join('')}<td class="n ${p.feasible ? '' : 'err'}">${p.feasible ? fmt(p.fitness) : 'infeasible'}</td></tr>`).join('') + '</table></div>';
+  }
+  if (s.matches && s.matches.length) {
+    $('matches-box').hidden = false;
+    table('matches', ['pattern', 'walk', 'seed', 'step', 'rows'], s.matches.map(m => [esc(m.pattern), m.walk, m.seed, m.step, `<span class="mono">${(m.rows || []).map(esc).join('<br>')}</span>`]));
+  }
+  table('violations', ['kind', 'command', 'walk', 'seed', 'step', 'detail'], (s.violations || []).map(v => [esc(v.kind), `<span class="mono">${esc(v.command)}</span>`, v.walk, v.seed, v.step, esc(v.detail)]));
+  if (s.gaps && s.gaps.top) {
+    $('gaps-box').hidden = false;
+    table('gaps', ['kind', 'what', 'where'], s.gaps.top.map(g => [esc(g.kind), esc(g.what), `<span class="mono">${esc(g.at)}</span>`]));
+  }
+  const never = (s.gaps && s.gaps.commands_never_accepted || []).filter(n => n.class);
+  if (never.length) {
+    $('never-box').hidden = false;
+    never.sort((a, b) => (b.class.startsWith('blocked') - a.class.startsWith('blocked')) || a.command.localeCompare(b.command));
+    $('never-sum').textContent = `(${never.length}; blocked-by ${s.gaps.blocked_by_count || 0})`;
+    const counts = (m) => Object.entries(m || {}).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => `${k} ${v}`).join(', ');
+    table('never', ['command', 'class', 'refusals', 'why'], never.map(n => [`<span class="mono">${esc(short(n.command))}</span>`, `<span class="mono${n.class.startsWith('blocked') ? ' err' : ''}">${esc(n.class)}</span>`, esc(counts(n.refusals)), esc(n.why)]));
+  }
+  table('branchcmds', ['command', 'abstract states that branch', 'largest fan-out'], (s.branch_commands || []).slice(0, 25).map(b => [`<span class="mono">${esc(b.command)}</span>`, b.states, b.max_fanout]));
+  table('branch', ['command', 'outcomes', 'from abstract state'], (s.branch || []).slice(0, 25).map(b => [`<span class="mono">${esc(short(b.command))}</span>`, esc(b.outcomes.join(', ')), `<span class="mono mute">${esc(b.state)}</span>`]));
+  table('errors', ['kind', 'command', 'count', 'why'], (s.errors || []).slice(0, 60).map(e => [esc(e.kind), `<span class="mono">${esc(short(e.command))}</span>`, e.count, esc(e.why)]));
+  if (s.notes && s.notes.length) { $('notes-box').hidden = false; $('notes').innerHTML = s.notes.map(n => `<li>${esc(n)}</li>`).join(''); }
+}
+
+// ---- the search player: plays the recorded rows of `search`, one row (`seq`) a frame --------------
+// It computes nothing a row does not hold except positions on the screen. Its state is the one
+// object P, written on #player as data-frame, data-playing, data-speed, data-x-axis, data-y-axis.
+const P = { frame: 0, playing: LIVE, speed: 4, x: 0, y: 1, timer: null, seen: false, running: false, climb: false, rows: [], axes: [], axisNames: '' };
+const valueText = (v) => typeof v === 'string' ? v : JSON.stringify(v);
+const lastSeq = () => P.rows.length ? P.rows[P.rows.length - 1].seq : 0;
+
+function hasClimb(s) {
+  const axes = s.info && s.info.search && s.info.search.axes;
+  const rows = Array.isArray(s.search) ? s.search : [];
+  return Array.isArray(axes) && axes.length > 0 && rows.every(r => typeof r.seq === 'number' && typeof r.decision === 'string' && Array.isArray(r.index) && 'parent' in r && 'best' in r);
+}
+
+function playerReceive(s) {
+  P.running = !!s.running;
+  P.climb = hasClimb(s);
+  P.rows = Array.isArray(s.search) ? s.search : [];
+  if (!P.climb) {
+    P.playing = false; clearTimeout(P.timer); P.timer = null;
+    $('player').hidden = true; $('p-land').innerHTML = ''; $('p-curve').innerHTML = '';
+    $('no-climb').innerHTML = P.rows.length ? '<p class="mute" data-no-climb>This run has no recorded climb: its search rows were written without seq, decision, parent and best, so there is nothing to play. The table lists the points.</p>' : '';
+    return;
+  }
+  $('no-climb').innerHTML = '';
+  $('player').hidden = false;
+  P.axes = s.info.search.axes;
+  const names = P.axes.map(a => a.name).join('\n');
+  if (names !== P.axisNames) {
+    P.axisNames = names;
+    P.x = 0; P.y = P.axes.length > 1 ? 1 : -1;
+    $('p-x').innerHTML = P.axes.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('');
+    $('p-y').innerHTML = P.axes.length > 1 ? P.axes.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('') : '<option value="">none</option>';
+    $('p-y').disabled = P.axes.length < 2;
+  }
+  if (!P.seen) { P.seen = true; if (!LIVE) P.frame = lastSeq(); }
+  P.frame = Math.min(P.frame, lastSeq());
+  if (P.playing && P.timer === null) arm();
+  playerDraw();
+}
+
+function arm() { clearTimeout(P.timer); P.timer = P.playing ? setTimeout(tick, 1000 / P.speed) : null; }
+
+function tick() {
+  P.timer = null;
+  if (!P.playing) return;
+  if (P.frame < lastSeq()) P.frame++;
+  if (P.frame >= lastSeq() && !P.running) P.playing = false;
+  playerDraw(); arm();
+}
+
+function play() {
+  if (!P.climb) return;
+  if (P.frame >= lastSeq() && !P.running) P.frame = P.rows.length ? P.rows[0].seq : 0;
+  P.playing = true; playerDraw(); arm();
+}
+function pause() { P.playing = false; clearTimeout(P.timer); P.timer = null; playerDraw(); }
+function step(by) {
+  pause();
+  const first = P.rows.length ? P.rows[0].seq : 0;
+  P.frame = Math.max(first, Math.min(lastSeq(), P.frame + by));
+  playerDraw();
+}
+
+/** The value index tuple the axes not shown are fixed at: the best point up to the frame. */
+function fixedIndex(shown) {
+  let best = null;
+  for (const r of shown) if (r.feasible && typeof r.fitness === 'number' && r.fitness === r.best && (best === null || r.fitness > best.fitness)) best = r;
+  const at = best || shown[shown.length - 1] || P.rows[0];
+  return at ? at.index : P.axes.map(() => 0);
+}
+
+function playerDraw() {
+  const root = $('player');
+  root.dataset.frame = String(P.frame);
+  root.dataset.playing = String(P.playing);
+  root.dataset.speed = String(P.speed);
+  if (!P.climb) return;
+  root.dataset.xAxis = P.axes[P.x].name;
+  root.dataset.yAxis = P.y >= 0 ? P.axes[P.y].name : '';
+  $('p-x').value = P.axes[P.x].name;
+  $('p-y').value = P.y >= 0 ? P.axes[P.y].name : '';
+  $('p-speed').value = String(P.speed);
+  const slider = $('p-frame');
+  slider.min = String(P.rows.length ? P.rows[0].seq : 0); slider.max = String(lastSeq()); slider.value = String(P.frame);
+  const shown = P.rows.filter(r => r.seq <= P.frame);
+  const now = shown[shown.length - 1];
+  $('p-caption').textContent = `row ${P.frame} of ${lastSeq()}` + (now ? ` · round ${now.round} · ${now.decision} · ${JSON.stringify(now.point)} · ${now.error ? 'failed' : now.feasible ? 'fitness ' + fmt(now.fitness) : 'infeasible'} · best ${now.best === null ? 'none yet' : fmt(now.best)}` : '');
+  landscape(shown);
+  curve(shown);
+}
+
+/** Where each value index of an axis is drawn, 0 nearest the origin: by value when every value is a number, else as declared. */
+function ranks(values) {
+  const order = values.map((_, i) => i);
+  if (values.every(v => typeof v === 'number')) order.sort((a, b) => values[a] - values[b]);
+  const rank = [];
+  order.forEach((i, k) => { rank[i] = k; });
+  return rank;
+}
+
+function landscape(shown) {
+  const svg = $('p-land'); svg.innerHTML = '';
+  const xa = P.axes[P.x], ya = P.y >= 0 ? P.axes[P.y] : null;
+  const nx = xa.values.length, ny = ya ? ya.values.length : 1;
+  const C = 64, T = 8;
+  const xr = ranks(xa.values), yr = ya ? ranks(ya.values) : [0];
+  const L = 30 + 7 * Math.min(24, ya ? Math.max(...ya.values.map(v => valueText(v).length)) : 0);
+  const width = L + nx * C + 8, height = T + ny * C + 48;
+  const left = (i) => L + xr[i] * C, top = (j) => T + (ny - 1 - yr[j]) * C;
+  svg.setAttribute('width', width); svg.setAttribute('height', height); svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const fixed = fixedIndex(shown);
+  const off = (r) => r.index.some((v, k) => k !== P.x && k !== P.y && v !== fixed[k]);
+  const at = new Map();
+  for (const r of shown) if (!off(r)) at.set(`${r.index[P.x]},${ya ? r.index[P.y] : 0}`, r);
+  const fits = P.rows.filter(r => r.feasible && typeof r.fitness === 'number').map(r => r.fitness);
+  const lo = Math.min(...fits), hi = Math.max(...fits);
+  const cx = (i) => left(i) + C / 2, cy = (j) => top(j) + C / 2;
+  for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+    const r = at.get(`${i},${j}`);
+    const state = !r ? 'empty' : r.error ? 'failed' : r.feasible ? 'feasible' : 'infeasible';
+    const attrs = { x: left(i) + 1, y: top(j) + 1, width: C - 2, height: C - 2, rx: 4, class: 'cell ' + state, 'data-cell': `${i},${j}`, 'data-state': state };
+    if (r) attrs['data-fitness'] = String(r.fitness);
+    if (state === 'feasible') { const t = hi > lo ? (r.fitness - lo) / (hi - lo) : 1; attrs.fill = `hsl(${Math.round(210 - 90 * t)}, 60%, ${Math.round(80 - 25 * t)}%)`; }
+    const cell = el('rect', attrs, svg);
+    if (r) { const tt = el('title', {}, cell); tt.textContent = `${JSON.stringify(r.point)}: ${state}${state === 'feasible' ? ' ' + r.fitness : ''}`; }
+    if (state === 'feasible') { const tx = el('text', { x: left(i) + C - 6, y: top(j) + C - 7, 'text-anchor': 'end', class: 'ct' }, svg); tx.textContent = fmt(r.fitness); }
+  }
+  xa.values.forEach((v, i) => { const t = el('text', { x: cx(i), y: T + ny * C + 18, 'text-anchor': 'middle', 'data-axis-label': 'x', 'data-value-index': i }, svg); t.textContent = valueText(v); });
+  if (ya) ya.values.forEach((v, j) => { const t = el('text', { x: L - 8, y: cy(j) + 5, 'text-anchor': 'end', 'data-axis-label': 'y', 'data-value-index': j }, svg); t.textContent = valueText(v); });
+  const xn = el('text', { x: L + nx * C / 2, y: T + ny * C + 40, 'text-anchor': 'middle', class: 'an' }, svg); xn.textContent = xa.name;
+  if (ya) { const ym = T + ny * C / 2; const yn = el('text', { x: 14, y: ym, 'text-anchor': 'middle', transform: `rotate(-90 14 ${ym})`, class: 'an' }, svg); yn.textContent = ya.name; }
+  // The climber's path up to the frame.
+  const bySeq = new Map(P.rows.map(r => [r.seq, r]));
+  const pos = (r) => [cx(r.index[P.x]), cy(ya ? r.index[P.y] : 0)];
+  let current = null;
+  for (const r of shown) {
+    const g = el('g', { class: 'pm' + (off(r) ? ' off' : ''), 'data-path-step': r.seq, 'data-decision': r.decision }, svg);
+    const [x, y] = pos(r);
+    if (r.decision === 'start') {
+      el('circle', { cx: x, cy: y, r: 12, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 3 }, g);
+      current = r;
+    } else if (r.decision === 'accepted') {
+      if (r.parent !== null && r.parent !== undefined) g.setAttribute('data-parent', r.parent);
+      const from = bySeq.get(r.parent);
+      if (from) { const [x0, y0] = pos(from); el('line', { x1: x0, y1: y0, x2: x, y2: y, stroke: 'var(--accent)', 'stroke-width': 3 }, g); }
+      el('circle', { cx: x, cy: y, r: 6, fill: 'var(--accent)' }, g);
+      current = r;
+    } else if (r.decision === 'restart') {
+      if (current) { const [x0, y0] = pos(current); el('path', { d: `M${x0},${y0} Q${(x0 + x) / 2},${Math.max(T, Math.min(y0, y) - C * 0.6)} ${x},${y}`, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 2, 'stroke-dasharray': '5 4' }, g); }
+      el('path', { d: `M${x},${y - 10} L${x + 10},${y} L${x},${y + 10} L${x - 10},${y} z`, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 2.5 }, g);
+      current = r;
+    } else {
+      el('path', { d: `M${x - 7},${y - 7} L${x + 7},${y + 7} M${x + 7},${y - 7} L${x - 7},${y + 7}`, stroke: 'var(--mute)', 'stroke-width': 2 }, g);
+    }
+    if (r.seq === P.frame) el('circle', { cx: x, cy: y, r: 20, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 1.5, 'stroke-dasharray': '3 3' }, g);
+    const tt = el('title', {}, g); tt.textContent = `row ${r.seq}: ${r.decision}${r.parent ? ' from row ' + r.parent : ''}`;
+  }
+}
+
+function curve(shown) {
+  const svg = $('p-curve'); svg.innerHTML = '';
+  const W = 420, H = 240, L = 40, R = 10, T = 10, B = 28;
+  const bests = P.rows.filter(r => typeof r.best === 'number').map(r => r.best);
+  const lo = bests.length ? Math.min(...bests) : 0, hi = bests.length ? Math.max(...bests) : 1;
+  const n = Math.max(lastSeq(), 2);
+  const sx = (seq) => L + (seq - 1) / (n - 1) * (W - L - R);
+  const sy = (b) => H - B - (hi > lo ? (b - lo) / (hi - lo) : 0.5) * (H - B - T);
+  el('line', { x1: L, y1: H - B, x2: W - R, y2: H - B, stroke: 'var(--line)' }, svg);
+  el('line', { x1: L, y1: T, x2: L, y2: H - B, stroke: 'var(--line)' }, svg);
+  const t0 = el('text', { x: L - 4, y: sy(hi) + 4, 'text-anchor': 'end' }, svg); t0.textContent = bests.length ? fmt(hi) : '';
+  const t1 = el('text', { x: L - 4, y: sy(lo) + 4, 'text-anchor': 'end' }, svg); t1.textContent = bests.length && hi > lo ? fmt(lo) : '';
+  const t2 = el('text', { x: W - R, y: H - 8, 'text-anchor': 'end', class: 'mute' }, svg); t2.textContent = `row (${lastSeq()})`;
+  const line = shown.filter(r => typeof r.best === 'number').map(r => `${sx(r.seq).toFixed(1)},${sy(r.best).toFixed(1)}`);
+  if (line.length > 1) el('polyline', { points: line.join(' '), fill: 'none', stroke: 'var(--hit)', 'stroke-width': 2 }, svg);
+  for (const r of shown) {
+    const has = typeof r.best === 'number';
+    const c = el('circle', { cx: sx(r.seq), cy: has ? sy(r.best) : H - B, r: 3, fill: has ? 'var(--hit)' : 'none', stroke: has ? 'var(--hit)' : 'var(--miss)', 'data-curve-point': r.seq, 'data-best': has ? String(r.best) : '' }, svg);
+    const tt = el('title', {}, c); tt.textContent = `row ${r.seq}: best ${has ? r.best : 'none yet'}`;
+  }
+  if (P.frame > 0) el('line', { x1: sx(P.frame), y1: T, x2: sx(P.frame), y2: H - B, stroke: 'var(--accent)', 'stroke-dasharray': '3 2' }, svg);
+}
+
+$('p-play').addEventListener('click', play);
+$('p-pause').addEventListener('click', pause);
+$('p-fwd').addEventListener('click', () => step(1));
+$('p-back').addEventListener('click', () => step(-1));
+$('p-frame').addEventListener('input', (ev) => { P.frame = Number(ev.target.value); playerDraw(); });
+$('p-speed').addEventListener('change', (ev) => { P.speed = Number(ev.target.value); if (P.playing) arm(); playerDraw(); });
+$('p-x').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.y) P.y = P.x; P.x = i; playerDraw(); });
+$('p-y').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.x) P.x = P.y; P.y = i; playerDraw(); });
+
+window.weftPlayer = { receive(s) { if (!s) return; render(s); playerReceive(s); } };
+
+buildDomains();
+if (location.hash.startsWith('#open')) { const q = decodeURIComponent(location.hash.slice(6)); for (const d of $('domains').children) if (!q || d.dataset.text.includes(q)) d.open = true; }
+if (SNAP) window.weftPlayer.receive(SNAP);
+if (LIVE) {
+  const source = new EventSource('/events');
+  source.onmessage = (ev) => { const s = JSON.parse(ev.data); window.weftPlayer.receive(s); if (!s.running && s.gaps) source.close(); };
+}
+</script>
+</body>
+</html>

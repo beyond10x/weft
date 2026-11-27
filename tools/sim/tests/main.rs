@@ -937,6 +937,103 @@ fn search_rows_do_not_depend_on_threads() {
     assert_eq!(seen[0], seen[1]);
 }
 
+// ---- the page's search player -----------------------------------------------------------------
+
+/// The committed page the browser checks of the player read (`website/ux/sim-player.spec.ts`).
+fn player_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../website/ux/fixtures/sim-player.html")
+}
+
+/// The command that writes the fixture page again, named by the test that compares it.
+const WRITE_PLAYER_FIXTURE: &str =
+    "cd tools/sim && WEFT_SIM_WRITE_PLAYER_FIXTURE=1 cargo nextest run the_player_page";
+
+/// The snapshot the fixture page inlines: the counters, hits and search of a fit run of the search
+/// fixture. Times, the command line and the file paths of the gaps vary by host and run, so they
+/// are left out.
+fn player_snapshot(result: &serde_json::Value) -> serde_json::Value {
+    let mut snap = serde_json::Map::new();
+    for key in [
+        "mode",
+        "running",
+        "walks",
+        "steps",
+        "threads",
+        "outcomes_declared",
+        "outcomes_reached",
+        "states_declared",
+        "states_reached",
+        "transitions_declared",
+        "transitions_reached",
+        "abstract_states",
+        "branch_points",
+        "violation_count",
+        "violations",
+        "outcome_hits",
+        "state_hits",
+        "transition_hits",
+        "search",
+    ] {
+        snap.insert(key.to_owned(), result[key].clone());
+    }
+    snap.insert("info".to_owned(), serde_json::json!({"experiment": result["info"]["experiment"], "search": result["info"]["search"]}));
+    serde_json::Value::Object(snap)
+}
+
+/// Acceptance 11 and 14 of the player: the page rendered from the fixture search holds the player
+/// and the inlined rows, equals the committed fixture page byte for byte, and its live mode passes
+/// each snapshot of `/events` to `window.weftPlayer.receive`.
+#[test]
+fn the_player_page_of_the_fixture_search_is_the_committed_fixture() {
+    let (rows, result) = search_rows("player-page", &[]);
+    assert!(
+        rows.iter().any(|r| r["decision"] == "restart"),
+        "the fixture run holds a restart"
+    );
+    let snap = player_snapshot(&result);
+    let cat = Catalog::new(weft_sim::spec::load(&fixture_search()).expect("the fixture compiles"));
+    let model = cat.model_json();
+    let page = weft_sim::report::page(&model, &snap, false);
+    let path = player_fixture();
+    if std::env::var_os("WEFT_SIM_WRITE_PLAYER_FIXTURE").is_some() {
+        std::fs::write(&path, &page).unwrap();
+    }
+    assert!(
+        page.contains(r#"<div id="player""#),
+        "the page has the player"
+    );
+    let inlined = format!("let SNAP = {};", snap.to_string().replace("</", "<\\/"));
+    assert!(
+        page.contains(&inlined),
+        "the page inlines the snapshot and its rows"
+    );
+    assert!(
+        !page.contains(env!("CARGO_MANIFEST_DIR")),
+        "no path of this host"
+    );
+
+    let live = weft_sim::report::page(&model, &serde_json::Value::Null, true);
+    assert!(live.contains("const LIVE = true;"));
+    assert!(
+        live.contains("source.onmessage = (ev) => { const s = JSON.parse(ev.data); window.weftPlayer.receive(s);"),
+        "the live page passes each snapshot of /events to the player"
+    );
+
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    if committed != page {
+        let at = committed
+            .bytes()
+            .zip(page.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        panic!(
+            "website/ux/fixtures/sim-player.html differs from the page rendered from the fixture search at byte {at} ({} bytes committed, {} rendered); write it again with: {WRITE_PLAYER_FIXTURE}",
+            committed.len(),
+            page.len()
+        );
+    }
+}
+
 /// A weight that is not a finite number makes every fitness infinite or NaN, so no climb step
 /// compares: the experiment is refused at load, naming the weight. A finite weight loads.
 #[test]
