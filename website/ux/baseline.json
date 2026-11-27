@@ -7,11 +7,11 @@
         "tolerance": 0.01
       },
       "screen_only.actions": {
-        "value": 7,
+        "value": 5,
         "tolerance": 0
       },
       "screen_only.looks": {
-        "value": 11,
+        "value": 10,
         "tolerance": 0
       }
     },
@@ -39,6 +39,16 @@
         "tolerance": 0
       }
     },
+    "page.docs-concepts": {
+      "axe.minor": {
+        "value": 1,
+        "tolerance": 0
+      },
+      "axe.moderate": {
+        "value": 0,
+        "tolerance": 0
+      }
+    },
     "page.docs-concepts-claims": {
       "axe.minor": {
         "value": 1,
@@ -49,7 +59,27 @@
         "tolerance": 0
       }
     },
+    "page.docs-concepts-components": {
+      "axe.minor": {
+        "value": 1,
+        "tolerance": 0
+      },
+      "axe.moderate": {
+        "value": 0,
+        "tolerance": 0
+      }
+    },
     "page.docs-concepts-formations": {
+      "axe.minor": {
+        "value": 1,
+        "tolerance": 0
+      },
+      "axe.moderate": {
+        "value": 0,
+        "tolerance": 0
+      }
+    },
+    "page.docs-concepts-managed-services": {
       "axe.minor": {
         "value": 1,
         "tolerance": 0
@@ -239,11 +269,11 @@
         "tolerance": 0.01
       },
       "screen_only.actions": {
-        "value": 8,
+        "value": 7,
         "tolerance": 0
       },
       "screen_only.looks": {
-        "value": 8,
+        "value": 7,
         "tolerance": 0
       }
     },

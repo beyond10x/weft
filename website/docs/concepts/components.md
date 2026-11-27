@@ -1,0 +1,90 @@
+---
+title: Components
+description: The four planned server components of weft (weft-api, weft-control, weft-node, weft-edge), the plane each runs in, the domains each owns, and the weft CLI.
+status: planned
+---
+
+weft runs as four server components and one command-line client. The specification declares
+the components in
+[`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml): each
+owns a set of domains, accepts every command of those domains and publishes their events. A
+domain sits with exactly one component.
+
+:::caution[Planned]
+Specified, not built. The components and their contracts are part of the specification, which
+`task check` validates. No release of weft runs them.
+:::
+
+Runs today: none of the four components serves a user, no offering provisions, and no release
+ships them. The walking
+skeleton under `product/cloud/` builds a control host binary, `weft`, that serves the generated
+HTTP surfaces of `weft-api` and `weft-control` and the node channel, and a node agent,
+`weft-agent`, that joins it. There is no login yet: built without its test feature, the binary
+answers every request as one without a caller. The gate runs a test build of both in its tests.
+`weft-edge` does not run.
+
+## The components
+
+Generated from the specification by `tools/docs-spec-pages.sh`; `task check` fails when the
+table no longer matches it.
+
+<!-- generated: components -->
+| Component | What it does | Domains it owns | Commands it accepts |
+|---|---|---|---|
+| `weft-api` | The user API: logins, API tokens and the authorization of every management call; tenants, accounts and principals; formations; the artifacts an account registers. | `weft.access`, `weft.accounts`, `weft.artifacts`, `weft.formations` | 72 |
+| `weft-control` | The control plane: the cluster and its inventory, tenant storage, workloads and their instances, claims, scheduling, the record of each node session, workload identity, secret custody and delivery, telemetry, deployments and releases, the catalog and metering. | `weft.catalog`, `weft.claims`, `weft.cluster`, `weft.deployments`, `weft.identity`, `weft.infrastructure`, `weft.inventory`, `weft.metering`, `weft.nodes`, `weft.observability`, `weft.pipelines`, `weft.resources`, `weft.scheduling`, `weft.secrets`, `weft.workloads` | 345 |
+| `weft-edge` | The edge gateway: the ready instances behind each route of a formation, the requests held while a sleeping service wakes, and the certificate of each public endpoint. | `weft.edge` | 13 |
+| `weft-node` | The node agent: the processes of the instances assigned to its node, their restarts and backoff, and the local endpoint where an instance asks for its identity document and its secrets. | `weft.node` | 9 |
+<!-- /generated: components -->
+
+How the specification places a domain: `weft-control` owns every domain with a command the node
+agent sends over its session or one of the control plane's own actors issues (the scheduler, the
+release controller); `weft-api` owns the user's other domains. The user reaches both through one
+API: `weft-api` forwards the user commands of the control plane's domains (`DefineWorkload`,
+`CreateSecret`) to `weft-control`.
+
+## Planes
+
+Each component runs in one plane of the design
+([`docs/domain-sketch.md`](https://github.com/beyond10x/weft/blob/main/docs/domain-sketch.md),
+§ Structure).
+
+| Plane | Component | What the plane does |
+|---|---|---|
+| Management | `weft-api` | The user API: tenants, accounts, formations, secrets, deploys. Called by the CLI and by CI. |
+| Control | `weft-control` | State, scheduler, translators, identity issuer, secret delivery. Decides; runs no workload. |
+| Worker | `weft-node` | One agent per node: starts, observes and stops instances. Holds no state the control plane does not know. |
+| Data | `weft-edge` | Traffic to public endpoints: the ready backends of each route, requests held while a sleeping service wakes, certificates. |
+
+How they talk:
+
+- The CLI reaches the user API over HTTP, authenticated per access mode.
+- A node dials out to the control plane: mutual TLS, one long-lived session per node
+  ([`protocols/node-channel.yaml`](https://github.com/beyond10x/weft/blob/main/protocols/node-channel.yaml)).
+  A worker opens no inbound port.
+- Exec, attach, logs and port forwards run from the CLI through the user API and the node's
+  session into an instance
+  ([`protocols/exec-channel.yaml`](https://github.com/beyond10x/weft/blob/main/protocols/exec-channel.yaml)),
+  never over a direct connection to the node.
+- An instance asks its node's local endpoint for its identity document and its secrets; only that
+  instance can reach it.
+
+In the `local` placement, one machine for trying weft, the four server components run in one
+process.
+
+## weft CLI
+
+`weft` is the command-line client of the user API: login, contexts, deploy, plan, logs and
+secrets. It is no component: it holds no state and no power of its own beyond the caller's, and
+every call goes through `weft-api`. Its commands will be specified as an `ess-cli/2` surface of
+the specification; that document is not written yet.
+
+Where the code will live: the cloud, with the server components and the operator's CLI, under
+`product/cloud/`; a consumer app such as the user's `weft` CLI in a product directory of its own
+beside it, `product/<app>/`.
+
+## Related
+
+- [Managed services](managed-services.md): the catalog, which `weft-control` owns.
+- [Nodes and clusters](nodes-and-clusters.md): the machines `weft-node` runs on.
+- [Read the specification](../specification/read.md): the files of the specification.
