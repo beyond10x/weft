@@ -12,6 +12,14 @@ none is written before the specification of what it implements.
 
 ## Layout
 
+- `product/<product>/crates/<crate>`: the Rust crates of the root workspace. `product/cloud/` is
+  weft's cloud (its operator CLI included); a consumer app, such as the user's management CLI,
+  gets `product/<app>/`.
+- `target/generated/`: the code ESS synthesizes from `ess/`, not committed (`tools/synth.sh`,
+  cached by the digest of its sources). Crates use it through path dependencies, so a cargo
+  command in the root workspace fails with "failed to read
+  `.../target/generated/crates/<crate>/Cargo.toml`" until `tools/synth.sh` has run once;
+  `task test` runs it first.
 - `ess/`: the ESS domain model. `system.yaml`, `ess-inputs.yaml`, `components.yaml`,
   `<layer>/<name>.yaml` (one bounded context per file, one directory per layer, `docs/layers.md`),
   `scenarios/`. A domain names only domains of its own or a lower layer. Between domains it

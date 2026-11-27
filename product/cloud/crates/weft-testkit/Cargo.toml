@@ -15,7 +15,8 @@ name = "main"
 path = "tests/main.rs"
 
 [dev-dependencies]
-weft-probe-api = { path = "../../tests/fixtures/generated-probe/crates/weft-probe-api" }
+weft-probe-api = { path = "../../../../tests/fixtures/generated-probe/crates/weft-probe-api" }
+weft-server = { path = "../../../../target/generated/crates/weft-server" }
 
 [lints]
 workspace = true

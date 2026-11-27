@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-workspace-gate
 kind: story
-status: active
+status: implemented
 title: Root Cargo workspace, pinned toolchain and a nextest gate with a 60 s kill and a 120 s step
 relations:
 - decomposes: epic:walking-skeleton
@@ -19,7 +19,7 @@ scope:
 - confidence: cited
   path: Taskfile.yml
 - confidence: cited
-  path: crates/weft-testkit
+  path: product/cloud/crates/weft-testkit
 - confidence: cited
   path: rust-toolchain.toml
 - confidence: cited
@@ -40,10 +40,11 @@ scope:
   path: tools/test-step.sh
 - confidence: cited
   path: tools/test-teardown.d/README.md
-revision: 11
+revision: 14
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 11, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T10:36:58Z", actor: "human:operator", revision: 12, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
@@ -55,20 +56,20 @@ in this workspace and is held by this gate. Blocked by no ESS gap.
 weft has no implementation code yet. `tools/sim` (weft-sim) is a Cargo project of its own with
 `rust-toolchain.toml` 1.98.1 and `.config/nextest.toml`; it stays its own crate
 (`docs/implementation.md` § Shape). This story adds the one Cargo workspace at the repository root
-that weft code lands in (`crates/`: `weft-impl`, `weft-bin`, `weft-client`, `weft-controllers`,
+that weft code lands in (`product/cloud/crates/`: `weft-impl`, `weft-bin`, `weft-client`, `weft-controllers`,
 `weft-agent`, `weft-testkit`, `weft-conform-target`), makes room for the generated crates under
 `generated/`, and puts the tests in `slot task check` and the CI Gate job with the budget of
 `~/beyond10x/AGENTS.md` § Tests stay fast enforced by the runner.
 
-- `members = ["crates/*"]`, so a later story adds a crate without editing the root manifest.
+- `members = ["product/cloud/crates/*"]`, so a later story adds a crate without editing the root manifest.
 - Generated crates: ESS writes `generated/Cargo.toml` with a `[workspace]` of its own
   (`generated/crates/weft-types`, `weft-server`, `weft-control`, `weft-system`, `weft-api`,
   `weft-edge`, `weft-node`; synthesized sample, 2026-11-27), and generated files are never edited.
   Listing those crates as members of the root workspace would give them two workspace roots, so the
   root manifest sets `exclude = ["generated"]` and weft crates depend on them by path; they build
   in the root `target/` and are locked by the root `Cargo.lock`. Lints and `-D warnings` of the root
-  apply to `crates/` only. This story proves the form with a probe: `tests/fixtures/generated-probe/`
-  holds a two-crate tree with its own `[workspace]` manifest, and `crates/weft-testkit` depends on
+  apply to `product/cloud/crates/` only. This story proves the form with a probe: `tests/fixtures/generated-probe/`
+  holds a two-crate tree with its own `[workspace]` manifest, and `product/cloud/crates/weft-testkit` depends on
   one of its crates by path in a dev-dependency test that the step runs.
 - The generated `weft-node` crate takes that package name, so the node agent of this epic is the
   package `weft-agent`.
@@ -82,7 +83,7 @@ that weft code lands in (`crates/`: `weft-impl`, `weft-bin`, `weft-client`, `wef
   with exit 124 and then prints the ten slowest tests from the JUnit output nextest writes under
   `target/nextest/` (also to `target/nextest/slowest.txt`). Before the tests it prints `rustc -V`
   and fails when the version differs from the pinned channel.
-- `crates/weft-testkit` starts as a library with one trivial test and the probe test.
+- `product/cloud/crates/weft-testkit` starts as a library with one trivial test and the probe test.
 - Hooks, so later stories add a step without editing `Taskfile.yml` or the workflow:
   `tools/run-hooks.sh <dir>` (POSIX sh) runs every executable file of a directory in name order and
   stops at the first that fails. Four directories, each with a `README.md` naming its contract:
@@ -123,7 +124,7 @@ None. This story touches no entity of `ess/`.
 - `rust-toolchain.toml` (root)
 - `.config/nextest.toml` (root: `slow-timeout = { period = "30s", terminate-after = 2 }`, JUnit
   output)
-- `crates/weft-testkit/` (`Cargo.toml`, `src/lib.rs`, `tests/main.rs`)
+- `product/cloud/crates/weft-testkit/` (`Cargo.toml`, `src/lib.rs`, `tests/main.rs`)
 - `tests/fixtures/generated-probe/`
 - `tools/test-step.sh`, `tools/test-gate-budget.sh`, `tools/budget-fixture/`, `tools/run-hooks.sh`
 - `tools/test-setup.d/README.md`, `tools/test-teardown.d/README.md`, `tools/check.d/README.md`,
@@ -149,7 +150,7 @@ None. This story touches no entity of `ess/`.
 5. `tools/test-gate-budget.sh` fails unless the root `.config/nextest.toml` `slow-timeout` period
    times `terminate-after` is at most 60 s and the default `WEFT_STEP_LIMIT` of `tools/test-step.sh`
    is at most 120.
-6. The probe test of `crates/weft-testkit` builds and passes in `slot task check` while depending
+6. The probe test of `product/cloud/crates/weft-testkit` builds and passes in `slot task check` while depending
    by path on a crate of `tests/fixtures/generated-probe/`, whose own manifest declares a
    `[workspace]`.
 ## Rules for this work

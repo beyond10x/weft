@@ -10,36 +10,36 @@ relations:
 - depends_on: story:skeleton-replica-instances
 scope:
 - confidence: cited
-  path: crates/weft-controllers/src/lib.rs
+  path: product/cloud/crates/weft-controllers/src/lib.rs
 - confidence: cited
-  path: crates/weft-controllers/src/placement.rs
+  path: product/cloud/crates/weft-controllers/src/placement.rs
 - confidence: cited
-  path: crates/weft-controllers/src/repair.rs
+  path: product/cloud/crates/weft-controllers/src/repair.rs
 - confidence: cited
-  path: crates/weft-controllers/tests/main.rs
+  path: product/cloud/crates/weft-controllers/tests/main.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/assign.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/assign.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/place_instance.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/place_instance.rs
 - confidence: cited
-  path: crates/weft-impl/src/bindings
+  path: product/cloud/crates/weft-impl/src/bindings
 - confidence: cited
-  path: crates/weft-impl/src/conversions.rs
+  path: product/cloud/crates/weft-impl/src/conversions.rs
 - confidence: inferred
-  path: crates/weft-impl/src/lib.rs
-revision: 13
+  path: product/cloud/crates/weft-impl/src/lib.rs
+revision: 23
 ---
 ## Epic
 
 Decomposes `epic:walking-skeleton`, outcome 4 (placement and assignment repair) and outcome 3 (the
 obligations, conversion and restored binding policies of the placement part of the path). Depends
-on `story:skeleton-replica-instances` (`crates/weft-controllers`, the controller loop, the
+on `story:skeleton-replica-instances` (`product/cloud/crates/weft-controllers`, the controller loop, the
 binding runner). Blocked by no ESS gap: it delivers its four bindings by hand, with their E2
 policies.
 
 ## Context
 
-Steps, in `crates/weft-controllers` (`tick` of `story:skeleton-replica-instances`):
+Steps, in `product/cloud/crates/weft-controllers` (`tick` of `story:skeleton-replica-instances`):
 
 - Scheduler decision: `weft.scheduling.PendingRequests`, candidates from
   `weft.infrastructure.Nodes` -> `weft.scheduling.PlaceInstance` as Scheduler, `decided_at`
@@ -66,10 +66,10 @@ mapped and with the policy `ess/components.yaml` declares:
   `not-bound`;
 each retries every other refusal.
 
-Obligations implemented here, each in its own file under `crates/weft-impl/src/behaviours/`:
+Obligations implemented here, each in its own file under `product/cloud/crates/weft-impl/src/behaviours/`:
 `weft.scheduling.PlaceInstance` and `weft.nodes.Assign` (2 of the 24 command behaviours on the
 skeleton path); and the conversion `weft.shared.StampedAt -> Timestamp`
-(`crates/weft-impl/src/conversions.rs`), which the path needs where a stamped instant lands in a
+(`product/cloud/crates/weft-impl/src/conversions.rs`), which the path needs where a stamped instant lands in a
 row. Not in the skeleton: `DeclareUnschedulable`, the R2, R3, R6-R9 steps, the cluster pool steps
 (the skeleton deploys into the default cluster).
 
@@ -97,9 +97,9 @@ and of the control host log after the last `seq` read before the tick.
 
 ## Scope
 
-- `crates/weft-controllers/` (`src/placement.rs`, `src/repair.rs`, `tests/main.rs` modules
+- `product/cloud/crates/weft-controllers/` (`src/placement.rs`, `src/repair.rs`, `tests/main.rs` modules
   `placement` and `repair`)
-- `crates/weft-impl/` (`src/behaviours/`: `place_instance.rs`, `assign.rs`;
+- `product/cloud/crates/weft-impl/` (`src/behaviours/`: `place_instance.rs`, `assign.rs`;
   `src/conversions.rs`; the four `r4-*` entries of the binding runner in `src/bindings/`)
 
 ## Acceptance
