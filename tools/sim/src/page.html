@@ -8,7 +8,7 @@
 @media (prefers-color-scheme: dark) { :root { --bg:#16171a; --fg:#e8e8ea; --mute:#9a9aa2; --line:#33343a; --hit:#4cc27e; --hitbg:#173525; --miss:#55565e; --bad:#ff6b6b; --badbg:#3a1a1a; --accent:#7ea2ff; } }
 * { box-sizing: border-box; }
 body { margin: 0; font: 13px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--fg); }
-header { display:flex; align-items:baseline; gap:16px; padding:12px 20px; border-bottom:1px solid var(--line); position: sticky; top:0; background: var(--bg); z-index: 2; }
+header { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 16px; padding:12px 20px; border-bottom:1px solid var(--line); position: sticky; top:0; background: var(--bg); z-index: 2; }
 h1 { font-size:18px; margin:0; } h2 { font-size:14px; margin:18px 0 8px; } h3 { font-size:13px; margin:10px 0 4px; }
 main { padding: 0 20px 40px; }
 .mute { color: var(--mute); }
@@ -55,6 +55,24 @@ svg text { font-size:11px; fill: var(--fg); }
 .sq.bad { background: var(--bad); }
 input#filter { padding:4px 8px; border:1px solid var(--line); border-radius:4px; background: var(--bg); color: var(--fg); width: 260px; }
 .legend span { margin-right:12px; }
+#player .controls { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:4px 0 8px; }
+#player button, #player select, #player input { font: inherit; color: var(--fg); background: var(--bg); border:1px solid var(--line); border-radius:4px; padding:2px 8px; }
+#player .plots { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start; }
+#player .plots svg { max-width:100%; height:auto; }
+#player figure { margin:0; max-width:100%; min-width:0; }
+#player .landbox { overflow-x:auto; max-width:100%; }
+#player .plots .landbox svg { max-width:none; }
+#player figcaption { max-width:34em; margin-bottom:4px; }
+#p-land text { font-size:13px; }
+svg text.an { fill: var(--mute); }
+.tscroll { overflow-x:auto; }
+.tscroll td, .tscroll th { white-space:nowrap; }
+.cell { stroke: var(--line); }
+.cell.empty { fill: none; }
+.cell.infeasible { fill: var(--badbg); stroke: var(--bad); stroke-dasharray: 3 2; }
+.cell.failed { fill: var(--bad); stroke: var(--bad); }
+.pm.off { opacity: .3; }
+#p-land text.ct { font-size:12px; fill: #1d1d1f; pointer-events: none; }
 </style>
 </head>
 <body>
@@ -69,7 +87,26 @@ input#filter { padding:4px 8px; border:1px solid var(--line); border-radius:4px;
   <section><h2>Live feed <span class="mute">(one thread: command &rarr; outcome)</span></h2><ol id="feed"></ol></section>
 </div>
 <section id="timeline-box" hidden><h2>Experiment timeline</h2><div id="timeline"></div></section>
-<section id="search-box" hidden><h2>Search</h2><div id="search"></div></section>
+<section id="search-box" hidden><h2>Search</h2>
+  <div id="player" hidden data-frame="0" data-playing="false" data-speed="4" data-x-axis="" data-y-axis="">
+    <div class="controls">
+      <button type="button" id="p-back">Step back</button>
+      <button type="button" id="p-play">Play</button>
+      <button type="button" id="p-pause">Pause</button>
+      <button type="button" id="p-fwd">Step forward</button>
+      <label>Frame <input type="range" id="p-frame" min="0" max="0" value="0"></label>
+      <label>Speed (rows per second) <select id="p-speed"><option>1</option><option>2</option><option selected>4</option><option>8</option><option>16</option></select></label>
+      <label>X axis <select id="p-x"></select></label>
+      <label>Y axis <select id="p-y"></select></label>
+    </div>
+    <p id="p-caption" class="mute"></p>
+    <div class="plots">
+      <figure><figcaption class="mute">Landscape: one cell per pair of values of the two axes, the other axes at the best point so far. Ring: start, line: accepted step, cross: rejected neighbour, dashed arc and diamond: restart; faded marks lie off this slice.</figcaption><div class="landbox"><svg id="p-land" width="200" height="100"></svg></div></figure>
+      <figure><figcaption class="mute">Best feasible fitness so far, over the rows</figcaption><svg id="p-curve" width="420" height="240" viewBox="0 0 420 240"></svg></figure>
+    </div>
+  </div>
+  <div id="no-climb"></div>
+  <div id="search"></div></section>
 <section id="matches-box" hidden><h2>Pattern matches</h2><table id="matches"></table></section>
 <section><h2>Violations</h2><table id="violations"></table></section>
 <section id="gaps-box" hidden><h2>Top gaps</h2><table id="gaps"></table></section>
@@ -208,6 +245,17 @@ function growth(points) {
   const t3 = el('text', { x: W - 8, y: H + 2, 'text-anchor': 'end' }, svg); t3.textContent = `${maxX.toLocaleString('en')} steps`;
 }
 
+/** A KPI in the points table on one line: a list as its length, a long text cut; the whole value in the tooltip. */
+function kcell(v) {
+  if (Array.isArray(v)) return `<span title="${esc(v.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join('\n'))}">${v.length}</span>`;
+  if (typeof v === 'string' && v.length > 32) return `<span title="${esc(v)}">${esc(v.slice(0, 31))}…</span>`;
+  return fmt(v);
+}
+
+/** Keeps what is scrolled into view below the sticky header, whatever its height. */
+function headerPadding() { document.documentElement.style.scrollPaddingTop = `${document.querySelector('header').offsetHeight + 8}px`; }
+addEventListener('resize', headerPadding);
+
 function table(id, head, rows) {
   $(id).innerHTML = rows.length ? `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>` + rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') : '<tr><td class="mute">none</td></tr>';
 }
@@ -218,6 +266,7 @@ function render(s) {
   $('mode').textContent = s.mode + (s.info && s.info.experiment ? ' · ' + s.info.experiment : '');
   $('status').textContent = s.running ? 'running' : 'done';
   $('info').textContent = s.info ? `spec compile ${fmt(s.info.compile_s || 0)} s` : '';
+  headerPadding();
   const pct = (a, b) => b ? ` <span class="mute" style="font-size:12px">${(100 * a / b).toFixed(0)}%</span>` : '';
   $('counters').innerHTML = [
     tile('walks', fmt(s.walks)), tile('steps', fmt(s.steps)), tile('steps/s', fmt(s.steps_per_s)),
@@ -247,13 +296,13 @@ function render(s) {
     $('timeline-box').hidden = false;
     $('timeline').innerHTML = s.timeline.map(t => `<div class="tl"><span class="mute">${t.index}</span><span class="mute">${esc(t.phase)}</span><span>${t.fault ? `<span class="fault">${esc(t.fault)}</span> ` : ''}${esc(t.label)}</span><span class="mono">${esc(short(t.command))} &rarr; <span class="${/^(unsupported|unavailable|invariant|undeclared|skipped)/.test(t.outcome) ? 'err' : 'ok'}">${esc(t.outcome)}</span></span><span>${t.checks.map(c => `<span class="sq${c.ok ? '' : ' bad'}" title="${esc(c.name + (c.detail ? ': ' + c.detail : ''))}"></span>`).join('')}</span></div>`).join('');
   }
+  if ((s.search && s.search.length) || (s.info && s.info.search)) $('search-box').hidden = false;
   if (s.search && s.search.length) {
-    $('search-box').hidden = false;
     const keys = Object.keys(s.search[0].point || {});
     const kpis = Object.keys(s.search[0].kpis || {});
     let best = null; for (const p of s.search) if (p.feasible && (best === null || p.fitness > best.fitness)) best = p;
-    $('search').innerHTML = `<p class="mute">${s.search.length} points visited${best ? `; best fitness ${fmt(best.fitness)} at ${esc(JSON.stringify(best.point))}` : ''}</p><table><tr><th>#</th>${keys.map(k => `<th>${esc(k)}</th>`).join('')}${kpis.map(k => `<th>${esc(k)}</th>`).join('')}<th>fitness</th></tr>` +
-      s.search.map((p, i) => `<tr${p === best ? ' style="background:var(--hitbg)"' : ''}><td>${i + 1}</td>${keys.map(k => `<td class="mono">${esc(JSON.stringify(p.point[k]))}</td>`).join('')}${kpis.map(k => `<td class="n">${fmt(p.kpis[k])}</td>`).join('')}<td class="n ${p.feasible ? '' : 'err'}">${p.feasible ? fmt(p.fitness) : 'infeasible'}</td></tr>`).join('') + '</table>';
+    $('search').innerHTML = `<p class="mute">${s.search.length} points visited${best ? `; best fitness ${fmt(best.fitness)} at ${esc(JSON.stringify(best.point))}` : ''}</p><div class="tscroll"><table><tr><th>#</th>${keys.map(k => `<th>${esc(k)}</th>`).join('')}${kpis.map(k => `<th>${esc(k)}</th>`).join('')}<th>fitness</th></tr>` +
+      s.search.map((p, i) => `<tr${p === best ? ' style="background:var(--hitbg)"' : ''}><td>${i + 1}</td>${keys.map(k => `<td class="mono">${esc(JSON.stringify(p.point[k]))}</td>`).join('')}${kpis.map(k => `<td class="n">${kcell(p.kpis[k])}</td>`).join('')}<td class="n ${p.feasible ? '' : 'err'}">${p.feasible ? fmt(p.fitness) : 'infeasible'}</td></tr>`).join('') + '</table></div>';
   }
   if (s.matches && s.matches.length) {
     $('matches-box').hidden = false;
@@ -278,12 +327,215 @@ function render(s) {
   if (s.notes && s.notes.length) { $('notes-box').hidden = false; $('notes').innerHTML = s.notes.map(n => `<li>${esc(n)}</li>`).join(''); }
 }
 
+// ---- the search player: plays the recorded rows of `search`, one row (`seq`) a frame --------------
+// It computes nothing a row does not hold except positions on the screen. Its state is the one
+// object P, written on #player as data-frame, data-playing, data-speed, data-x-axis, data-y-axis.
+const P = { frame: 0, playing: LIVE, speed: 4, x: 0, y: 1, timer: null, seen: false, running: false, climb: false, rows: [], axes: [], axisNames: '' };
+const valueText = (v) => typeof v === 'string' ? v : JSON.stringify(v);
+const lastSeq = () => P.rows.length ? P.rows[P.rows.length - 1].seq : 0;
+
+function hasClimb(s) {
+  const axes = s.info && s.info.search && s.info.search.axes;
+  const rows = Array.isArray(s.search) ? s.search : [];
+  return Array.isArray(axes) && axes.length > 0 && rows.every(r => typeof r.seq === 'number' && typeof r.decision === 'string' && Array.isArray(r.index) && 'parent' in r && 'best' in r);
+}
+
+function playerReceive(s) {
+  P.running = !!s.running;
+  P.climb = hasClimb(s);
+  P.rows = Array.isArray(s.search) ? s.search : [];
+  if (!P.climb) {
+    P.playing = false; clearTimeout(P.timer); P.timer = null;
+    $('player').hidden = true; $('p-land').innerHTML = ''; $('p-curve').innerHTML = '';
+    $('no-climb').innerHTML = P.rows.length ? '<p class="mute" data-no-climb>This run has no recorded climb: its search rows were written without seq, decision, parent and best, so there is nothing to play. The table lists the points.</p>' : '';
+    return;
+  }
+  $('no-climb').innerHTML = '';
+  $('player').hidden = false;
+  P.axes = s.info.search.axes;
+  const names = P.axes.map(a => a.name).join('\n');
+  if (names !== P.axisNames) {
+    P.axisNames = names;
+    P.x = 0; P.y = P.axes.length > 1 ? 1 : -1;
+    $('p-x').innerHTML = P.axes.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('');
+    $('p-y').innerHTML = P.axes.length > 1 ? P.axes.map(a => `<option value="${esc(a.name)}">${esc(a.name)}</option>`).join('') : '<option value="">none</option>';
+    $('p-y').disabled = P.axes.length < 2;
+  }
+  if (!P.seen) { P.seen = true; if (!LIVE) P.frame = lastSeq(); }
+  P.frame = Math.min(P.frame, lastSeq());
+  if (P.playing && P.timer === null) arm();
+  playerDraw();
+}
+
+function arm() { clearTimeout(P.timer); P.timer = P.playing ? setTimeout(tick, 1000 / P.speed) : null; }
+
+function tick() {
+  P.timer = null;
+  if (!P.playing) return;
+  if (P.frame < lastSeq()) P.frame++;
+  if (P.frame >= lastSeq() && !P.running) P.playing = false;
+  playerDraw(); arm();
+}
+
+function play() {
+  if (!P.climb) return;
+  if (P.frame >= lastSeq() && !P.running) P.frame = P.rows.length ? P.rows[0].seq : 0;
+  P.playing = true; playerDraw(); arm();
+}
+function pause() { P.playing = false; clearTimeout(P.timer); P.timer = null; playerDraw(); }
+function step(by) {
+  pause();
+  const first = P.rows.length ? P.rows[0].seq : 0;
+  P.frame = Math.max(first, Math.min(lastSeq(), P.frame + by));
+  playerDraw();
+}
+
+/** The value index tuple the axes not shown are fixed at: the best point up to the frame. */
+function fixedIndex(shown) {
+  let best = null;
+  for (const r of shown) if (r.feasible && typeof r.fitness === 'number' && r.fitness === r.best && (best === null || r.fitness > best.fitness)) best = r;
+  const at = best || shown[shown.length - 1] || P.rows[0];
+  return at ? at.index : P.axes.map(() => 0);
+}
+
+function playerDraw() {
+  const root = $('player');
+  root.dataset.frame = String(P.frame);
+  root.dataset.playing = String(P.playing);
+  root.dataset.speed = String(P.speed);
+  if (!P.climb) return;
+  root.dataset.xAxis = P.axes[P.x].name;
+  root.dataset.yAxis = P.y >= 0 ? P.axes[P.y].name : '';
+  $('p-x').value = P.axes[P.x].name;
+  $('p-y').value = P.y >= 0 ? P.axes[P.y].name : '';
+  $('p-speed').value = String(P.speed);
+  const slider = $('p-frame');
+  slider.min = String(P.rows.length ? P.rows[0].seq : 0); slider.max = String(lastSeq()); slider.value = String(P.frame);
+  const shown = P.rows.filter(r => r.seq <= P.frame);
+  const now = shown[shown.length - 1];
+  $('p-caption').textContent = `row ${P.frame} of ${lastSeq()}` + (now ? ` · round ${now.round} · ${now.decision} · ${JSON.stringify(now.point)} · ${now.error ? 'failed' : now.feasible ? 'fitness ' + fmt(now.fitness) : 'infeasible'} · best ${now.best === null ? 'none yet' : fmt(now.best)}` : '');
+  landscape(shown);
+  curve(shown);
+}
+
+/** Where each value index of an axis is drawn, 0 nearest the origin: by value when every value is a number, else as declared. */
+function ranks(values) {
+  const order = values.map((_, i) => i);
+  if (values.every(v => typeof v === 'number')) order.sort((a, b) => values[a] - values[b]);
+  const rank = [];
+  order.forEach((i, k) => { rank[i] = k; });
+  return rank;
+}
+
+function landscape(shown) {
+  const svg = $('p-land'); svg.innerHTML = '';
+  const xa = P.axes[P.x], ya = P.y >= 0 ? P.axes[P.y] : null;
+  const nx = xa.values.length, ny = ya ? ya.values.length : 1;
+  const C = 64, T = 8;
+  const xr = ranks(xa.values), yr = ya ? ranks(ya.values) : [0];
+  // Label widths as drawn; estimated from the text while the player is not shown.
+  const measure = (v) => { const t = el('text', { x: 0, y: -100 }, svg); t.textContent = valueText(v); const w = t.getComputedTextLength(); t.remove(); return w > 0 ? w : valueText(v).length * 8; };
+  const xw = Math.max(...xa.values.map(measure)), yw = ya ? Math.max(...ya.values.map(measure)) : 0;
+  // An x label wider than its column stands upright in it, so no two labels overlap.
+  const upright = xw > C - 10, xh = upright ? Math.ceil(xw) + 10 : 20;
+  const L = 34 + Math.ceil(yw);
+  const width = L + nx * C + 8, height = T + ny * C + xh + 30;
+  const left = (i) => L + xr[i] * C, top = (j) => T + (ny - 1 - yr[j]) * C;
+  svg.setAttribute('width', width); svg.setAttribute('height', height); svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+  const fixed = fixedIndex(shown);
+  const off = (r) => r.index.some((v, k) => k !== P.x && k !== P.y && v !== fixed[k]);
+  const at = new Map();
+  for (const r of shown) if (!off(r)) at.set(`${r.index[P.x]},${ya ? r.index[P.y] : 0}`, r);
+  const fits = P.rows.filter(r => r.feasible && typeof r.fitness === 'number').map(r => r.fitness);
+  const lo = Math.min(...fits), hi = Math.max(...fits);
+  const cx = (i) => left(i) + C / 2, cy = (j) => top(j) + C / 2;
+  for (let i = 0; i < nx; i++) for (let j = 0; j < ny; j++) {
+    const r = at.get(`${i},${j}`);
+    const state = !r ? 'empty' : r.error ? 'failed' : r.feasible ? 'feasible' : 'infeasible';
+    const attrs = { x: left(i) + 1, y: top(j) + 1, width: C - 2, height: C - 2, rx: 4, class: 'cell ' + state, 'data-cell': `${i},${j}`, 'data-state': state };
+    if (r) attrs['data-fitness'] = String(r.fitness);
+    if (state === 'feasible') { const t = hi > lo ? (r.fitness - lo) / (hi - lo) : 1; attrs.fill = `hsl(${Math.round(210 - 90 * t)}, 60%, ${Math.round(80 - 25 * t)}%)`; }
+    const cell = el('rect', attrs, svg);
+    if (r) { const tt = el('title', {}, cell); tt.textContent = `${JSON.stringify(r.point)}: ${state}${state === 'feasible' ? ' ' + r.fitness : ''}`; }
+    if (state === 'feasible') { const tx = el('text', { x: left(i) + C - 6, y: top(j) + C - 7, 'text-anchor': 'end', class: 'ct' }, svg); tx.textContent = fmt(r.fitness); }
+  }
+  xa.values.forEach((v, i) => {
+    const [ax, ay] = upright ? [cx(i) + 5, T + ny * C + 8] : [cx(i), T + ny * C + 18];
+    const attrs = { x: ax, y: ay, 'text-anchor': upright ? 'end' : 'middle', 'data-axis-label': 'x', 'data-value-index': i };
+    if (upright) attrs.transform = `rotate(-90 ${ax} ${ay})`;
+    const t = el('text', attrs, svg); t.textContent = valueText(v);
+  });
+  if (ya) ya.values.forEach((v, j) => { const t = el('text', { x: L - 8, y: cy(j) + 5, 'text-anchor': 'end', 'data-axis-label': 'y', 'data-value-index': j }, svg); t.textContent = valueText(v); });
+  const xn = el('text', { x: L + nx * C / 2, y: T + ny * C + xh + 22, 'text-anchor': 'middle', class: 'an' }, svg); xn.textContent = xa.name;
+  if (ya) { const ym = T + ny * C / 2; const yn = el('text', { x: 14, y: ym, 'text-anchor': 'middle', transform: `rotate(-90 14 ${ym})`, class: 'an' }, svg); yn.textContent = ya.name; }
+  // The climber's path up to the frame.
+  const bySeq = new Map(P.rows.map(r => [r.seq, r]));
+  const pos = (r) => [cx(r.index[P.x]), cy(ya ? r.index[P.y] : 0)];
+  let current = null;
+  for (const r of shown) {
+    const g = el('g', { class: 'pm' + (off(r) ? ' off' : ''), 'data-path-step': r.seq, 'data-decision': r.decision }, svg);
+    const [x, y] = pos(r);
+    if (r.decision === 'start') {
+      el('circle', { cx: x, cy: y, r: 12, fill: 'none', stroke: 'var(--accent)', 'stroke-width': 3 }, g);
+      current = r;
+    } else if (r.decision === 'accepted') {
+      if (r.parent !== null && r.parent !== undefined) g.setAttribute('data-parent', r.parent);
+      const from = bySeq.get(r.parent);
+      if (from) { const [x0, y0] = pos(from); el('line', { x1: x0, y1: y0, x2: x, y2: y, stroke: 'var(--accent)', 'stroke-width': 3 }, g); }
+      el('circle', { cx: x, cy: y, r: 6, fill: 'var(--accent)' }, g);
+      current = r;
+    } else if (r.decision === 'restart') {
+      if (current) { const [x0, y0] = pos(current); el('path', { d: `M${x0},${y0} Q${(x0 + x) / 2},${Math.max(T, Math.min(y0, y) - C * 0.6)} ${x},${y}`, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 2, 'stroke-dasharray': '5 4' }, g); }
+      el('path', { d: `M${x},${y - 10} L${x + 10},${y} L${x},${y + 10} L${x - 10},${y} z`, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 2.5 }, g);
+      current = r;
+    } else {
+      el('path', { d: `M${x - 7},${y - 7} L${x + 7},${y + 7} M${x + 7},${y - 7} L${x - 7},${y + 7}`, stroke: 'var(--mute)', 'stroke-width': 2 }, g);
+    }
+    if (r.seq === P.frame) el('circle', { cx: x, cy: y, r: 20, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 1.5, 'stroke-dasharray': '3 3' }, g);
+    const tt = el('title', {}, g); tt.textContent = `row ${r.seq}: ${r.decision}${r.parent ? ' from row ' + r.parent : ''}`;
+  }
+}
+
+function curve(shown) {
+  const svg = $('p-curve'); svg.innerHTML = '';
+  const W = 420, H = 240, L = 40, R = 10, T = 10, B = 28;
+  const bests = P.rows.filter(r => typeof r.best === 'number').map(r => r.best);
+  const lo = bests.length ? Math.min(...bests) : 0, hi = bests.length ? Math.max(...bests) : 1;
+  const n = Math.max(lastSeq(), 2);
+  const sx = (seq) => L + (seq - 1) / (n - 1) * (W - L - R);
+  const sy = (b) => H - B - (hi > lo ? (b - lo) / (hi - lo) : 0.5) * (H - B - T);
+  el('line', { x1: L, y1: H - B, x2: W - R, y2: H - B, stroke: 'var(--line)' }, svg);
+  el('line', { x1: L, y1: T, x2: L, y2: H - B, stroke: 'var(--line)' }, svg);
+  const t0 = el('text', { x: L - 4, y: sy(hi) + 4, 'text-anchor': 'end' }, svg); t0.textContent = bests.length ? fmt(hi) : '';
+  const t1 = el('text', { x: L - 4, y: sy(lo) + 4, 'text-anchor': 'end' }, svg); t1.textContent = bests.length && hi > lo ? fmt(lo) : '';
+  const t2 = el('text', { x: W - R, y: H - 8, 'text-anchor': 'end', class: 'mute' }, svg); t2.textContent = `row (${lastSeq()})`;
+  const line = shown.filter(r => typeof r.best === 'number').map(r => `${sx(r.seq).toFixed(1)},${sy(r.best).toFixed(1)}`);
+  if (line.length > 1) el('polyline', { points: line.join(' '), fill: 'none', stroke: 'var(--hit)', 'stroke-width': 2 }, svg);
+  for (const r of shown) {
+    const has = typeof r.best === 'number';
+    const c = el('circle', { cx: sx(r.seq), cy: has ? sy(r.best) : H - B, r: 3, fill: has ? 'var(--hit)' : 'none', stroke: has ? 'var(--hit)' : 'var(--miss)', 'data-curve-point': r.seq, 'data-best': has ? String(r.best) : '' }, svg);
+    const tt = el('title', {}, c); tt.textContent = `row ${r.seq}: best ${has ? r.best : 'none yet'}`;
+  }
+  if (P.frame > 0) el('line', { x1: sx(P.frame), y1: T, x2: sx(P.frame), y2: H - B, stroke: 'var(--accent)', 'stroke-dasharray': '3 2' }, svg);
+}
+
+$('p-play').addEventListener('click', play);
+$('p-pause').addEventListener('click', pause);
+$('p-fwd').addEventListener('click', () => step(1));
+$('p-back').addEventListener('click', () => step(-1));
+$('p-frame').addEventListener('input', (ev) => { P.frame = Number(ev.target.value); playerDraw(); });
+$('p-speed').addEventListener('change', (ev) => { P.speed = Number(ev.target.value); if (P.playing) arm(); playerDraw(); });
+$('p-x').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.y) P.y = P.x; P.x = i; playerDraw(); });
+$('p-y').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.x) P.x = P.y; P.y = i; playerDraw(); });
+
+window.weftPlayer = { receive(s) { if (!s) return; render(s); playerReceive(s); } };
+
 buildDomains();
 if (location.hash.startsWith('#open')) { const q = decodeURIComponent(location.hash.slice(6)); for (const d of $('domains').children) if (!q || d.dataset.text.includes(q)) d.open = true; }
-if (SNAP) render(SNAP);
+if (SNAP) window.weftPlayer.receive(SNAP);
 if (LIVE) {
   const source = new EventSource('/events');
-  source.onmessage = (ev) => { const s = JSON.parse(ev.data); render(s); if (!s.running && s.gaps) source.close(); };
+  source.onmessage = (ev) => { const s = JSON.parse(ev.data); window.weftPlayer.receive(s); if (!s.running && s.gaps) source.close(); };
 }
 </script>
 </body>
