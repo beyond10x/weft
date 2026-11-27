@@ -2,8 +2,8 @@
 
 `task check` runs every executable file of this directory in name order (`tools/run-hooks.sh`)
 after the tests (task `test`) and the gate self-test (task `gate-budget`); the first that fails
-fails the gate. The CI Gate job reaches them through `task check`. Examples: the digest check of
-the generated code, the conformance run.
+fails the gate. The CI Gate job reaches them through `task check`. Examples: the self-test of the
+generated-code cache, the conformance run.
 
 Contract of a hook:
 

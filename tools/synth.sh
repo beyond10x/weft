@@ -6,7 +6,8 @@
 #
 # The generated code is not committed. <out> is a cache keyed by the digest of its sources,
 # <out>/SOURCES.sha256: the line `ess <release>` (the `requires:` of <spec>/ess-inputs.yaml), then
-# `<sha256>  <path>` for every file of <spec> in C order, then for tools/synth-input.sh.
+# `<sha256>  <path>` for every file of <spec> in C order, then for tools/synth-input.sh and for
+# tools/synth.sh itself, the two scripts the synthesis runs.
 #   - <out> whose SOURCES.sha256 equals the digest and whose files match <out>/OUTPUT.sha256 (the
 #     SHA-256 of every other file, and no file more) is reused without calling ess;
 #   - any other <out> (stale: its recorded digest differs; damaged: a file edited, added or
@@ -17,17 +18,19 @@
 # <out>.tmp.<pid>, renamed into place only after a successful synthesis, so a failed or killed run
 # leaves no partial <out>. A lock directory, <out>.lock with the holder's pid, keeps two runs from
 # writing the same cache: the second waits (at most WEFT_SYNTH_LOCK_WAIT seconds, default 300) and
-# then finds the cache the first wrote. A lock whose holder is gone is removed, and so are the
-# <out>.tmp.* and <out>.old.* a killed run left.
+# then finds the cache the first wrote. A lock whose holder is gone is removed (stale() below),
+# and so are the <out>.tmp.* and <out>.old.* a killed run left.
 #
 # ess compiles nothing, so it runs without slot (~/beyond10x/AGENTS.md "Scripts that do not build
-# stay off slot"), bounded at 600 s; it takes 9 to 30 s on ess/. Another ess release than the one
-# <spec> requires is refused. For the self-test (tools/test-generated.sh): WEFT_SYNTH_ESS names
-# the ess command, WEFT_SYNTH_INPUT another file used as tools/synth-input.sh. Paths are relative
-# to the repository root, as given.
+# stay off slot"); it takes 9 to 30 s on ess/. It is ended after 600 s, and with this run however
+# the run ends (a signal to its process group, its EXIT trap, or a watcher that sees it gone after
+# a SIGKILL). Another ess release than the one <spec> requires is refused. For the self-test
+# (tools/test-generated.sh): WEFT_SYNTH_ESS names the ess command, WEFT_SYNTH_INPUT another file
+# used as tools/synth-input.sh. Paths are relative to the repository root, as given.
 set -eu
 
 root=$(cd "$(dirname "$0")/.." && pwd)
+self_file=$(cd "$(dirname "$0")" && pwd)/${0##*/}
 cd "$root"
 synth_input=${WEFT_SYNTH_INPUT:-tools/synth-input.sh}
 ess=${WEFT_SYNTH_ESS:-ess}
@@ -62,6 +65,8 @@ digest() {
   done
   h=$(sha256sum < "$synth_input" | cut -d' ' -f1)
   echo "$h  tools/synth-input.sh"
+  h=$(sha256sum < "$self_file" | cut -d' ' -f1)
+  echo "$h  tools/synth.sh"
 }
 
 # The files of a tree other than its two digest files, one relative path per line, C order.
@@ -88,19 +93,42 @@ fi
 
 lock=$out.lock
 tmp=
+ess_pid=
 cleanup() {
+  [ -z "$ess_pid" ] || kill -TERM "$ess_pid" 2>/dev/null || true
   [ -z "$tmp" ] || rm -rf "$tmp"
   rm -rf "$lock"
 }
+
+# stale <pid>: remove the lock when it still is the one of <pid>, a holder that is gone (or, for
+# an empty <pid>, a run killed between taking the lock and writing its pid, a minute ago or more).
+# Only a run holding <lock>.steal removes a lock, and it reads the pid again under it: no other run
+# can change a lock whose holder is gone, so the lock it removes is the one it read. A <lock>.steal
+# a minute old or more was left by a run killed inside these lines and is removed.
+stale() {
+  if ! mkdir "$lock.steal" 2>/dev/null; then
+    if [ -n "$(find "$lock.steal" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$lock.steal"; fi
+    sleep 1
+    return 0
+  fi
+  again=$(cat "$lock/pid" 2>/dev/null || true)
+  if [ -d "$lock" ] && [ "$again" = "$1" ]; then
+    if [ -n "$1" ] && ! kill -0 "$1" 2>/dev/null; then
+      mv "$lock" "$lock.stale.$$" && rm -rf "$lock.stale.$$" && echo "synth: removed the lock of $1, which is gone"
+    elif [ -z "$1" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      mv "$lock" "$lock.stale.$$" && rm -rf "$lock.stale.$$" && echo "synth: removed a lock without a pid, a minute old"
+    fi
+  fi
+  rmdir "$lock.steal"
+}
+
 mkdir -p "$(dirname "$out")"
 waited=0
 while ! mkdir "$lock" 2>/dev/null; do
   holder=$(cat "$lock/pid" 2>/dev/null || true)
-  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then
-    if mv "$lock" "$lock.stale.$$" 2>/dev/null; then
-      rm -rf "$lock.stale.$$"
-      echo "synth: removed the lock of $holder, which is gone"
-    fi
+  if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } ||
+    { [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
+    stale "$holder"
     continue
   fi
   if [ "$waited" -ge "$lock_wait" ]; then
@@ -111,11 +139,11 @@ while ! mkdir "$lock" 2>/dev/null; do
   sleep 1
   waited=$((waited + 1))
 done
+echo $$ > "$lock/pid"
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-echo $$ > "$lock/pid"
 rm -rf "$out".tmp.* "$out".old.*
 
 digest > "$lock/want"
@@ -134,7 +162,31 @@ tmp=$out.tmp.$$
 mkdir -p "$tmp"
 "$synth_input" "$spec" "$tmp/input"
 start=$(date +%s)
-timeout -k 5 600 "$ess" generate synthesize --path "$tmp/input" --target rust --out "$tmp/output" </dev/null
+# ess runs in this run's process group, so a signal to the group (a `timeout` around this script)
+# reaches it; a watcher ends it after 600 s, and as soon as this run is gone (SIGKILL included);
+# the EXIT trap ends it on any other exit.
+"$ess" generate synthesize --path "$tmp/input" --target rust --out "$tmp/output" </dev/null &
+ess_pid=$!
+self=$$
+(
+  n=0
+  while kill -0 "$ess_pid" 2>/dev/null; do
+    if ! kill -0 "$self" 2>/dev/null || [ "$n" -ge 600 ]; then
+      kill -TERM "$ess_pid" 2>/dev/null
+      sleep 5
+      kill -KILL "$ess_pid" 2>/dev/null
+      exit 0
+    fi
+    sleep 1
+    n=$((n + 1))
+  done
+) </dev/null >/dev/null 2>&1 &
+watcher=$!
+ess_rc=0
+wait "$ess_pid" || ess_rc=$?
+ess_pid=
+kill "$watcher" 2>/dev/null || true
+[ "$ess_rc" = 0 ] || { echo "synth: ess generate synthesize failed with exit $ess_rc" >&2; exit "$ess_rc"; }
 echo "synth: ess generate synthesize took $(($(date +%s) - start)) s"
 rm -rf "$tmp/output/.ess-output"
 cp "$lock/want" "$tmp/output/SOURCES.sha256"

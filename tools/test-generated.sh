@@ -15,12 +15,17 @@
 #   damaged     an edited, an added and a removed cache file are each found and synthesized again;
 #   failed      an ess that writes part of its output and fails leaves the cache as it was, and no
 #               temporary directory and no lock;
-#   killed      a run killed (SIGKILL) during the synthesis leaves no cache; the next run removes
-#               the lock and the temporary directory it left and synthesizes;
+#   killed      tools/synth.sh alone killed (SIGKILL) during the synthesis: its ess ends within 5 s,
+#               no cache is left; the next run removes the lock and the temporary directory it
+#               left and synthesizes;
 #   concurrent  two runs started together on no cache: one synthesizes, the other waits and reuses;
-#   compare     tools/slow.d/10-generated-regenerate.sh passes on a clean cache and fails, naming
-#               the file, on a cache whose digests hold but whose bytes another synthesis would
-#               not write.
+#   compare     tools/slow.d/10-generated-regenerate.sh passes on a clean cache, leaves no fresh
+#               directory and removes those of runs that are gone (not those of a live one); it
+#               fails, naming the file, on a cache whose digests hold but whose bytes another
+#               synthesis would not write.
+#   attack      the cases of the adversarial review, first (TEST_GENERATED_ONLY=attack runs them
+#               alone): a changed tools/synth.sh makes the cache stale; a lock is removed only
+#               when it is still the gone holder's; a run ended by timeout leaves no ess.
 # Then, on ess/ itself, the transformation case: tools/synth-input.sh, and the difference between
 # ess/ and target/synth-input/ read as parsed YAML (yq to JSON, compared with jq), which must be
 # each transformation of tools/synth-input.sh at its count and nothing else. The counts are read
@@ -75,6 +80,79 @@ touch "$root/$work/part-ess.started"
 exec sleep 30
 EOF
 chmod +x "$work/no-ess" "$work/part-ess"
+
+# --- attack: cases of the adversarial review of the cache --------------------------------------
+# TEST_GENERATED_ONLY=attack runs these cases alone and exits with their result.
+real_ess=$(command -v ess)
+
+# key: tools/synth.sh decides what the cache holds (the ess call and its flags, what it drops from
+# the output), so a change of it must make the cache stale, as a change of tools/synth-input.sh does.
+akey=$root/$work/attack-key
+rm -rf "$akey"
+mkdir -p "$akey/tools"
+run "$work/attack-key-cold.log" env WEFT_SYNTH_INPUT="$root/tools/synth-input.sh" tools/synth.sh --spec "$root/$spec" --out "$akey/cache"
+[ "$rc" = 0 ] || { fail "attack key: the first synthesis (exit $rc)"; show "$work/attack-key-cold.log"; }
+sed 's|^rm -rf "$tmp/output/.ess-output"$|&; echo "a changed post-processing" > "$tmp/output/CHANGED"|' tools/synth.sh > "$akey/tools/synth.sh"
+chmod +x "$akey/tools/synth.sh"
+grep -q 'output/CHANGED' "$akey/tools/synth.sh" || fail "attack key: the changed tools/synth.sh was written"
+run "$work/attack-key.log" env WEFT_SYNTH_INPUT="$root/tools/synth-input.sh" WEFT_SYNTH_ESS="$root/$work/no-ess" "$akey/tools/synth.sh" --spec "$root/$spec" --out "$akey/cache"
+check "attack key: a changed tools/synth.sh makes the cache stale, the old cache is not used (exit $rc)" '[ "$rc" != 0 ] && said "$work/attack-key.log" "is stale"' || show "$work/attack-key.log"
+rm -rf "$akey" "$work/no-ess.called"
+
+# lock: a run that read the pid of a gone holder must not remove the lock another run took since.
+# A cat that is slow on the lock's pid file stands in for a run descheduled between reading the
+# pid and removing the lock; an ess that sits 3 s inside the synthesis marks an overlap.
+mkdir -p "$work/attack-bin"
+printf '#!/bin/sh\n"%s" "$@"\nrc=$?\ncase "$*" in *.lock/pid) [ -z "${ATTACK_SLOW_CAT:-}" ] || sleep "$ATTACK_SLOW_CAT" ;; esac\nexit $rc\n' "$(command -v cat)" > "$work/attack-bin/cat"
+cat > "$work/attack-ess" <<EOF
+#!/bin/sh
+[ "\$1" = --version ] && exec "$real_ess" --version
+mkdir "$root/$work/attack-ess.inside" 2>/dev/null || touch "$root/$work/attack-ess.overlap"
+"$real_ess" "\$@"
+r=\$?
+sleep 3
+rmdir "$root/$work/attack-ess.inside" 2>/dev/null
+exit \$r
+EOF
+chmod +x "$work/attack-bin/cat" "$work/attack-ess"
+arace=$work/attack-race
+rm -rf "$arace" "$arace".lock "$work/attack-ess.inside" "$work/attack-ess.overlap"
+gone=$(sh -c 'echo $$')
+mkdir "$arace.lock" && echo "$gone" > "$arace.lock/pid"
+env PATH="$root/$work/attack-bin:$PATH" ATTACK_SLOW_CAT=2 WEFT_SYNTH_ESS="$root/$work/attack-ess" tools/synth.sh --spec "$spec" --out "$arace" > "$work/attack-race-b.log" 2>&1 &
+pb=$!
+sleep 0.5
+WEFT_SYNTH_ESS="$root/$work/attack-ess" tools/synth.sh --spec "$spec" --out "$arace" > "$work/attack-race-a.log" 2>&1 &
+pa=$!
+wait "$pa"
+ra=$?
+wait "$pb"
+rb=$?
+check "attack lock: two runs after a gone holder's lock, never two inside the synthesis, both pass (exit $ra, $rb)" '[ "$ra" = 0 ] && [ "$rb" = 0 ] && [ ! -e "$work/attack-ess.overlap" ] && [ -z "$(ls -d "$arace".tmp.* "$arace".old.* "$arace".lock 2>/dev/null)" ]' ||
+  { show "$work/attack-race-a.log"; show "$work/attack-race-b.log"; }
+rm -rf "$arace" "$arace".tmp.* "$arace".old.* "$arace".lock "$work/attack-ess.inside" "$work/attack-ess.overlap"
+
+# bounded: the step runs its setup hooks under `timeout -k 5`; a run ended that way during the
+# synthesis must not leave the ess it started running (tools/synth.sh starts ess under a timeout
+# of its own, in a process group the outer timeout does not signal).
+aterm=$work/attack-term
+rm -rf "$aterm" "$work/part-ess.started" "$work/part-ess.pid"
+PART_ESS=hang WEFT_SYNTH_ESS="$root/$work/part-ess" timeout -k 1 3 tools/synth.sh --spec "$spec" --out "$aterm" > "$work/attack-term.log" 2>&1
+term_rc=$?
+term_ess=$(cat "$work/part-ess.pid" 2>/dev/null || true)
+sleep 1
+check "attack bounded: a run ended by timeout (exit $term_rc) leaves no ess running" '[ -e "$work/part-ess.started" ] && [ -n "$term_ess" ] && ! kill -0 "$term_ess" 2>/dev/null' ||
+  { echo "  | ess pid ${term_ess:-none} still running: $(ps -o pid=,args= -p "${term_ess:-0}" 2>/dev/null)" >&2; show "$work/attack-term.log"; }
+[ -z "$term_ess" ] || kill -9 "$term_ess" 2>/dev/null
+n=0
+while [ -n "$term_ess" ] && kill -0 "$term_ess" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
+rm -rf "$aterm" "$aterm".tmp.* "$aterm".lock "$work/part-ess.started" "$work/part-ess.pid"
+
+if [ "${TEST_GENERATED_ONLY:-}" = attack ]; then
+  [ "$failed" = 0 ] || { echo "test-generated: attack cases failed" >&2; exit 1; }
+  echo "test-generated: attack cases pass"
+  exit 0
+fi
 
 # --- cold -------------------------------------------------------------------------------------
 run "$work/cold.log" tools/synth.sh --spec "$spec" --out "$cache"
@@ -141,9 +219,13 @@ synth_pid=$!
 n=0
 while [ ! -e "$work/part-ess.started" ] && [ "$n" -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
 kill -9 "$synth_pid" 2>/dev/null
-[ -f "$work/part-ess.pid" ] && kill -9 "$(cat "$work/part-ess.pid")" 2>/dev/null
 wait "$synth_pid" 2>/dev/null
+killed_ess=$(cat "$work/part-ess.pid" 2>/dev/null || true)
+n=0
+while [ -n "$killed_ess" ] && kill -0 "$killed_ess" 2>/dev/null && [ "$n" -lt 50 ]; do sleep 0.1; n=$((n + 1)); done
 check "killed: the run was inside the synthesis when it was killed" '[ -e "$work/part-ess.started" ]'
+check "killed: only tools/synth.sh was killed, and no ess is left within 5 s" '[ -n "$killed_ess" ] && ! kill -0 "$killed_ess" 2>/dev/null' ||
+  { echo "  | ess pid ${killed_ess:-none}: $(ps -o pid=,args= -p "${killed_ess:-0}" 2>/dev/null)" >&2; [ -z "$killed_ess" ] || kill -9 "$killed_ess" 2>/dev/null; }
 check "killed: no cache, the partial output only in a temporary directory" '[ ! -e "$cache" ] && ls -d "$cache".tmp.* >/dev/null 2>&1 && [ -d "$cache.lock" ]'
 run "$work/killed2.log" tools/synth.sh --spec "$spec" --out "$cache"
 check "killed: the next run removes the lock and the leftovers and synthesizes (exit $rc)" '[ "$rc" = 0 ] && said "$work/killed2.log" "which is gone" && diff -r -q "$work/cache.good" "$cache" >/dev/null && [ -z "$(leftovers)" ]' || show "$work/killed2.log"
@@ -164,8 +246,14 @@ check "concurrent: both runs pass (exit $r1, $r2), one synthesizes, the other re
   { show "$work/concurrent-1.log"; show "$work/concurrent-2.log"; }
 
 # --- compare ----------------------------------------------------------------------------------
+gone=$(sh -c 'echo $$')
+mkdir -p "$cache.fresh.$gone/crates" "$cache.fresh.$gone.tmp.1" "$cache.fresh.$$"
+echo "x" > "$cache.fresh.$gone.diff"
 run "$work/compare.log" tools/slow.d/10-generated-regenerate.sh "$spec" "$cache"
-check "compare: a clean cache is byte-equal to a fresh synthesis (exit $rc)" '[ "$rc" = 0 ] && [ -z "$(ls -d "$cache".fresh.* 2>/dev/null)" ]' || show "$work/compare.log"
+check "compare: a clean cache is byte-equal to a fresh synthesis (exit $rc)" '[ "$rc" = 0 ]' || show "$work/compare.log"
+check "compare: the fresh directories of a gone run are removed, a live run's kept, its own removed" \
+  '[ "$(ls -d "$cache".fresh.* 2>/dev/null)" = "$cache.fresh.$$" ]' || ls -d "$cache".fresh.* >&2
+rm -rf "$cache.fresh.$$"
 echo "// not what this ess writes" >> "$cache/$lib"
 (cd "$cache" && payload=$(sed 's/^[0-9a-f]\{64\}  //' OUTPUT.sha256) && echo "$payload" | tr '\n' '\0' | xargs -0 sha256sum > OUTPUT.sha256)
 run "$work/compare2.log" tools/slow.d/10-generated-regenerate.sh "$spec" "$cache"
