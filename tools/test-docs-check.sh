@@ -111,6 +111,16 @@ printf '%s\n' 'build/' > "$t/.gitignore"
 printf '%s\n' '# Fixture' '' '- `build/report.txt`: the report.' > "$t/AGENTS.md"
 printf '%s\n' 'report' > "$t/build/report.txt"
 ignored_case 30-agents-md-paths "$t"
+t=$gitdir/40
+mkdir -p "$t"
+cp -R "$fixtures/40-status-claims/pass/." "$t/"
+mkdir -p "$t/out"
+printf '%s\n' 'out/' > "$t/.gitignore"
+printf '%s\n' 'report' > "$t/out/report.txt"
+sed 's|"Later": \[|"Later": [\
+      {"file": "out/report.txt"},|' "$fixtures/40-status-claims/pass/website/data/status-proofs.json" \
+  > "$t/website/data/status-proofs.json"
+ignored_case 40-status-claims "$t"
 
 # An empty directory is not in a clean checkout either (git keeps no directory); a tracked file
 # and a new file git would add (not ignored, not committed yet) are.

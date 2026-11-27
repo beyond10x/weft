@@ -1,0 +1,68 @@
+{
+  "format": "weft-status-proofs/1",
+  "description": "The proofs of website/data/status.json: for each item label, files that must be in the tree and commands (sh -c from the repository root, sh, grep, sed, awk, find and jq only) that must exit 0 and print expect; and the counts the site states, each with the command that computes it. Checked by tools/docs-check.d/40-status-claims.sh in task check and in the docs build.",
+  "items": {
+    "The domain model": [
+      {"file": "ess/system.yaml"},
+      {"file": "ess/ess-inputs.yaml"},
+      {"command": "sed -n 's/^requires: //p' ess/ess-inputs.yaml", "expect": "ess 0.99.2"},
+      {"command": "awk '/^  spec:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/- ess specify validate --path ess --strict-requires$/{ok=1} END{exit !ok}' Taskfile.yml"},
+      {"command": "awk '/^  check:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/- task: spec$/{ok=1} END{exit !ok}' Taskfile.yml"}
+    ],
+    "Components and bindings": [
+      {"file": "ess/components.yaml"},
+      {"command": "awk '/^  - component: /{print $3}' ess/components.yaml", "expect": "weft-api\nweft-control\nweft-node\nweft-edge"},
+      {"command": "awk '/^bindings:/{f=1;next} /^[^ #]/{f=0} f&&/^  - id: /{n++} END{exit !n}' ess/components.yaml"}
+    ],
+    "Layer rule": [
+      {"file": "tools/check-layers.sh"},
+      {"command": "awk '/^  layers:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/- tools\\/check-layers.sh$/{ok=1} END{exit !ok}' Taskfile.yml"},
+      {"command": "awk '/^  check:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/- task: layers$/{ok=1} END{exit !ok}' Taskfile.yml"}
+    ],
+    "Protocols": [
+      {"file": "protocols/node-channel.yaml"},
+      {"file": "protocols/exec-channel.yaml"},
+      {"command": "grep -lx 'format: ess-protospec/1' protocols/node-channel.yaml protocols/exec-channel.yaml", "expect": "protocols/node-channel.yaml\nprotocols/exec-channel.yaml"}
+    ],
+    "weft-sim explore": [
+      {"file": "tools/sim/src/explore.rs"},
+      {"command": "grep -c '\"explore\" => explore_cmd(&args)' tools/sim/src/main.rs", "expect": "1"},
+      {"command": "grep -c '^fn explore_reaches_every_outcome_of_the_fixture()' tools/sim/tests/main.rs", "expect": "1"},
+      {"command": "grep -c '^fn no_double_placement_is_checked_inside_explore_walks_and_replays()' tools/sim/tests/main.rs", "expect": "1"}
+    ],
+    "weft-sim simulate": [
+      {"file": "tools/sim/src/simulate.rs"},
+      {"file": "tools/sim/src/experiment.rs"},
+      {"command": "grep -c '\"simulate\" => simulate_cmd(&args)' tools/sim/src/main.rs", "expect": "1"},
+      {"command": "grep -cE '^    pub (setup|traffic|faults|controllers): Vec<' tools/sim/src/experiment.rs", "expect": "4"},
+      {"command": "grep -c '^fn a_setup_step_not_accepted_as_declared_fails_the_run()' tools/sim/tests/main.rs", "expect": "1"}
+    ],
+    "weft-sim replay": [
+      {"command": "grep -c '\"replay\" => replay_cmd(&args)' tools/sim/src/main.rs", "expect": "1"},
+      {"command": "grep -c '^fn no_double_placement_is_checked_inside_explore_walks_and_replays()' tools/sim/tests/main.rs", "expect": "1"}
+    ],
+    "task check": [
+      {"file": "Taskfile.yml"},
+      {"command": "awk '/^  check:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/- task: /{t[$3]=1} END{exit !(t[\"spec\"]&&t[\"layers\"]&&t[\"stamped-time\"]&&t[\"ci-paths\"]&&t[\"sim-test\"])}' Taskfile.yml"},
+      {"command": "grep -cx '        run: task check' .github/workflows/gate.yml", "expect": "1"}
+    ]
+  },
+  "counts": {
+    "domains": {
+      "command": "awk '/^domains:/{f=1;next} /^[^ #]/{f=0} f&&/^  - /{n++} END{print n+0}' ess/system.yaml",
+      "nouns": ["domains", "domain files"]
+    },
+    "layers": {
+      "command": "find ess -mindepth 1 -maxdepth 1 -type d -name '[0-9]-*' | awk 'END{print NR}'",
+      "nouns": ["layers"]
+    },
+    "components": {
+      "command": "grep -c '^  - component: ' ess/components.yaml",
+      "nouns": ["components"]
+    },
+    "specification files": {
+      "command": "awk '/^specification:/{f=1;next} /^[^ #]/{f=0} f&&/^  - /{n++} END{print n+0}' ess/ess-inputs.yaml",
+      "nouns": ["files", "file(s)"]
+    }
+  }
+}

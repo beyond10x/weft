@@ -2,24 +2,35 @@
 format: aep.planning-md/3
 id: story:docs-status-proofs
 kind: story
-status: draft
+status: active
 title: Status page rendered from status.json, every shipped item proved by a file or a command in the docs check
 relations:
 - decomposes: epic:docs-fidelity
 - serves: vision:weft
 - depends_on: story:docs-claims-check
 scope:
+- confidence: cited
+  path: AGENTS.md
+- confidence: cited
+  path: Taskfile.yml
 - confidence: inferred
   path: tools/docs-check-fixture/40-status-claims
 - confidence: inferred
   path: tools/docs-check.d/40-status-claims.sh
+- confidence: cited
+  path: tools/docs-check.d/README.md
+- confidence: cited
+  path: tools/test-docs-check.sh
 - confidence: inferred
   path: website/data/status-proofs.json
 - confidence: cited
   path: website/data/status.json
 - confidence: cited
   path: website/docs/status.md
-revision: 5
+revision: 11
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T16:03:33Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-11-27T16:03:33Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
 ---
 ## Epic
 
