@@ -1,0 +1,13 @@
+[package]
+name = "weft-probe-api"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[dependencies]
+weft-probe-types = { workspace = true }

@@ -1,0 +1,21 @@
+[package]
+name = "weft-testkit"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[dev-dependencies]
+weft-probe-api = { path = "../../tests/fixtures/generated-probe/crates/weft-probe-api" }
+
+[lints]
+workspace = true
