@@ -292,7 +292,7 @@ setup:
     command: weft.formations.AddComponent
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
-    input: {formation_id: "${formation_shop}", name: "${shop_c_${i}}"}
+    input: {formation_id: "${formation_shop}", account_id: "${account_a}", name: "${shop_c_${i}}"}
     expect: added
     bind: {"shop_comp_${i}": component_id}
   - label: add-component-etl
@@ -300,14 +300,14 @@ setup:
     command: weft.formations.AddComponent
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
-    input: {formation_id: "${formation_etl}", name: "${etl_c_${i}}"}
+    input: {formation_id: "${formation_etl}", account_id: "${account_a}", name: "${etl_c_${i}}"}
     expect: added
     bind: {"etl_comp_${i}": component_id}
   - label: add-component-site
     command: weft.formations.AddComponent
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_b}", account_id: "${account_b}"}
-    input: {formation_id: "${formation_site}", name: site}
+    input: {formation_id: "${formation_site}", account_id: "${account_b}", name: site}
     expect: added
   - label: link-shop-web-api
     command: weft.formations.AddLink
@@ -333,9 +333,9 @@ setup:
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}
     input: {formation_id: "${formation_etl}", caller_component_id: "${etl_comp_1}", target_component_id: "${etl_comp_2}", protocol: Grpc, port: 9000}
     expect: added
-  - {label: commit-shop, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation_shop}"}, expect: committed, bind: {rev_shop: revision_id}}
-  - {label: commit-etl, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation_etl}"}, expect: committed, bind: {rev_etl: revision_id}}
-  - {label: commit-site, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_b}", account_id: "${account_b}"}, input: {formation_id: "${formation_site}"}, expect: committed, bind: {rev_site: revision_id}}
+  - {label: commit-shop, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation_shop}", account_id: "${account_a}"}, expect: committed, bind: {rev_shop: revision_id}}
+  - {label: commit-etl, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation_etl}", account_id: "${account_a}"}, expect: committed, bind: {rev_etl: revision_id}}
+  - {label: commit-site, command: weft.formations.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_b}", account_id: "${account_b}"}, input: {formation_id: "${formation_site}", account_id: "${account_b}"}, expect: committed, bind: {rev_site: revision_id}}
   - {label: env-shop, command: weft.formations.CreateEnvironment, actor: weft.actors.AccountAdmin, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation_shop}", account_id: "${account_a}", name: prod, protected: false}, expect: created, bind: {env_shop: environment_id}}
   - {label: env-etl, command: weft.formations.CreateEnvironment, actor: weft.actors.AccountAdmin, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}"}, input: {formation_id: "${formation_etl}", account_id: "${account_a}", name: prod, protected: false}, expect: created, bind: {env_etl: environment_id}}
   - {label: env-site, command: weft.formations.CreateEnvironment, actor: weft.actors.AccountAdmin, caller: {tenant_id: "${tenant_b}", account_id: "${account_b}"}, input: {formation_id: "${formation_site}", account_id: "${account_b}", name: prod, protected: false}, expect: created, bind: {env_site: environment_id}}

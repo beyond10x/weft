@@ -1186,8 +1186,8 @@ mod definitions {
         let caller = steps::account_caller(&path.tenant_id, &path.account_id);
         let account_id = path.account_id.as_str();
         let formation_id = steps::create_formation(&client, &caller, account_id, &path.cluster_id);
-        steps::add_component(&client, &caller, &formation_id);
-        let revision_id = steps::commit_revision(&client, &caller, &formation_id);
+        steps::add_component(&client, &caller, &formation_id, account_id);
+        let revision_id = steps::commit_revision(&client, &caller, &formation_id, account_id);
         let environment_id = steps::create_environment(&client, &caller, &formation_id, account_id);
         steps::register_artifact(&client, &caller, account_id);
         let image_runtime = steps::register_runtime(&client, &["Image"]);
@@ -1383,6 +1383,42 @@ mod definitions {
                 answer.body
             }
 
+            /// `input` of `command` sent by a Deployer of `globex`'s account on a formation of
+            /// `acme`: refused as a missing formation (`NoSuchFormation`), and the formations,
+            /// components and revisions are as they were.
+            fn isolated(&self, command: &str, input: &Value) {
+                let rows = |ports: &Ports| {
+                    format!(
+                        "{:?} {:?} {:?}",
+                        FormationStorage::list(ports),
+                        ComponentStorage::list(ports),
+                        FormationRevisionStorage::list(ports)
+                    )
+                };
+                let before = rows(&self.ports());
+                let answer = self
+                    .client
+                    .command(command, steps::DEPLOYER, self.other.clone(), input.clone())
+                    .expect("the control host answers");
+                let outcome = answer.body["outcome"].as_str().unwrap_or_default();
+                assert!(
+                    ["not-callers-account", "formation-of-other-account"].contains(&outcome),
+                    "{command} {input}: {} {}",
+                    answer.status,
+                    answer.body
+                );
+                assert!(
+                    answer.body.to_string().contains("NoSuchFormation"),
+                    "{command} {input}: {}",
+                    answer.body
+                );
+                assert_eq!(
+                    rows(&self.ports()),
+                    before,
+                    "{command} {input} changed a row"
+                );
+            }
+
             /// A formation of `acme` named `name` in the default cluster, with one component when
             /// `component`: its identity.
             fn formation(&self, name: &str, component: bool) -> String {
@@ -1396,7 +1432,7 @@ mod definitions {
                 );
                 let id = published(&body, "formation_id");
                 if component {
-                    steps::add_component(&self.client, &self.caller, &id);
+                    steps::add_component(&self.client, &self.caller, &id, self.acme());
                 }
                 id
             }
@@ -1628,24 +1664,39 @@ mod definitions {
         #[test]
         fn add_component_answers_each_guard_in_declaration_order() {
             let w = World::new();
-            let refuses = |input: Value, outcome: &str| {
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
                 w.refuses(
                     steps::DEPLOYER,
-                    &w.caller,
+                    caller,
                     ADD_COMPONENT,
                     &input,
                     outcome,
                     components,
                 );
             };
-            let request =
-                |formation: &str, name: &str| json!({"formation_id": formation, "name": name});
+            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "account_id": account, "name": name});
+            let site = w.ids.formation_id.clone();
 
-            refuses(request(&mint(), "a"), "no-such-formation");
+            refuses(
+                &w.other,
+                request(&site, w.acme(), "a"),
+                "not-callers-account",
+            );
+            refuses(
+                &w.caller,
+                request(&mint(), w.acme(), "a"),
+                "no-such-formation",
+            );
+            let other_account = w.other_account.clone();
+            refuses(
+                &w.other,
+                request(&site, &other_account, "a"),
+                "formation-of-other-account",
+            );
             let retired = w.formation("retired", true);
             w.retire_formation(&retired);
-            refuses(request(&retired, "a"), "retired");
-            refuses(request(&w.ids.formation_id, "site"), "name-taken");
+            refuses(&w.caller, request(&retired, w.acme(), "a"), "retired");
+            refuses(&w.caller, request(&site, w.acme(), "site"), "name-taken");
 
             // In another formation the name is free; the row has its internal name.
             let other = w.formation("other", false);
@@ -1653,7 +1704,7 @@ mod definitions {
                 steps::DEPLOYER,
                 &w.caller,
                 ADD_COMPONENT,
-                &request(&other, "site"),
+                &request(&other, w.acme(), "site"),
                 "added",
             );
             assert_eq!(
@@ -1670,24 +1721,32 @@ mod definitions {
         #[test]
         fn commit_revision_answers_each_guard_and_numbers_its_revisions() {
             let w = World::new();
-            let refuses = |input: Value, outcome: &str| {
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
                 w.refuses(
                     steps::DEPLOYER,
-                    &w.caller,
+                    caller,
                     COMMIT_REVISION,
                     &input,
                     outcome,
                     revisions,
                 );
             };
-            let request = |formation: &str| json!({"formation_id": formation});
+            let request = |formation: &str, account: &str| json!({"formation_id": formation, "account_id": account});
+            let site = w.ids.formation_id.clone();
 
-            refuses(request(&mint()), "no-such-formation");
+            refuses(&w.other, request(&site, w.acme()), "not-callers-account");
+            refuses(&w.caller, request(&mint(), w.acme()), "no-such-formation");
+            let other_account = w.other_account.clone();
+            refuses(
+                &w.other,
+                request(&site, &other_account),
+                "formation-of-other-account",
+            );
             let retired = w.formation("retired", true);
             w.retire_formation(&retired);
-            refuses(request(&retired), "retired");
+            refuses(&w.caller, request(&retired, w.acme()), "retired");
             let bare = w.formation("bare", false);
-            refuses(request(&bare), "empty");
+            refuses(&w.caller, request(&bare, w.acme()), "empty");
 
             // The first revision of `site` froze it before environment `prod`: the second,
             // number 2, has another digest; the third, of the same document, the second's; a
@@ -1697,7 +1756,7 @@ mod definitions {
                     steps::DEPLOYER,
                     &w.caller,
                     COMMIT_REVISION,
-                    &request(formation),
+                    &request(formation, w.acme()),
                     "committed",
                 );
                 let payload = body["published"][0]["payload"].clone();
@@ -1716,12 +1775,12 @@ mod definitions {
             assert_eq!(number, json!(2));
             assert_ne!(digest, json!(first.data.document_digest.0));
             assert_eq!(commit(&w.ids.formation_id), (json!(3), digest.clone()));
-            steps::add_component(&w.client, &w.caller, &bare);
+            steps::add_component(&w.client, &w.caller, &bare, w.acme());
             w.accepts(
                 steps::DEPLOYER,
                 &w.caller,
                 ADD_COMPONENT,
-                &json!({"formation_id": w.ids.formation_id, "name": "api"}),
+                &json!({"formation_id": w.ids.formation_id, "account_id": w.acme(), "name": "api"}),
                 "added",
             );
             let (number, fourth) = commit(&w.ids.formation_id);
@@ -1735,6 +1794,28 @@ mod definitions {
             );
             // Another formation starts at 1.
             assert_eq!(commit(&bare).0, json!(1));
+        }
+
+        /// `AddComponent` on `acme`'s formation by a Deployer of `globex`'s account, acting in its
+        /// own account or naming `acme`'s: `NoSuchFormation`, and no row changes.
+        #[test]
+        fn a_deployer_of_another_account_gets_no_such_formation_adding_a_component() {
+            let w = World::new();
+            for account in [w.other_account.clone(), w.acme().to_owned()] {
+                let input = json!({"formation_id": w.ids.formation_id, "account_id": account, "name": "intruder"});
+                w.isolated(ADD_COMPONENT, &input);
+            }
+        }
+
+        /// `CommitRevision` of `acme`'s formation by a Deployer of `globex`'s account, acting in
+        /// its own account or naming `acme`'s: `NoSuchFormation`, and no row changes.
+        #[test]
+        fn a_deployer_of_another_account_gets_no_such_formation_committing_a_revision() {
+            let w = World::new();
+            for account in [w.other_account.clone(), w.acme().to_owned()] {
+                let input = json!({"formation_id": w.ids.formation_id, "account_id": account});
+                w.isolated(COMMIT_REVISION, &input);
+            }
         }
 
         #[test]
@@ -1972,7 +2053,7 @@ mod definitions {
                 "formation-foreign",
             );
             let other = w.formation("other", true);
-            let other_revision = steps::commit_revision(&w.client, &w.caller, &other);
+            let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.acme());
             let other_environment =
                 steps::create_environment(&w.client, &w.caller, &other, w.acme());
             refuses(

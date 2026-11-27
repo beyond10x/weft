@@ -1,6 +1,7 @@
 //! `weft.formations.CommitRevision` (`PLAN.md` § Obligations, `ess/4-applications/formations.yaml`),
-//! in declaration order: `no-such-formation`, `retired`, `empty` (the formation has no
-//! component), `committed` otherwise.
+//! in declaration order: `not-callers-account` (a caller acting in no account counts as another
+//! account's), `no-such-formation`, `formation-of-other-account`, `retired`, `empty` (the
+//! formation has no component), `committed` otherwise.
 //!
 //! The specification leaves two values to the implementation:
 //!
@@ -15,7 +16,7 @@
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use weft_types::behaviour::{ComponentStorage, EnvironmentStorage, FormationRevisionStorage, FormationStorage};
+use weft_types::behaviour::{ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage};
 use weft_types::formations::obligations::CommitRevisionBehavior;
 use weft_types::formations::{
     CommitRevision, CommitRevisionOutcome, EmptyFormation, FormationRevisionData, FormationRevisionSnapshot,
@@ -31,9 +32,15 @@ use crate::Ports;
 
 impl CommitRevisionBehavior for Ports {
     fn commit_revision(&mut self, input: CommitRevision) -> Result<CommitRevisionOutcome, UnmetObligation> {
+        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
+            return Ok(CommitRevisionOutcome::NotCallersAccount { error: NoSuchFormation });
+        }
         let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
             return Ok(CommitRevisionOutcome::NoSuchFormation { error: NoSuchFormation });
         };
+        if formation.data.account_id != input.account_id {
+            return Ok(CommitRevisionOutcome::FormationOfOtherAccount { error: NoSuchFormation });
+        }
         if formation.state == FormationState::Retired {
             return Ok(CommitRevisionOutcome::Retired { error: FormationStateConflict });
         }

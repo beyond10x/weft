@@ -85,13 +85,13 @@ pub mod input {
     }
 
     /// `add-component-site`.
-    pub fn add_component(formation_id: &str) -> Value {
-        json!({"formation_id": formation_id, "name": "site"})
+    pub fn add_component(formation_id: &str, account_id: &str) -> Value {
+        json!({"formation_id": formation_id, "account_id": account_id, "name": "site"})
     }
 
     /// `commit-site`.
-    pub fn commit_revision(formation_id: &str) -> Value {
-        json!({"formation_id": formation_id})
+    pub fn commit_revision(formation_id: &str, account_id: &str) -> Value {
+        json!({"formation_id": formation_id, "account_id": account_id})
     }
 
     /// `env-site`.
@@ -424,9 +424,14 @@ pub fn create_formation(
 }
 
 /// `AddComponent` as Deployer: component `site` of `formation_id`, its identity.
-pub fn add_component(client: &Client, caller: &Value, formation_id: &str) -> String {
+pub fn add_component(
+    client: &Client,
+    caller: &Value,
+    formation_id: &str,
+    account_id: &str,
+) -> String {
     let command = "weft.formations.AddComponent";
-    let input = input::add_component(formation_id);
+    let input = input::add_component(formation_id, account_id);
     published(
         &in_account(client, DEPLOYER, caller, command, input, "added"),
         "component_id",
@@ -434,9 +439,14 @@ pub fn add_component(client: &Client, caller: &Value, formation_id: &str) -> Str
 }
 
 /// `CommitRevision` as Deployer: the revision's identity.
-pub fn commit_revision(client: &Client, caller: &Value, formation_id: &str) -> String {
+pub fn commit_revision(
+    client: &Client,
+    caller: &Value,
+    formation_id: &str,
+    account_id: &str,
+) -> String {
     let command = "weft.formations.CommitRevision";
-    let input = input::commit_revision(formation_id);
+    let input = input::commit_revision(formation_id, account_id);
     published(
         &in_account(client, DEPLOYER, caller, command, input, "committed"),
         "revision_id",
@@ -532,8 +542,8 @@ pub fn run_definitions(client: &Client, path: &Path) -> Definitions {
     let caller = account_caller(&path.tenant_id, &path.account_id);
     let account_id = path.account_id.as_str();
     let formation_id = create_formation(client, &caller, account_id, &path.cluster_id);
-    let component_id = add_component(client, &caller, &formation_id);
-    let revision_id = commit_revision(client, &caller, &formation_id);
+    let component_id = add_component(client, &caller, &formation_id, account_id);
+    let revision_id = commit_revision(client, &caller, &formation_id, account_id);
     let environment_id = create_environment(client, &caller, &formation_id, account_id);
     let artifact_digest = register_artifact(client, &caller, account_id);
     let runtime_id = register_runtime(client, &["Snippet"]);

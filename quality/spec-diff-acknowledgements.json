@@ -1,0 +1,13 @@
+{
+  "format": "ess-diff-acknowledgements/1",
+  "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
+  "after": "f9e7c72ffe504d09a628e6989bde357ad481ae56f1b01e1dcca85244b167a447",
+  "acknowledged": [
+    "command/weft.formations.AddComponent/input-added/account_id",
+    "command/weft.formations.AddComponent/outcome-added/formation-of-other-account",
+    "command/weft.formations.AddComponent/outcome-added/not-callers-account",
+    "command/weft.formations.CommitRevision/input-added/account_id",
+    "command/weft.formations.CommitRevision/outcome-added/formation-of-other-account",
+    "command/weft.formations.CommitRevision/outcome-added/not-callers-account"
+  ]
+}
