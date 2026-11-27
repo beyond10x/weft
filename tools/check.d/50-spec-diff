@@ -1,0 +1,8 @@
+#!/bin/sh
+# The specification's change since the last release tag, classified for callers, readers and
+# history; a breaking or unknown change fails until quality/spec-diff-acknowledgements.json names
+# it (tools/check-spec-diff.sh, docs/hardening/pass-3.md technique 7). Then the negative case: a
+# dropped grant must fail the same gate.
+set -eu
+tools/check-spec-diff.sh
+tools/check-spec-diff.sh --negative

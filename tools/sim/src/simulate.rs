@@ -1303,6 +1303,59 @@ pub fn record_setup(cat: &Catalog, cov: &Coverage, cands: &Candidates, exp: &Exp
     })
 }
 
+/// What `weft-sim relate` compares: the rows of every parameterless read-your-writes view after
+/// `exp`'s setup and up to `settle` controller ticks (as `record_setup` runs them), the variables
+/// the setup bound, and the setup steps not accepted as declared.
+pub struct SetupRows {
+    pub rows: Fingerprint,
+    pub vars: BTreeMap<String, Value>,
+    pub refusals: Vec<String>,
+    pub requests: usize,
+}
+
+/// Besides the parameterless views, every read-your-writes view with one parameter is read once
+/// per variable of `probe` (every variable when it is empty) the setup bound to a string, with
+/// that value as the parameter; a read
+/// that returns rows is kept as `<view>(<param>=$<variable>)`.
+pub fn setup_rows(cat: &Catalog, cov: &Coverage, exp: &Experiment, settle: usize, probe: &BTreeSet<String>) -> Result<SetupRows, String> {
+    let mut only = exp.clone();
+    only.find.patterns.clear();
+    let cands = Candidates::default();
+    let mut sim = new_sim(cat, cov, &cands, &only, 0, false)?;
+    sim.logging = true;
+    for step in only.setup.clone() {
+        sim.send_repeated("setup", &step)?;
+    }
+    for tick in 0..settle {
+        if sim.controller_tick(tick)? == 0 {
+            break;
+        }
+    }
+    let mut rows = fingerprint(&sim.sess);
+    for (name, view) in sim.sess.cat.ir.views() {
+        if view.consistency != ess_domain::view::Consistency::ReadYourWrites || view.params.len() != 1 {
+            continue;
+        }
+        let param = view.params[0].name.clone();
+        let names: Vec<String> = if probe.is_empty() { sim.vars.keys().cloned().collect() } else { probe.iter().cloned().collect() };
+        for var in &names {
+            let Some(Value::String(value)) = sim.vars.get(var) else { continue };
+            let params = BTreeMap::from([(param.clone(), Node::Text(value.clone()))]);
+            if let Ok(found) = sim.sess.view(&name.to_string(), params) {
+                if !found.is_empty() {
+                    rows.insert(format!("{name}({param}=${var})"), found);
+                }
+            }
+        }
+    }
+    Ok(SetupRows {
+        rows,
+        vars: sim.vars.clone(),
+        refusals: std::mem::take(&mut sim.kpis.setup_refusals),
+        requests: sim.log.len(),
+    })
+}
+
 impl Sim<'_, '_> {
     /// One tick of the experiment's controllers alone: the clock moves 30 s, each controller runs
     /// its rounds. The requests sent by controllers that are not `steady`.
