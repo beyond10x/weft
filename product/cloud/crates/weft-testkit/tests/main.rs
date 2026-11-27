@@ -709,3 +709,356 @@ mod control_host {
         }
     }
 }
+
+/// Adversary cases of `story:skeleton-node-join-session`: the node-channel endpoint of the
+/// control host (`weft-bin/src/node_channel.rs`) and the behaviours `OpenNodeSession` and
+/// `RecordNodeObservation`, against `ess/5-runtime/nodes.yaml`,
+/// `ess/1-infrastructure/infrastructure.yaml` and `protocols/node-channel.yaml`.
+mod node_channel_adversary {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    use serde_json::{json, Value};
+    use weft_client::{Client, Expect};
+    use weft_impl::context::{instant, timestamp};
+    use weft_testkit::steps::{self, Provisioned};
+    use weft_testkit::ControlHost;
+    use weft_types::primitives::Timestamp;
+
+    const CONTROL_PLANE: &str = "weft.actors.ControlPlane";
+    const SESSIONS: &str = "weft.nodes.NodeSessions";
+    const NODES: &str = "weft.infrastructure.Nodes";
+
+    fn provision(client: &Client) -> Provisioned {
+        let cloud_id = steps::create_cloud(client);
+        steps::declare_zone(client, &cloud_id, "z1");
+        let pool = steps::create_node_pool(client);
+        steps::provision_pool_node(client, &pool)
+    }
+
+    /// A provisioned node joined with its token (Joining), as the agent does before `hello`.
+    fn joined(client: &Client) -> Provisioned {
+        let node = provision(client);
+        let body = steps::join_node(client, &node.node_id, &node.join_token);
+        assert_eq!(body["outcome"], json!("joined"), "{body}");
+        node
+    }
+
+    fn rows(client: &Client, view: &str) -> Vec<Value> {
+        client.view(view, &[]).ok_body(200)["rows"]
+            .as_array()
+            .expect("rows")
+            .clone()
+    }
+
+    fn row(client: &Client, view: &str, key: &str, id: &str) -> Value {
+        rows(client, view)
+            .into_iter()
+            .find(|row| row[key] == json!(id))
+            .unwrap_or_else(|| panic!("no row with {key} {id} in {view}"))
+    }
+
+    fn hello(client: &Client, node_id: &str) -> weft_client::Answer {
+        client
+            .post(
+                "/node/hello",
+                &json!({"node_id": node_id, "agent_version": "0.1.0"}),
+            )
+            .expect("the control host answers")
+    }
+
+    fn open_as_control_plane(client: &Client, node_id: &str, received_at: &str) -> Value {
+        client
+            .command(
+                "weft.nodes.OpenNodeSession",
+                CONTROL_PLANE,
+                json!({}),
+                json!({"node_id": node_id, "agent_version": "0.1.0", "received_at": received_at}),
+            )
+            .expect("the control host answers")
+            .body
+    }
+
+    fn observe(client: &Client, node_id: &str, cpus: u64) -> Value {
+        client
+            .command(
+                "weft.infrastructure.RecordNodeObservation",
+                steps::NODE_AGENT,
+                json!({}),
+                json!({
+                    "node_id": node_id,
+                    "capacity": [{"resource_class": "cpu", "amount": cpus}],
+                    "isolation_facts": {
+                        "kvm_present": false,
+                        "cgroups_delegated": true,
+                        "egress_denied": true,
+                        "gpu_passthrough": false,
+                        "levels": ["Container"],
+                    },
+                    "observed_at": timestamp(time::OffsetDateTime::now_utc()).0,
+                }),
+            )
+            .expect("the control host answers")
+            .body
+    }
+
+    fn at(text: &Value) -> time::OffsetDateTime {
+        let text = text
+            .as_str()
+            .unwrap_or_else(|| panic!("not a timestamp: {text}"));
+        instant(&Timestamp(text.to_owned())).unwrap_or_else(|| panic!("{text} is not RFC 3339"))
+    }
+
+    /// One raw HTTP exchange: the status and the body of the answer.
+    fn raw(host: &ControlHost, request: &str) -> (u16, String) {
+        let mut stream = TcpStream::connect(host.address()).expect("the control host listens");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("a read timeout");
+        stream
+            .write_all(request.as_bytes())
+            .expect("the request is sent");
+        let mut answer = String::new();
+        let _ = stream.read_to_string(&mut answer);
+        let status = answer
+            .split_whitespace()
+            .nth(1)
+            .and_then(|status| status.parse().ok())
+            .unwrap_or_else(|| panic!("not an HTTP answer: {answer:?}"));
+        let body = answer
+            .split_once("\r\n\r\n")
+            .map_or("", |(_, body)| body)
+            .to_owned();
+        (status, body)
+    }
+
+    /// `ess/5-runtime/nodes.yaml` line 755 ("Decided in integration", matching
+    /// `protocols/node-channel.yaml` `replace-open-session`): "a node that redials while control
+    /// still holds its old session Open gets a new session, and the old one moves to
+    /// Superseded. The redial is two commands in this order: SupersedeNodeSession ends the old
+    /// session, then OpenNodeSession opens the new one." Line 805: "A redial over a still-Open
+    /// session runs SupersedeNodeSession first." The endpoint sends only OpenNodeSession, so a
+    /// restarted agent (nothing ends an Open session in this story: no heartbeat, no lease loss)
+    /// is refused `already-open` on every redial, for good.
+    #[test]
+    fn a_hello_over_a_still_open_session_supersedes_it_and_opens_a_new_one() {
+        let host = ControlHost::start();
+        let client = host.client();
+        let node = joined(&client);
+        let first = hello(&client, &node.node_id);
+        assert_eq!(first.status, 200, "{}", first.body);
+        let old = first.body["session_id"]
+            .as_str()
+            .expect("a session_id")
+            .to_owned();
+
+        // The agent restarts and dials again.
+        let again = hello(&client, &node.node_id);
+        assert_eq!(
+            again.status, 200,
+            "a redial over the node's still-Open session is answered {} {}, not with a new session",
+            again.status, again.body
+        );
+        let new = again.body["session_id"].as_str().expect("a session_id");
+        assert_ne!(new, old);
+        assert_eq!(
+            row(&client, SESSIONS, "session_id", &old)["state"],
+            json!("Superseded")
+        );
+        assert_eq!(
+            row(&client, SESSIONS, "session_id", new)["state"],
+            json!("Open")
+        );
+    }
+
+    /// `weft-bin/src/lib.rs` `Host::execute`: "Its request line is still logged, as every
+    /// answered request is"; the module doc: each request is "logged with the events it
+    /// published". The node channel answers a frame it refuses itself (`400` a hello that is not
+    /// a frame, `404` an unknown frame, `405` a hello that is not POST) without
+    /// `Host::execute`, so no request line is written for it.
+    #[test]
+    fn a_frame_the_node_channel_refuses_has_its_request_line_in_the_log() {
+        let host = ControlHost::start();
+        let client = host.client();
+        let before = host.last_seq();
+
+        let not_a_frame = client
+            .post("/node/hello", &json!("not a frame"))
+            .expect("the control host answers");
+        let unknown = client
+            .post("/node/bye", &json!({}))
+            .expect("the control host answers");
+        let (get, _) = raw(
+            &host,
+            "GET /node/hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",
+        );
+        let answered = vec![not_a_frame.status, unknown.status, get];
+        assert_eq!(answered, vec![400, 404, 405]);
+
+        let logged: Vec<u64> = host
+            .log_after(before)
+            .iter()
+            .filter(|line| line["kind"] == "request")
+            .filter_map(|line| line["status"].as_u64())
+            .collect();
+        assert_eq!(
+            logged,
+            vec![400, 404, 405],
+            "the request lines of the three refused node-channel frames"
+        );
+    }
+
+    /// `received-in-future` (`when: received_at > now`): no existing case sends a receipt
+    /// instant after now, so dropping the guard leaves the suite green.
+    #[test]
+    fn a_receipt_instant_after_now_is_refused_and_opens_no_session() {
+        let host = ControlHost::start();
+        let client = host.client();
+        let node = joined(&client);
+        let later = timestamp(time::OffsetDateTime::now_utc() + time::Duration::hours(1)).0;
+        let body = open_as_control_plane(&client, &node.node_id, &later);
+        assert_eq!(body["outcome"], json!("received-in-future"), "{body}");
+        assert!(rows(&client, SESSIONS).is_empty());
+    }
+
+    /// `identity-refused` for a node that is not "a joined node of the cluster": unknown,
+    /// `Provisioning` and `Gone`. No existing case sends a hello for any of them, so
+    /// `joined = true` leaves the suite green.
+    #[test]
+    fn a_hello_for_a_node_that_has_not_joined_is_identity_refused() {
+        let gone = weft_impl::context::mint();
+        let host = ControlHost::start_seeded(vec![node_row(
+            &gone,
+            weft_types::infrastructure::NodeState::Gone,
+        )]);
+        let client = host.client();
+        let provisioning = provision(&client);
+        let unknown = weft_impl::context::mint();
+        for (what, node_id) in [
+            ("unknown", unknown.as_str()),
+            ("Provisioning", provisioning.node_id.as_str()),
+            ("Gone", gone.as_str()),
+        ] {
+            let answer = hello(&client, node_id);
+            assert_eq!(
+                answer.body["outcome"],
+                json!("identity-refused"),
+                "{what}: {} {}",
+                answer.status,
+                answer.body
+            );
+        }
+        assert!(rows(&client, SESSIONS).is_empty());
+    }
+
+    /// A seeded `weft.infrastructure.Node` row `node_id` in `state`.
+    fn node_row(node_id: &str, state: weft_types::infrastructure::NodeState) -> weft_impl::Row {
+        use weft_types::infrastructure::{NodeData, NodeRole, NodeSnapshot};
+        use weft_types::primitives::Uuid;
+        use weft_types::shared::{CloudId, NodeId, ZoneName};
+        weft_impl::Row::Node(NodeSnapshot {
+            state,
+            data: NodeData {
+                node_id: NodeId(Uuid(node_id.to_owned())),
+                cloud_id: CloudId(Uuid(weft_impl::context::mint())),
+                zone: ZoneName("z1".to_owned()),
+                node_pool_id: None,
+                role: NodeRole::Worker,
+                join_token_expires_at: timestamp(time::OffsetDateTime::now_utc()),
+                join_token_used: true,
+                capacity: None,
+                isolation_facts: None,
+                observed_at: None,
+            },
+        })
+    }
+
+    /// `opened` sets `last_seen_at: input.received_at` and `opened_at: {generated: true}`
+    /// (now); the existing cases read only `opened_at`, so writing the receipt instant into both
+    /// leaves the suite green.
+    #[test]
+    fn a_session_is_last_seen_at_its_receipt_instant_and_opened_now() {
+        let host = ControlHost::start();
+        let client = host.client();
+        let node = joined(&client);
+        let received = time::OffsetDateTime::now_utc() - time::Duration::minutes(10);
+        let before = time::OffsetDateTime::now_utc();
+        let body = open_as_control_plane(&client, &node.node_id, &timestamp(received).0);
+        let after = time::OffsetDateTime::now_utc();
+        assert_eq!(body["outcome"], json!("opened"), "{body}");
+        let session = row(&client, SESSIONS, "node_id", &node.node_id);
+        assert_eq!(at(&session["last_seen_at"]), received, "{session}");
+        let opened = at(&session["opened_at"]);
+        assert!(before <= opened && opened <= after, "{session}");
+    }
+
+    /// No frame of the node carries a time (`protocols/node-channel.yaml`): a `received_at` in
+    /// the hello frame is not read; the receipt instant is the control host's.
+    #[test]
+    fn a_receipt_instant_in_the_hello_frame_is_not_read() {
+        let host = ControlHost::start();
+        let client = host.client();
+        let node = joined(&client);
+        let before = time::OffsetDateTime::now_utc();
+        let answer = client
+            .post(
+                "/node/hello",
+                &json!({
+                    "node_id": node.node_id,
+                    "agent_version": "0.1.0",
+                    "received_at": "2001-01-01T00:00:00Z",
+                }),
+            )
+            .expect("the control host answers");
+        let after = time::OffsetDateTime::now_utc();
+        assert_eq!(answer.status, 200, "{}", answer.body);
+        let session = row(&client, SESSIONS, "node_id", &node.node_id);
+        let seen = at(&session["last_seen_at"]);
+        assert!(before <= seen && seen <= after, "{session}");
+    }
+
+    /// `RecordNodeObservation` in each outcome this story decides: `no-such-node`, `not-joined`
+    /// (Provisioning), `ready` (Joining), `observed` (Ready, Cordoned) with what was observed
+    /// written, and a Cordoned node stays Cordoned. The existing cases reach only `ready`,
+    /// through the agent.
+    #[test]
+    fn record_node_observation_takes_each_outcome_and_writes_what_was_observed() {
+        let cordoned = weft_impl::context::mint();
+        let host = ControlHost::start_seeded(vec![node_row(
+            &cordoned,
+            weft_types::infrastructure::NodeState::Cordoned,
+        )]);
+        let client = host.client();
+
+        let unknown = observe(&client, &weft_impl::context::mint(), 1);
+        assert_eq!(unknown["outcome"], json!("no-such-node"), "{unknown}");
+
+        let cloud_id = steps::create_cloud(&client);
+        steps::declare_zone(&client, &cloud_id, "z1");
+        let pool = steps::create_node_pool(&client);
+        let provisioning = steps::provision_pool_node(&client, &pool);
+        let body = observe(&client, &provisioning.node_id, 1);
+        assert_eq!(body["outcome"], json!("not-joined"), "{body}");
+        let untouched = row(&client, NODES, "node_id", &provisioning.node_id);
+        assert_eq!(untouched["state"], json!("Provisioning"), "{untouched}");
+        assert!(untouched["capacity"].is_null(), "{untouched}");
+
+        let node = steps::provision_pool_node(&client, &pool);
+        let body = steps::join_node(&client, &node.node_id, &node.join_token);
+        assert_eq!(body["outcome"], json!("joined"), "{body}");
+        let body = observe(&client, &node.node_id, 2);
+        assert_eq!(body["outcome"], json!("ready"), "{body}");
+        let body = observe(&client, &node.node_id, 7);
+        assert_eq!(body["outcome"], json!("observed"), "{body}");
+        let ready = row(&client, NODES, "node_id", &node.node_id);
+        assert_eq!(ready["state"], json!("Ready"), "{ready}");
+        assert_eq!(ready["capacity"][0]["amount"], json!(7), "{ready}");
+
+        let body = observe(&client, &cordoned, 3);
+        assert_eq!(body["outcome"], json!("observed"), "{body}");
+        let kept = row(&client, NODES, "node_id", &cordoned);
+        assert_eq!(kept["state"], json!("Cordoned"), "{kept}");
+        assert_eq!(kept["capacity"][0]["amount"], json!(3), "{kept}");
+    }
+}

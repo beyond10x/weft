@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T17:17:38Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-control-host",
+  "kind": "story",
+  "revision": 41,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#16, merged 18709f0",
+    "reference": "https://github.com/beyond10x/weft/pull/16"
+  }
+}

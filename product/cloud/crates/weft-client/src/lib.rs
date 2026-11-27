@@ -21,9 +21,56 @@ pub const CALLER_HEADER: &str = "X-Weft-Caller";
 const TIMEOUT: Duration = Duration::from_secs(20);
 
 /// A client of one control host.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Client {
-    address: SocketAddr,
+    addresses: Addresses,
+}
+
+/// The addresses one control host is dialed at, in the order they are tried: every address a
+/// host name resolves to (`localhost` is `::1` and `127.0.0.1`, in the resolver's order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Addresses(Vec<SocketAddr>);
+
+impl Addresses {
+    /// The addresses, in order.
+    pub fn as_slice(&self) -> &[SocketAddr] {
+        &self.0
+    }
+}
+
+impl From<SocketAddr> for Addresses {
+    fn from(address: SocketAddr) -> Self {
+        Self(vec![address])
+    }
+}
+
+impl From<Vec<SocketAddr>> for Addresses {
+    fn from(addresses: Vec<SocketAddr>) -> Self {
+        Self(addresses)
+    }
+}
+
+impl std::fmt::Display for Addresses {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let texts: Vec<String> = self.0.iter().map(SocketAddr::to_string).collect();
+        f.write_str(&texts.join(", "))
+    }
+}
+
+/// Connects to the first of `addresses` that accepts within `timeout` each.
+///
+/// # Errors
+///
+/// The error of the last address tried when none accepts, or an empty list.
+pub fn dial(addresses: &[SocketAddr], timeout: Duration) -> io::Result<TcpStream> {
+    let mut last = io::Error::new(io::ErrorKind::InvalidInput, "no address to dial");
+    for address in addresses {
+        match TcpStream::connect_timeout(address, timeout) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last = error,
+        }
+    }
+    Err(last)
 }
 
 /// One answer: the status and the JSON body.
@@ -36,14 +83,26 @@ pub struct Answer {
 }
 
 impl Client {
-    /// A client of the control host listening on `address`.
-    pub fn new(address: SocketAddr) -> Self {
-        Self { address }
+    /// A client of the control host listening on `addresses` (one address or several, tried in
+    /// order for each request, [`dial`]).
+    ///
+    /// # Panics
+    ///
+    /// When `addresses` is empty.
+    pub fn new(addresses: impl Into<Addresses>) -> Self {
+        let addresses = addresses.into();
+        assert!(!addresses.0.is_empty(), "a client needs an address");
+        Self { addresses }
     }
 
-    /// The address this client sends to.
+    /// The first address this client sends to.
     pub fn address(&self) -> SocketAddr {
-        self.address
+        self.addresses.0[0]
+    }
+
+    /// Every address this client sends to, in the order it tries them.
+    pub fn addresses(&self) -> &Addresses {
+        &self.addresses
     }
 
     /// Sends the command `command` (a qualified name, `weft.accounts.CreateTenant`) as `actor`
@@ -92,6 +151,15 @@ impl Client {
         self.send("GET", &view_target(view, params), Some(&header), &[])
     }
 
+    /// Posts the JSON `body` to `path` as no caller: a frame of the node channel (`/node/...`).
+    ///
+    /// # Errors
+    ///
+    /// What the connection refuses, or an answer that is not HTTP.
+    pub fn post(&self, path: &str, body: &Value) -> io::Result<Answer> {
+        self.send("POST", path, None, body.to_string().as_bytes())
+    }
+
     fn send(
         &self,
         method: &str,
@@ -99,12 +167,12 @@ impl Client {
         caller: Option<&str>,
         body: &[u8],
     ) -> io::Result<Answer> {
-        let mut stream = TcpStream::connect_timeout(&self.address, TIMEOUT)?;
+        let mut stream = dial(self.addresses.as_slice(), TIMEOUT)?;
         stream.set_read_timeout(Some(TIMEOUT))?;
         stream.set_write_timeout(Some(TIMEOUT))?;
         let mut head = format!(
             "{method} {target} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n",
-            self.address,
+            stream.peer_addr()?,
             body.len()
         );
         if let Some(caller) = caller {

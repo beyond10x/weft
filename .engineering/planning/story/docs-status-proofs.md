@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-status-proofs
 kind: story
-status: active
+status: implemented
 title: Status page rendered from status.json, every shipped item proved by a file or a command in the docs check
 relations:
 - decomposes: epic:docs-fidelity
@@ -29,10 +29,11 @@ scope:
   path: website/docs/status.md
 - confidence: cited
   path: website/product.json
-revision: 12
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T16:03:33Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T16:03:33Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T17:18:35Z", actor: "human:operator", revision: 13, decided_on: {"recorded":{"test_result":1,"approval":1,"review_outcome":1}}}
 ---
 ## Epic
 

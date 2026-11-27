@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-node-join-session
 kind: story
-status: draft
+status: active
 title: weft-agent joins with its token and opens its session through the node-channel endpoint of the control host
 relations:
 - decomposes: epic:walking-skeleton
@@ -31,8 +31,13 @@ scope:
 - confidence: cited
   path: product/cloud/crates/weft-impl/src/behaviours/record_node_observation.rs
 - confidence: cited
+  path: product/cloud/crates/weft-impl/src/behaviours/supersede_node_session.rs
+- confidence: cited
   path: product/cloud/crates/weft-testkit/src
-revision: 23
+revision: 27
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T17:18:35Z", actor: "human:operator", revision: 24, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-27T17:18:35Z", actor: "human:operator", revision: 25, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -56,11 +61,15 @@ the join token `ProvisionPoolNode` issued, no inbound port on the node, mTLS a l
   endpoint, `product/cloud/crates/weft-bin/src/node_channel.rs`, served on the same listener under `/node/`: the
   node sends a `hello` frame; the endpoint sends `weft.nodes.OpenNodeSession` in-process as
   ControlPlane, with `received_at` from the context clock on receipt, and answers `hello` with the
-  session id or the refusal. On a refusal the node sends `hello` again after the redial delay of the
-  protocol model (3000 ms).
+  session id or the refusal. As the protocol model says (`protocols/node-channel.yaml`): a `hello`
+  for a node whose session is still `Open` runs `weft.nodes.SupersedeNodeSession` on it first
+  (`replace-open-session`, `ess/5-runtime/nodes.yaml`), so a restarted agent gets a new session;
+  a refused `hello` ends the agent (`session-refused`), and only a lost connection is redialled
+  after the redial delay (3000 ms). Every answered request on `/node/`, a refusal of the endpoint
+  itself included, writes its request line to the control host log.
 - Obligations implemented here, each in its own file under `product/cloud/crates/weft-impl/src/behaviours/`:
-  `weft.infrastructure.RecordNodeObservation` and `weft.nodes.OpenNodeSession` (2 of the 24 command
-  behaviours on the skeleton path).
+  `weft.infrastructure.RecordNodeObservation`, `weft.nodes.OpenNodeSession` and
+  `weft.nodes.SupersedeNodeSession` (command behaviours on the skeleton path).
 - Not here: heartbeats (`weft.nodes.Heartbeat`), lease renewal and the R3 loss of a silent
   session. The skeleton path needs none of them; they come with the story that runs R3.
 - `weft-agent` gets its binary: arguments control URL, node id, join token, substrate socket,
@@ -89,7 +98,7 @@ the join token `ProvisionPoolNode` issued, no inbound port on the node, mTLS a l
   `join`)
 - `product/cloud/crates/weft-bin/` (`src/node_channel.rs`, routing in `src/main.rs`)
 - `product/cloud/crates/weft-impl/` (`src/behaviours/`: `record_node_observation.rs`,
-  `open_node_session.rs`)
+  `open_node_session.rs`, `supersede_node_session.rs`)
 - `product/cloud/crates/weft-testkit/` (start `weft-agent` as a child process)
 
 ## Acceptance

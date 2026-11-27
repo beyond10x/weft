@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-control-host
 kind: story
-status: active
+status: implemented
 title: 'Control host: one weft binary serving the generated HTTP surface, SQLite storage port, context port, and the operator and tenancy obligations'
 relations:
 - decomposes: epic:walking-skeleton
@@ -45,10 +45,11 @@ scope:
   path: product/cloud/crates/weft-impl/src/storage
 - confidence: cited
   path: product/cloud/crates/weft-testkit
-revision: 41
+revision: 42
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T16:03:31Z", actor: "human:operator", revision: 40, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T16:03:31Z", actor: "human:operator", revision: 41, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T17:18:35Z", actor: "human:operator", revision: 42, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

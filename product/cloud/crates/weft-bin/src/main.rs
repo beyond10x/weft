@@ -12,6 +12,11 @@
 //! which case every request is answered as no caller. The `test-header` build refuses a
 //! `--listen` that is not loopback (exit 2). A state file another control host holds is refused
 //! (exit 1); what opening repaired in the log is written to stderr.
+//!
+//! The same listener serves the node channel under `/node/` ([`node_channel`]): the node agent
+//! dials it.
+
+mod node_channel;
 
 use std::io::Write;
 use std::net::TcpListener;
@@ -113,6 +118,12 @@ fn main() -> ExitCode {
     {
         return ExitCode::FAILURE;
     }
-    host.serve(&listener, TRUST_CALLERS);
+    weft_bin::serve(&listener, |request| {
+        if request.path.starts_with(node_channel::PREFIX) {
+            node_channel::answer(&host, request)
+        } else {
+            host.handle(request, TRUST_CALLERS)
+        }
+    });
     ExitCode::FAILURE
 }

@@ -141,24 +141,50 @@ impl Host {
         actor: Option<&str>,
         work: impl FnOnce(&mut System) -> (Response, Vec<SystemEvent>),
     ) -> Response {
+        self.unit(|unit| unit.run(operation, actor, work))
+    }
+
+    /// Runs `work`, one unit of several commands ([`Unit::run`]), in one transaction of the state
+    /// file with the log lines of every command, in their order. The unit commits nothing when a
+    /// command answers `committed: false` or `work` calls [`Unit::abort`]: then every command's
+    /// request line is still logged, without event lines.
+    pub fn unit<T>(&self, work: impl FnOnce(&mut Unit<'_>) -> T) -> T {
         let mut system = self.system();
-        let (answer, committed) = self.ports.store().transaction(|| {
-            let (answer, events) = work(&mut system);
-            if uncommitted(&answer) {
+        let (value, steps, committed) = self.ports.store().transaction(|| {
+            let mut unit = Unit {
+                system: &mut system,
+                steps: Vec::new(),
+                abort: false,
+            };
+            let value = work(&mut unit);
+            let Unit { steps, abort, .. } = unit;
+            if abort {
                 self.log.discard();
-                return ((answer, false), false);
+                return ((value, steps, false), false);
             }
-            self.log.request(operation, actor, answer.status);
-            for event in &events {
-                self.log.event(event.name());
+            for step in &steps {
+                self.log.request(
+                    step.operation.as_deref(),
+                    step.actor.as_deref(),
+                    step.status,
+                );
+                for event in &step.events {
+                    self.log.event(event);
+                }
             }
-            ((answer, true), true)
+            ((value, steps, true), true)
         });
         if !committed {
-            self.log.request(operation, actor, answer.status);
+            for step in &steps {
+                self.log.request(
+                    step.operation.as_deref(),
+                    step.actor.as_deref(),
+                    step.status,
+                );
+            }
         }
         self.log.flush();
-        answer
+        value
     }
 
     /// The ports of the system.
@@ -166,24 +192,78 @@ impl Host {
         &self.ports
     }
 
-    /// Serves `listener` one connection at a time, until the listener fails for good.
+    /// Serves `listener` one connection at a time, until the listener fails for good: each
+    /// request is answered by [`Host::handle`] with `trust_callers`.
     pub fn serve(&self, listener: &TcpListener, trust_callers: bool) {
-        for connection in listener.incoming() {
-            let Ok(connection) = connection else {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                continue;
-            };
-            let _ = connection.set_read_timeout(Some(http::READ_TIMEOUT));
-            let _ = connection.set_write_timeout(Some(http::WRITE_TIMEOUT));
-            let mut reader = BufReader::new(connection);
-            let (answer, refused) = match http::read(&mut reader) {
-                Ok(request) => (self.handle(&request, trust_callers), false),
-                Err(refusal) => (refusal, true),
-            };
-            let mut stream = reader.into_inner();
-            if http::write(&mut stream, &answer).is_ok() && refused {
-                http::linger(&mut stream);
-            }
+        serve(listener, |request| self.handle(request, trust_callers));
+    }
+}
+
+/// The commands of one unit of work of [`Host::unit`].
+pub struct Unit<'a> {
+    system: &'a mut System,
+    steps: Vec<Step>,
+    abort: bool,
+}
+
+/// One command of a unit, as its log lines record it.
+struct Step {
+    operation: Option<String>,
+    actor: Option<String>,
+    status: u16,
+    events: Vec<String>,
+}
+
+impl Unit<'_> {
+    /// Runs `work` on the system as the request of `operation` sent by `actor`: its answer. An
+    /// answer that says `committed: false` makes the whole unit commit nothing.
+    pub fn run(
+        &mut self,
+        operation: Option<&str>,
+        actor: Option<&str>,
+        work: impl FnOnce(&mut System) -> (Response, Vec<SystemEvent>),
+    ) -> Response {
+        let (answer, events) = work(self.system);
+        if uncommitted(&answer) {
+            self.abort = true;
+        }
+        self.steps.push(Step {
+            operation: operation.map(str::to_owned),
+            actor: actor.map(str::to_owned),
+            status: answer.status,
+            events: events
+                .iter()
+                .map(|event| event.name().to_string())
+                .collect(),
+        });
+        answer
+    }
+
+    /// Makes the unit commit nothing: what its commands wrote is rolled back.
+    pub fn abort(&mut self) {
+        self.abort = true;
+    }
+}
+
+/// Serves `listener` one connection at a time, until the listener fails for good: each request
+/// is answered by `answer`, the router of a binary that serves more than [`Host::handle`] on the
+/// same listener (the node channel of `weft`).
+pub fn serve(listener: &TcpListener, answer: impl Fn(&Request) -> Response) {
+    for connection in listener.incoming() {
+        let Ok(connection) = connection else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        };
+        let _ = connection.set_read_timeout(Some(http::READ_TIMEOUT));
+        let _ = connection.set_write_timeout(Some(http::WRITE_TIMEOUT));
+        let mut reader = BufReader::new(connection);
+        let (answer, refused) = match http::read(&mut reader) {
+            Ok(request) => (answer(&request), false),
+            Err(refusal) => (refusal, true),
+        };
+        let mut stream = reader.into_inner();
+        if http::write(&mut stream, &answer).is_ok() && refused {
+            http::linger(&mut stream);
         }
     }
 }

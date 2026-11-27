@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T17:01:32Z",
+  "actor": "human:operator",
+  "artifact": "story:docs-status-proofs",
+  "kind": "story",
+  "revision": 12,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#15, merged 11ce1ab",
+    "reference": "https://github.com/beyond10x/weft/pull/15"
+  }
+}
