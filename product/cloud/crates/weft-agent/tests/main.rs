@@ -436,32 +436,189 @@ mod join {
         assert_eq!(rows(&client, sessions), before);
     }
 
-    /// A refused `hello` is reported with its status and sent again after the redial delay of
-    /// the protocol model (3000 ms): a second agent of a node whose session is open is refused.
+    /// A restarted agent dials over its node's still-Open session (`replace-open-session`): it
+    /// gets a new session, and the old one reads Superseded.
     #[test]
-    fn a_refused_hello_is_reported_and_sent_again_after_the_redial_delay() {
+    fn a_restarted_agent_gets_a_new_session_and_its_old_one_is_superseded() {
         let (host, node) = provisioned();
+        let client = host.client();
         let mut first = NodeAgent::start(&host, &node.node_id, &node.join_token);
         let lines = first.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());
-        assert_eq!(hellos(&lines)[0]["hello"], json!("opened"), "{lines:?}");
+        let old = hellos(&lines)[0]["session_id"].clone();
+        drop(first);
 
         let mut second = NodeAgent::start(&host, &node.node_id, &node.join_token);
         let lines = second.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());
-        let refused_once = Instant::now();
-        let first_hello = &hellos(&lines)[0];
-        assert_eq!(first_hello["hello"], json!("refused"), "{lines:?}");
-        assert!(
-            first_hello["status"]
-                .as_u64()
-                .is_some_and(|status| status >= 400),
-            "{first_hello}"
+        let hello = &hellos(&lines)[0];
+        assert_eq!(hello["hello"], json!("opened"), "{lines:?}");
+        assert_ne!(hello["session_id"], old);
+        let sessions = "weft.nodes.NodeSessions";
+        let old = row(
+            &client,
+            sessions,
+            "session_id",
+            old.as_str().expect("a session id"),
         );
-        let lines = second.wait_for(Duration::from_secs(10), |lines| hellos(lines).len() >= 2);
-        let gap = refused_once.elapsed();
-        assert_eq!(hellos(&lines)[1]["hello"], json!("refused"), "{lines:?}");
+        assert_eq!(old["state"], json!("Superseded"), "{old}");
+        let new = row(
+            &client,
+            sessions,
+            "session_id",
+            hello["session_id"].as_str().expect("a session id"),
+        );
+        assert_eq!(new["state"], json!("Open"), "{new}");
+    }
+
+    /// A stand-in control host on loopback: it answers `JoinNode` `joined` and
+    /// `RecordNodeObservation` `ready`, and each `hello` with what `hello` gives for its number
+    /// (from 0): `Some((status, body))`, or `None` to close the connection unanswered. Each
+    /// `hello`'s arrival instant is pushed to the returned list.
+    fn stand_in(
+        hello: impl Fn(usize) -> Option<(u16, Value)> + Send + 'static,
+    ) -> (
+        std::net::SocketAddr,
+        std::sync::Arc<std::sync::Mutex<Vec<Instant>>>,
+    ) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let address = listener.local_addr().expect("an address");
+        let arrivals = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = arrivals.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let mut reader = BufReader::new(stream);
+                let mut head = String::new();
+                let mut length = 0;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = line.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            length = value.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    head.push_str(&line);
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let path = head
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or_default()
+                    .to_owned();
+                let answer = match path.as_str() {
+                    "/weft/commands/JoinNode" => {
+                        Some((202, json!({"outcome": "joined", "published": []})))
+                    }
+                    "/weft/commands/RecordNodeObservation" => {
+                        Some((202, json!({"outcome": "ready", "published": []})))
+                    }
+                    "/node/hello" => {
+                        let number = {
+                            let mut seen = seen.lock().expect("the arrivals lock");
+                            seen.push(Instant::now());
+                            seen.len() - 1
+                        };
+                        hello(number)
+                    }
+                    _ => Some((404, json!({"refused": "not here"}))),
+                };
+                let mut stream = reader.into_inner();
+                if let Some((status, body)) = answer {
+                    let body = body.to_string();
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+            }
+        });
+        (address, arrivals)
+    }
+
+    /// A refused `hello` is reported with its status and ends the agent with a failure
+    /// (`session-refused`: the node closes and does not dial again).
+    #[test]
+    fn a_refused_hello_is_reported_and_ends_the_agent() {
+        let (control, arrivals) = stand_in(|_| {
+            Some((
+                409,
+                json!({"outcome": "already-open", "error": "weft.nodes.SessionAlreadyOpen", "published": []}),
+            ))
+        });
+        let mut agent = NodeAgent::start_at(control, "node-1", "token");
+        let status = agent.wait_exit(HELLO_LIMIT);
+        assert!(!status.success(), "{status}");
+        assert_eq!(
+            hellos(&agent.report()),
+            vec![json!({"hello": "refused", "status": 409})]
+        );
+        assert_eq!(arrivals.lock().expect("the arrivals lock").len(), 1);
+    }
+
+    /// A `hello` whose connection is lost, unanswered, is sent again after the redial delay of
+    /// the protocol model (3000 ms; `lose-transport-dialing`, `redial`), and no line is reported
+    /// for it.
+    #[test]
+    fn a_hello_whose_connection_is_lost_is_sent_again_after_the_redial_delay() {
+        let (control, arrivals) =
+            stand_in(|number| (number > 0).then(|| (200, json!({"session_id": "session-1"}))));
+        let mut agent = NodeAgent::start_at(control, "node-1", "token");
+        let lines = agent.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());
+        assert_eq!(
+            hellos(&lines),
+            vec![json!({"hello": "opened", "session_id": "session-1"})]
+        );
+        let arrivals = arrivals.lock().expect("the arrivals lock").clone();
+        assert_eq!(arrivals.len(), 2, "{arrivals:?}");
+        let gap = arrivals[1] - arrivals[0];
         assert!(
-            gap >= Duration::from_millis(2900),
-            "the second hello came {gap:?} after the first refusal, before the redial delay"
+            gap >= Duration::from_millis(3000),
+            "the hello after the lost connection came {gap:?} later, before the redial delay"
+        );
+    }
+}
+
+/// Adversary cases of `story:skeleton-node-join-session` that need no substrate daemon.
+mod join_adversary {
+    use weft_agent::agent::Options;
+    use weft_client::Client;
+    use weft_testkit::ControlHost;
+
+    /// The usage line names the control URL `http://<host>:<port>`. `Options::parse` keeps the
+    /// first address the host name resolves to, and the agent dials only that one. Where
+    /// `localhost` resolves to `::1` first (this host: `getent ahosts localhost`), a control
+    /// host on its default `--listen 127.0.0.1` is never reached through
+    /// `--control http://localhost:<port>`.
+    #[test]
+    fn a_control_url_naming_localhost_reaches_a_control_host_on_127_0_0_1() {
+        let host = ControlHost::start();
+        let url = format!("http://localhost:{}", host.address().port());
+        let options = Options::parse(
+            [
+                "--control",
+                url.as_str(),
+                "--node-id",
+                "n",
+                "--join-token",
+                "t",
+                "--substrate",
+                "s",
+                "--report",
+                "r",
+            ]
+            .map(str::to_owned),
+        )
+        .expect("the arguments parse");
+        let answer = Client::new(options.control).view("weft.infrastructure.Nodes", &[]);
+        assert!(
+            answer.as_ref().is_ok_and(|answer| answer.status == 200),
+            "--control {url} dials {} only: {answer:?}",
+            options.control
         );
     }
 }

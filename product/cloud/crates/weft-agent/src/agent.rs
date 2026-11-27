@@ -7,9 +7,11 @@
 //!    or `token-used` when it was joined before and restarts).
 //! 3. `weft.infrastructure.RecordNodeObservation` as the NodeAgent with its capacity and isolation
 //!    facts, observed now on its own clock (`ready` the first time, `observed` after).
-//! 4. A `hello` frame on the node channel (`POST /node/hello`) until it is answered with a
-//!    session; each answer is a line of the report file, and after a refusal or a lost connection
-//!    the agent sends `hello` again after the redial delay of the protocol model, 3000 ms.
+//! 4. A `hello` frame on the node channel (`POST /node/hello`); its answer is a line of the
+//!    report file. As the protocol model says (`protocols/node-channel.yaml`): a session opens
+//!    (`session-welcomed`); a refusal ends the agent with a failure (`session-refused`, the node
+//!    closes); a lost connection, no answer at all, is dialed again after the redial delay,
+//!    3000 ms (`lose-transport-dialing`, `redial`).
 //!
 //! Then it holds its session until it is stopped. Heartbeats, lease renewal and the work list come
 //! with later stories.
@@ -139,13 +141,18 @@ pub fn run(options: &Options) -> Result<(), String> {
                 )?;
                 break;
             }
-            Ok(answer) => write(
-                &mut report,
-                &json!({"hello": "refused", "status": answer.status}),
-            )?,
-            Err(error) => eprintln!("weft-agent: hello: the control host did not answer: {error}"),
+            Ok(answer) => {
+                write(
+                    &mut report,
+                    &json!({"hello": "refused", "status": answer.status}),
+                )?;
+                return Err(format!("hello refused: {} {}", answer.status, answer.body));
+            }
+            Err(error) => {
+                eprintln!("weft-agent: hello: the connection was lost, dialing again in {REDIAL:?}: {error}");
+                std::thread::sleep(REDIAL);
+            }
         }
-        std::thread::sleep(REDIAL);
     }
     loop {
         std::thread::sleep(Duration::from_secs(3600));

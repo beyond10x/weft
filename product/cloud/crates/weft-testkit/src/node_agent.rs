@@ -2,8 +2,9 @@
 //! host's address, a node id and its join token, the substrate socket of the test run and a
 //! report file in a temporary directory of its own; stopped on drop.
 
+use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
@@ -49,12 +50,18 @@ pub struct NodeAgent {
 impl NodeAgent {
     /// Starts `weft-agent` for the node `node_id` with `join_token`, dialing `host`.
     pub fn start(host: &ControlHost, node_id: &str, join_token: &str) -> Self {
+        Self::start_at(host.address(), node_id, join_token)
+    }
+
+    /// Starts `weft-agent` for the node `node_id` with `join_token`, dialing the control host
+    /// (or a stand-in of a test) at `control`.
+    pub fn start_at(control: SocketAddr, node_id: &str, join_token: &str) -> Self {
         let dir = TempDir::new();
         let report = dir.path().join("report.jsonl");
         let binary = node_agent_binary();
         let child = Command::new(&binary)
             .arg("--control")
-            .arg(format!("http://{}", host.address()))
+            .arg(format!("http://{control}"))
             .arg("--node-id")
             .arg(node_id)
             .arg("--join-token")
@@ -99,11 +106,32 @@ impl NodeAgent {
                 return lines;
             }
             if let Ok(Some(status)) = self.child.try_wait() {
+                // The last line may have been written between the read and the exit.
+                let lines = self.report();
+                if done(&lines) {
+                    return lines;
+                }
                 panic!("weft-agent ended ({status}) before its report was complete: {lines:?}");
             }
             assert!(
                 start.elapsed() < limit,
                 "weft-agent's report is not complete after {limit:?}: {lines:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Waits until the agent ends, at most `limit`: its exit status. Panics when the limit passes.
+    pub fn wait_exit(&mut self, limit: Duration) -> ExitStatus {
+        let start = Instant::now();
+        loop {
+            if let Some(status) = self.child.try_wait().expect("the agent's status reads") {
+                return status;
+            }
+            assert!(
+                start.elapsed() < limit,
+                "weft-agent still runs after {limit:?}: {:?}",
+                self.report()
             );
             std::thread::sleep(Duration::from_millis(20));
         }

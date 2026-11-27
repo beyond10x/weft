@@ -19,10 +19,16 @@ use weft_types::nodes::{
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
-use weft_types::shared::NodeSessionId;
+use weft_types::shared::{NodeId, NodeSessionId};
 
 use crate::context::{instant, mint, timestamp};
 use crate::Ports;
+
+/// Whether `node_id` is "a joined node of the cluster": its `weft.infrastructure.Node` row exists
+/// and is neither `Provisioning` (not joined yet) nor `Gone`.
+pub(crate) fn joined(ports: &Ports, node_id: &NodeId) -> bool {
+    NodeStorage::get(ports, node_id).is_some_and(|node| !matches!(node.state, NodeState::Provisioning | NodeState::Gone))
+}
 
 impl OpenNodeSessionBehavior for Ports {
     fn open_node_session(&mut self, input: OpenNodeSession) -> Result<OpenNodeSessionOutcome, UnmetObligation> {
@@ -36,9 +42,7 @@ impl OpenNodeSessionBehavior for Ports {
         if received_at > now {
             return Ok(OpenNodeSessionOutcome::ReceivedInFuture { error: ReceivedInFuture });
         }
-        let joined = NodeStorage::get(self, &input.node_id)
-            .is_some_and(|node| !matches!(node.state, NodeState::Provisioning | NodeState::Gone));
-        if !joined {
+        if !joined(self, &input.node_id) {
             return Ok(OpenNodeSessionOutcome::IdentityRefused { error: NodeIdentityRefused });
         }
         if NodeSessionStorage::list(self)
