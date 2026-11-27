@@ -15,9 +15,12 @@
 //!    of the same store: `no-artifact`, `artifact-foreign` (registered to another account),
 //!    `artifact-revoked`, `artifact-kind` (an artifact kind other than the package kind, the
 //!    same variant name);
-//! 5. `defined`: a `Defined` workload with the values sent. `over-quota`, an external branch
-//!    declared after `defined`, is never reached (its contract: accepting and external branches
-//!    in declaration order).
+//! 5. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
+//!    the same store ([`crate::quota::exceeded_alone`]): the claims of one instance of the
+//!    workload alone would take the account, or an account above it, past a quota. What the
+//!    account's live instances hold does not count; `CreateInstance` asks for each instance. It
+//!    is answered before `defined`, the branch the contract takes "otherwise" (its default);
+//! 6. `defined`: a `Defined` workload with the values sent.
 
 use weft_types::artifacts::{ArtifactKind, ArtifactState};
 use weft_types::behaviour::{
@@ -32,13 +35,14 @@ use weft_types::workloads::obligations::DefineWorkloadBehavior;
 use weft_types::workloads::{
     ArtifactIsRevoked, ArtifactKindMismatch, ArtifactNotFound, BoxPackageKind, Check, CheckKind,
     DefineWorkload, DefineWorkloadOutcome, InvalidCheck, InvalidRestartPolicy,
-    IsolationBelowMinimum, NoMainProcess, NotFound, PackageKind, ProcessRole, RestartPolicy,
-    RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound, RuntimeState, SettingsShapeMismatch,
-    ShapeKind, ShapeSettings, SpecKindNotRunnable, StateConflict, WorkloadData, WorkloadDefined,
-    WorkloadSnapshot, WorkloadState,
+    IsolationBelowMinimum, NoMainProcess, NotFound, PackageKind, ProcessRole, QuotaExceeded,
+    RestartPolicy, RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound, RuntimeState,
+    SettingsShapeMismatch, ShapeKind, ShapeSettings, SpecKindNotRunnable, StateConflict,
+    WorkloadData, WorkloadDefined, WorkloadSnapshot, WorkloadState,
 };
 
 use crate::context::mint;
+use crate::quota;
 use crate::Ports;
 
 impl DefineWorkloadBehavior for Ports {
@@ -173,6 +177,11 @@ impl DefineWorkloadBehavior for Ports {
         if artifact.data.kind != artifact_kind(input.package_kind) {
             return Ok(DefineWorkloadOutcome::ArtifactKind {
                 error: ArtifactKindMismatch,
+            });
+        }
+        if quota::exceeded_alone(self, &input.account_id, &input.claims) {
+            return Ok(DefineWorkloadOutcome::OverQuota {
+                error: QuotaExceeded,
             });
         }
 

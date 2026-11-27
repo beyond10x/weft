@@ -7,6 +7,12 @@
 //! run one at a time. Each request is answered by the `dispatch_with_events` of the module whose
 //! route table holds its path, and logged with the events it published ([`weft_impl::log`]) in
 //! the same transaction. `/openapi.json` and `/docs` are answered by the host ([`contract`]).
+//!
+//! The bindings the generated system does not deliver ([`weft_impl::bindings`]) run at the end
+//! of every unit of work, over what its commands published, in the same transaction: each
+//! attempt is logged as a binding line, then the lines of the events it published. The
+//! controllers ([`weft_controllers`]) run in [`Host::tick`], which first attempts again what the
+//! bindings hold.
 
 pub mod contract;
 
@@ -18,8 +24,9 @@ use std::sync::{Mutex, MutexGuard};
 
 use contract::Contract;
 use serde_json::Value;
+use weft_impl::bindings::{Answer, Runner};
 use weft_impl::context::{CallerAttributes, Clock};
-use weft_impl::log::Log;
+use weft_impl::log::{BindingResult, Log};
 use weft_impl::{Ports, System};
 use weft_server::http::{self, Request, Response};
 use weft_server::{weft_api, weft_control};
@@ -45,6 +52,8 @@ impl std::error::Error for Error {}
 /// The system, its ports and its log.
 pub struct Host {
     system: Mutex<System>,
+    /// Used only while `system` is locked.
+    bindings: Runner,
     ports: Ports,
     log: Log,
     operations: HashMap<String, String>,
@@ -74,6 +83,7 @@ impl Host {
             .map_err(|error| Error(format!("control host log {}: {error}", log.display())))?;
         Ok(Self {
             system: Mutex::new(weft_impl::system(&ports)),
+            bindings: Runner::open(&ports),
             ports,
             log,
             operations: operations(),
@@ -145,30 +155,55 @@ impl Host {
     }
 
     /// Runs `work`, one unit of several commands ([`Unit::run`]), in one transaction of the state
-    /// file with the log lines of every command, in their order. The unit commits nothing when a
-    /// command answers `committed: false` or `work` calls [`Unit::abort`]: then every command's
-    /// request line is still logged, without event lines.
+    /// file with the log lines of every command, in their order. What the commands published is
+    /// then delivered to the hand-run bindings ([`weft_impl::bindings`]) in the same transaction,
+    /// each attempt logged as a binding line and the lines of what it published. The unit commits
+    /// nothing when a command answers `committed: false` or `work` calls [`Unit::abort`]: then
+    /// every command's request line is still logged, without event lines, no binding runs, and
+    /// the bindings hold what they held before the unit (the events they hold are rows of the
+    /// same transaction).
     pub fn unit<T>(&self, work: impl FnOnce(&mut Unit<'_>) -> T) -> T {
         let mut system = self.system();
         let (value, steps, committed) = self.ports.store().transaction(|| {
             let mut unit = Unit {
                 system: &mut system,
+                runner: &self.bindings,
                 steps: Vec::new(),
+                pending: Vec::new(),
                 abort: false,
             };
             let value = work(&mut unit);
+            if !unit.abort {
+                unit.deliver();
+            }
             let Unit { steps, abort, .. } = unit;
             if abort {
                 self.log.discard();
                 return ((value, steps, false), false);
             }
             for step in &steps {
-                self.log.request(
-                    step.operation.as_deref(),
-                    step.actor.as_deref(),
-                    step.status,
-                );
-                for event in &step.events {
+                match step {
+                    Step::Request {
+                        operation,
+                        actor,
+                        status,
+                        ..
+                    } => {
+                        self.log
+                            .request(operation.as_deref(), actor.as_deref(), *status);
+                    }
+                    Step::Binding {
+                        binding,
+                        refusal,
+                        result,
+                        attempt,
+                        ..
+                    } => {
+                        self.log
+                            .binding(binding, refusal.as_deref(), *result, *attempt);
+                    }
+                }
+                for event in step.events() {
                     self.log.event(event);
                 }
             }
@@ -176,15 +211,49 @@ impl Host {
         });
         if !committed {
             for step in &steps {
-                self.log.request(
-                    step.operation.as_deref(),
-                    step.actor.as_deref(),
-                    step.status,
-                );
+                if let Step::Request {
+                    operation,
+                    actor,
+                    status,
+                    ..
+                } = step
+                {
+                    self.log
+                        .request(operation.as_deref(), actor.as_deref(), *status);
+                }
             }
         }
         self.log.flush();
         value
+    }
+
+    /// One tick of the controllers, as one unit: first the events the bindings hold are
+    /// attempted again ([`Runner::retry`]), then every step of [`weft_controllers::tick`] sends
+    /// its commands, given the events still held, each logged as a request line, and what they
+    /// published goes to the bindings.
+    pub fn tick(&self) {
+        self.unit(|unit| {
+            unit.retry();
+            let held = unit.runner.held_events();
+            for sent in weft_controllers::tick(unit.system, &held) {
+                unit.run(Some(sent.operation), Some(sent.actor.name()), |_| {
+                    (sent.answer, sent.events)
+                });
+            }
+        });
+    }
+
+    /// Delivers `events` to the hand-run bindings as one unit, as if a command had published
+    /// them: a repeated delivery, for a test. The events themselves are not logged; each
+    /// binding's attempt is.
+    pub fn replay(&self, events: Vec<SystemEvent>) {
+        self.unit(|unit| unit.pending.extend(events));
+    }
+
+    /// How many events the hand-run bindings hold for another attempt.
+    pub fn held(&self) -> usize {
+        let _system = self.system();
+        self.bindings.held()
     }
 
     /// The ports of the system.
@@ -202,19 +271,73 @@ impl Host {
 /// The commands of one unit of work of [`Host::unit`].
 pub struct Unit<'a> {
     system: &'a mut System,
+    runner: &'a Runner,
     steps: Vec<Step>,
+    /// What the unit's commands published that no binding was given yet.
+    pending: Vec<SystemEvent>,
     abort: bool,
 }
 
-/// One command of a unit, as its log lines record it.
-struct Step {
-    operation: Option<String>,
-    actor: Option<String>,
-    status: u16,
-    events: Vec<String>,
+/// One command of a unit, or one attempt of a hand-run binding, as its log lines record it.
+enum Step {
+    Request {
+        operation: Option<String>,
+        actor: Option<String>,
+        status: u16,
+        events: Vec<String>,
+    },
+    Binding {
+        binding: &'static str,
+        refusal: Option<String>,
+        result: BindingResult,
+        attempt: u32,
+        events: Vec<String>,
+    },
+}
+
+impl Step {
+    /// The names of the events the step published.
+    fn events(&self) -> &[String] {
+        match self {
+            Self::Request { events, .. } | Self::Binding { events, .. } => events,
+        }
+    }
+}
+
+/// The names of `events`.
+fn names(events: &[SystemEvent]) -> Vec<String> {
+    events
+        .iter()
+        .map(|event| event.name().to_string())
+        .collect()
 }
 
 impl Unit<'_> {
+    /// Gives the hand-run bindings what the unit's commands published so far.
+    fn deliver(&mut self) {
+        let events = std::mem::take(&mut self.pending);
+        let answers = self.runner.deliver(self.system, events);
+        self.record(answers);
+    }
+
+    /// Attempts again what the hand-run bindings hold.
+    fn retry(&mut self) {
+        let answers = self.runner.retry(self.system);
+        self.record(answers);
+    }
+
+    fn record(&mut self, answers: Vec<Answer>) {
+        for answer in answers {
+            self.steps.push(Step::Binding {
+                binding: answer.binding,
+                refusal: answer.refusal,
+                result: answer.result,
+                attempt: answer.attempt,
+                events: names(&answer.events),
+            });
+        }
+    }
+
     /// Runs `work` on the system as the request of `operation` sent by `actor`: its answer. An
     /// answer that says `committed: false` makes the whole unit commit nothing.
     pub fn run(
@@ -227,15 +350,13 @@ impl Unit<'_> {
         if uncommitted(&answer) {
             self.abort = true;
         }
-        self.steps.push(Step {
+        self.steps.push(Step::Request {
             operation: operation.map(str::to_owned),
             actor: actor.map(str::to_owned),
             status: answer.status,
-            events: events
-                .iter()
-                .map(|event| event.name().to_string())
-                .collect(),
+            events: names(&events),
         });
+        self.pending.extend(events);
         answer
     }
 

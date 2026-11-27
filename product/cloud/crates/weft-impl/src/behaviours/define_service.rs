@@ -7,8 +7,12 @@
 //! 2. `no-workload`;
 //! 3. the predicates in declaration order: `workload-of-other-account`, `workload-retired`,
 //!    `not-a-service`, `exists` (a service of the workload, in any state);
-//! 4. `defined`: an `Awake` service in the workload's account, none of its replicas running yet.
-//!    `over-quota`, an external branch declared after `defined`, is never reached.
+//! 4. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
+//!    the same store ([`crate::quota::exceeded_alone`]): the claims of `replicas` instances of
+//!    the workload alone would take the account, or an account above it, past a quota. What the
+//!    account's live instances hold does not count; `CreateInstance` asks for each replica. It
+//!    is answered before `defined`, the branch the contract takes "otherwise" (its default);
+//! 5. `defined`: an `Awake` service in the workload's account, none of its replicas running yet.
 
 use weft_types::behaviour::{Context, ServiceStorage, WorkloadStorage};
 use weft_types::obligation::UnmetObligation;
@@ -16,12 +20,13 @@ use weft_types::primitives::Uuid;
 use weft_types::shared::ServiceId;
 use weft_types::workloads::obligations::DefineServiceBehavior;
 use weft_types::workloads::{
-    DefineService, DefineServiceOutcome, InvalidAmount, ServiceData, ServiceDefined, ServiceExists,
-    ServiceSnapshot, ServiceState, ShapeKind, ShapeMismatch, SleepPolicyRequired,
+    DefineService, DefineServiceOutcome, InvalidAmount, QuotaExceeded, ServiceData, ServiceDefined,
+    ServiceExists, ServiceSnapshot, ServiceState, ShapeKind, ShapeMismatch, SleepPolicyRequired,
     SleepPolicyRequiresMinZero, WorkloadIsRetired, WorkloadNotFound, WorkloadState,
 };
 
 use crate::context::mint;
+use crate::quota;
 use crate::Ports;
 
 impl DefineServiceBehavior for Ports {
@@ -80,6 +85,12 @@ impl DefineServiceBehavior for Ports {
         {
             return Ok(DefineServiceOutcome::Exists {
                 error: ServiceExists,
+            });
+        }
+        let claims = quota::times(&workload.data.claims, input.replicas);
+        if quota::exceeded_alone(self, &workload.data.account_id, &claims) {
+            return Ok(DefineServiceOutcome::OverQuota {
+                error: QuotaExceeded,
             });
         }
         let service_id = ServiceId(Uuid(mint()));

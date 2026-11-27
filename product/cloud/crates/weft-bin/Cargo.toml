@@ -26,6 +26,7 @@ test-callers = []
 
 [dependencies]
 serde_json = "1"
+weft-controllers = { path = "../weft-controllers" }
 weft-impl = { path = "../weft-impl" }
 weft-server = { path = "../../../../target/generated/crates/weft-server" }
 weft-system = { path = "../../../../target/generated/crates/weft-system" }
