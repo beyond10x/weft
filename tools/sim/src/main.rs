@@ -28,6 +28,15 @@ const USAGE: &str = "usage:
   weft-sim simulate --spec DIR --experiment FILE --out DIR
                     [--threads T] [--serve [ADDR]] [--exit-when-done] [--no-search]
   weft-sim replay   --spec DIR --trace DIR/result.json --walk K
+  weft-sim relate   --spec DIR --base EXPERIMENT [--settle N] [--base-append STEPS]
+                    [--drop LABELS] [--derived-append STEPS] [--hide VARS] [--observe VARS] [--ignore FIELDS]
+                                          a metamorphic relation: after the setup of the base and of
+                                          the derived run (the base without the setup steps whose
+                                          label contains a --drop word, then STEPS appended), every
+                                          parameterless view (and each one-parameter view read with
+                                          each variable) holds the same rows; exit 1 when not.
+                                          With --observe only rows naming an observed variable are
+                                          compared; else rows naming a --hide variable are left out
   weft-sim describe --spec DIR [--prefix weft.nodes.]   commands, inputs, outcomes, bindings
 
 --serve serves the live page (default 127.0.0.1:7480, loopback only) and keeps it served after the
@@ -414,6 +423,67 @@ fn replay_cmd(args: &Args) -> Result<ExitCode, String> {
     Ok(if differ == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) })
 }
 
+fn relate_cmd(args: &Args) -> Result<ExitCode, String> {
+    let spec_dir = PathBuf::from(args.get("spec", "ess"));
+    let base_file = args.flags.get("base").filter(|v| !v.is_empty()).map(PathBuf::from).ok_or("--base EXPERIMENT is required")?;
+    let list = |key: &str| -> std::collections::BTreeSet<String> {
+        args.get(key, "").split(',').map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect()
+    };
+    let steps = |key: &str| -> Result<Vec<experiment::Step>, String> {
+        match args.flags.get(key).filter(|v| !v.is_empty()) {
+            Some(f) => {
+                let text = std::fs::read_to_string(f).map_err(|e| format!("{f}: {e}"))?;
+                ess_yaml::from_str(&text).map_err(|e| format!("{f}: {e}"))
+            }
+            None => Ok(Vec::new()),
+        }
+    };
+    // derived = (base + --base-append) without the steps --drop names, + --derived-append
+    let mut base = experiment::load(&base_file)?;
+    base.setup.extend(steps("base-append")?);
+    let drop = list("drop");
+    let mut derived = base.clone();
+    derived.name = format!("{} (derived)", base.name);
+    let before = derived.setup.len();
+    derived.setup.retain(|s| !s.label.as_deref().is_some_and(|l| drop.iter().any(|d| l.contains(d.as_str()))));
+    let dropped = before - derived.setup.len();
+    derived.setup.extend(steps("derived-append")?);
+    if !drop.is_empty() {
+        eprintln!("weft-sim relate: --drop left out {dropped} setup steps of {before}");
+    }
+    let settle = args.num("settle", 0)? as usize;
+    let scope = weft_sim::relate::Scope { hide: list("hide"), observe: list("observe"), ignore: list("ignore") };
+    let (cat, compile_s) = load_without(&spec_dir, &base.lost_bindings)?;
+    let started = Instant::now();
+    let mut named = Vec::new();
+    for (label, exp) in [("base", &base), ("derived", &derived)] {
+        let cov = Coverage::new(&cat, "relate", 1);
+        let run = simulate::setup_rows(&cat, &cov, exp, settle, &scope.observe)?;
+        let n = weft_sim::relate::name_rows(&run.rows, &run.vars, &scope);
+        eprintln!(
+            "weft-sim relate: {label} {}: {} requests, {} views, {} rows, {} out of scope",
+            exp.name, run.requests, n.views.len(), n.rows, n.dropped
+        );
+        for r in &run.refusals {
+            eprintln!("  {label}: not accepted as declared: {r}");
+        }
+        named.push(n);
+    }
+    let diff = weft_sim::relate::differences(&named[0], &named[1], ("base", "derived"));
+    eprintln!(
+        "weft-sim relate: {} row difference(s) in {:.2} s (compile {compile_s:.2} s)",
+        diff.len(),
+        started.elapsed().as_secs_f64()
+    );
+    for d in diff.iter().take(20) {
+        println!("{}", d.chars().take(400).collect::<String>());
+    }
+    if diff.len() > 20 {
+        println!("... {} more", diff.len() - 20);
+    }
+    Ok(if diff.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+}
+
 fn describe_cmd(args: &Args) -> Result<ExitCode, String> {
     let spec_dir = PathBuf::from(args.get("spec", "ess"));
     let prefix = args.get("prefix", "");
@@ -467,6 +537,7 @@ fn main() -> ExitCode {
         "explore" => explore_cmd(&args),
         "simulate" => simulate_cmd(&args),
         "replay" => replay_cmd(&args),
+        "relate" => relate_cmd(&args),
         "describe" => describe_cmd(&args),
         "help" | "--help" | "-h" => {
             println!("{USAGE}");

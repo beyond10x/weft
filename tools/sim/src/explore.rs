@@ -731,10 +731,17 @@ pub fn run(
     }
     if stop.load(Ordering::SeqCst) {
         let mut inner = cov.inner.lock().expect("coverage");
-        inner.notes.push(format!(
+        let note = format!(
             "stopped after {} s (--max-seconds) at {} walks",
             config.max_seconds,
             cov.walks.load(Ordering::Relaxed)
-        ));
+        );
+        // Hardening pass 3, finding D1: how many walks fit the cap depends on the host's load, so a
+        // capped result is not the result of its seed.
+        eprintln!(
+            "weft-sim: {note} of {}: the result depends on the host's load, not only on --seed",
+            config.walks
+        );
+        inner.notes.push(note);
     }
 }

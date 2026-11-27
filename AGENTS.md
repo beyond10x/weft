@@ -35,6 +35,14 @@ none is written before the specification of what it implements.
 - `tools/check-layers.sh [--graph]`: fails on a reference to a higher layer (`task layers`).
 - `tools/check-stamped-time.sh [--inventory | --negative]`: fails when a command with a
   `weft.shared.StampedAt` input is granted outside `tools/stamped-time-actors` (`task stamped-time`).
+- `tools/check-spec-diff.sh [--acknowledge | --negative]`: classifies the change of `ess/` since
+  the newest release tag (`ess verify diff --fail-on breaking-or-unknown`) and fails on a breaking
+  or unknown change that `quality/spec-diff-acknowledgements.json` does not name. A change to
+  `ess/` makes that file stale: review the change, then `--acknowledge` writes it again. Run by
+  `tools/check.d/50-spec-diff` in `task check` (hardening pass 3).
+- `tools/sim-relations.sh [spec dir]` (`task sim-relations`): the metamorphic relations of
+  hardening pass 3, `weft-sim relate` from the full setup; steps in `sim/relations/`. Measures, so
+  it runs without `slot`.
 - `tools/synth-domain.sh [--snapshot] <name> [paths]`: synthesizes the conformance suite of one
   domain on the subset of domains it needs (about 80 s; the whole system takes 451 s) and runs it
   against the interpreted target. Synthesis goes through `slot` with `--jobs 2`, one run at a time

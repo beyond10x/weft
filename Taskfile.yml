@@ -100,3 +100,9 @@ tasks:
     deps: [sim-build]
     cmds:
       - for f in sim/experiments/*.yaml; do n=$(basename "$f" .yaml); tools/sim/target/debug/weft-sim simulate --spec ess --experiment "$f" --out "sim/out/$n" {{.CLI_ARGS}} || exit 1; done
+
+  sim-relations:
+    desc: Check the metamorphic relations of hardening pass 3 on the full setup (tools/sim-relations.sh; measures; runs without slot).
+    deps: [sim-build]
+    cmds:
+      - tools/sim-relations.sh
