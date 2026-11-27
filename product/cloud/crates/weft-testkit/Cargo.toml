@@ -14,7 +14,15 @@ doctest = false
 name = "main"
 path = "tests/main.rs"
 
+[dependencies]
+serde_json = "1"
+time = { version = "0.3", features = ["formatting"] }
+weft-client = { path = "../weft-client" }
+weft-impl = { path = "../weft-impl" }
+weft-types = { path = "../../../../target/generated/crates/weft-types" }
+
 [dev-dependencies]
+weft-bin = { path = "../weft-bin", features = ["test-callers"] }
 weft-probe-api = { path = "../../../../tests/fixtures/generated-probe/crates/weft-probe-api" }
 weft-server = { path = "../../../../target/generated/crates/weft-server" }
 
