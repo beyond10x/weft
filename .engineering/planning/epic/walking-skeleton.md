@@ -2,11 +2,14 @@
 format: aep.planning-md/3
 id: epic:walking-skeleton
 kind: epic
-status: draft
+status: active
 title: 'Walking skeleton: control plane, one node, a confined snippet placed and running, conformance counted'
 relations:
 - serves: vision:weft
-revision: 5
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Goal
 

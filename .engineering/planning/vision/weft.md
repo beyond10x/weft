@@ -2,9 +2,12 @@
 format: aep.planning-md/3
 id: vision:weft
 kind: vision
-status: draft
+status: approved
 title: 'weft: a compute cloud a team deploys itself, run from its ESS specification'
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "in_review", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 2, decided_on: {"recorded":{"approval":1}}}
+- {from: "in_review", to: "approved", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Vision
 
