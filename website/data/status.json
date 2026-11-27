@@ -1,6 +1,7 @@
 {
   "asOf": "2026-11-27",
   "format": "b10x-status/1",
+  "source": "website/data/status.json; every shipped item is proved by a file or a command in website/data/status-proofs.json, checked by tools/docs-check.d/40-status-claims.sh in the gate and the docs build",
   "items": [
     {
       "area": "Specification",

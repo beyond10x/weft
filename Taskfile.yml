@@ -45,7 +45,7 @@ tasks:
       - tools/test-planning-only.sh
 
   docs-check:
-    desc: Hold the docs claims KPIs at 0 (docs.dead-repo-links, docs.planned-without-banner, repo.agents-md-dead-paths). Self-tests the hooks of tools/docs-check.d on their fixture trees, then runs them on the tree (tools/check-docs.sh); no network, seconds.
+    desc: Hold the docs claims KPIs at 0 (docs.dead-repo-links, docs.planned-without-banner, repo.agents-md-dead-paths, docs.status-claims-false). Self-tests the hooks of tools/docs-check.d on their fixture trees, then runs them on the tree (tools/check-docs.sh); no network, seconds.
     cmds:
       - tools/test-docs-check.sh
       - tools/check-docs.sh

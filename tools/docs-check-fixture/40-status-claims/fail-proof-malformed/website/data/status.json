@@ -1,0 +1,26 @@
+{
+  "asOf": "2026-01-01",
+  "format": "b10x-status/1",
+  "items": [
+    {
+      "area": "Specification",
+      "detail": "23 domains in 2 layers under spec/.",
+      "label": "The model",
+      "status": "shipped"
+    },
+    {
+      "detail": "The layer list in spec/system.yaml.",
+      "label": "The gate",
+      "status": "shipped"
+    },
+    {
+      "detail": "Not built.",
+      "label": "Later",
+      "status": "planned"
+    },
+    {
+      "label": "Idea",
+      "status": "decided"
+    }
+  ]
+}

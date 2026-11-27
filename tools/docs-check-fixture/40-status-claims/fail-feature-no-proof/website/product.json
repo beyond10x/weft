@@ -1,0 +1,13 @@
+{
+  "lede": "23 domains in 2 layers.",
+  "sections": [
+    {
+      "kind": "features",
+      "items": [
+        {"title": "The simulator", "description": "Runs walks.", "status": "shipped"},
+        {"title": "The gate", "description": "Holds it.", "status": "shipped"},
+        {"title": "Tenants", "description": "Accounts nest.", "status": "decided"}
+      ]
+    }
+  ]
+}

@@ -70,9 +70,14 @@ none is written before the specification of what it implements.
   docs build's filter, where a `website/` path builds.
 - `tools/check-docs.sh` (`task docs-check`, part of `task check`, and the step after the
   checkout in `.github/workflows/pages.yml`, which runs on every pull request): holds
-  `docs.dead-repo-links`, `docs.planned-without-banner` and `repo.agents-md-dead-paths` at 0
-  with the hooks of `tools/docs-check.d/` (contract in its `README.md`); every hook runs and
-  prints `<kpi-id> <count>` last. `tools/test-docs-check.sh` runs every hook on its `pass` and
+  `docs.dead-repo-links`, `docs.planned-without-banner`, `repo.agents-md-dead-paths` and
+  `docs.status-claims-false` at 0 with the hooks of `tools/docs-check.d/` (contract in its
+  `README.md`); every hook runs and prints `<kpi-id> <count>` last. Every `shipped` item of
+  `website/data/status.json` and every `shipped` feature of `website/product.json` names a file
+  or a command that proves it in
+  `website/data/status-proofs.json`, which also computes the counts the site states (domains,
+  layers, components, specification files); `website/docs/status.md` renders `status.json` and
+  has no table of its own. `tools/test-docs-check.sh` runs every hook on its `pass` and
   `fail` trees in `tools/docs-check-fixture/`. A path named in this file is committed (or new
   and not ignored), is written by a tool its bullet names (`tools/synth.sh` writes
   `target/generated/`), or stands under a heading that says Planned.
