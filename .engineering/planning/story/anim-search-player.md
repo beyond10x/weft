@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:anim-search-player
 kind: story
-status: active
+status: implemented
 title: weft-sim page plays a search run over two chosen axes, live with --serve and from a finished result.json
 relations:
 - decomposes: epic:search-animation
@@ -20,10 +20,11 @@ scope:
   path: website/ux/fixtures/sim-player.html
 - confidence: inferred
   path: website/ux/sim-player.spec.ts
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":5}}}
 - {from: "proposed", to: "active", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1,"review_outcome":5}}}
+- {from: "active", to: "implemented", at: "2026-11-27T20:28:53Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"test_result":1,"approval":1,"review_outcome":5}}}
 ---
 ## Epic
 
