@@ -50,7 +50,7 @@ mod control_host {
     use weft_testkit::ControlHost;
 
     /// The row of a view answer whose `key` member is `id`.
-    fn row(answer: &Value, key: &str, id: &str) -> Value {
+    pub(super) fn row(answer: &Value, key: &str, id: &str) -> Value {
         let rows = answer["rows"]
             .as_array()
             .unwrap_or_else(|| panic!("no rows in {answer}"));
@@ -1060,5 +1060,1675 @@ mod node_channel_adversary {
         let kept = row(&client, NODES, "node_id", &cordoned);
         assert_eq!(kept["state"], json!("Cordoned"), "{kept}");
         assert_eq!(kept["capacity"][0]["amount"], json!(3), "{kept}");
+    }
+}
+
+/// The workload definitions of the skeleton path (`story:skeleton-workload-definitions`): after
+/// the operator and tenant steps, the formation, its component, revision and environment, the
+/// artifact, a runtime, the workload and its service, read back through their views; then each
+/// guard of the seven obligations, in the specification's declaration order.
+mod definitions {
+    use serde_json::{json, Value};
+    use weft_client::Expect;
+    use weft_testkit::steps::{self, input};
+    use weft_testkit::ControlHost;
+    use weft_types::behaviour::EnvironmentStorage;
+    use weft_types::primitives::Uuid;
+    use weft_types::shared::EnvironmentId;
+
+    use super::control_host::row;
+
+    /// The rows of a view answer.
+    fn rows(answer: &Value) -> Vec<Value> {
+        answer["rows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no rows in {answer}"))
+            .clone()
+    }
+
+    /// Statements 1 and 2: each row read back by the identity its command answered, with the
+    /// values sent.
+    #[test]
+    fn the_definitions_read_back_with_the_identities_answered_and_the_values_sent() {
+        let mut host = ControlHost::start();
+        let client = host.client();
+        let path = steps::run_path(&client);
+        let ids = steps::run_definitions(&client, &path);
+        let view = |name: &str, params: &[(&str, &str)]| client.view(name, params).ok_body(200);
+
+        // 1. The formation in the default cluster, its component, revision and environment, and
+        // the artifact.
+        let formations = view(
+            "weft.formations.Formations",
+            &[("account_id", &path.account_id)],
+        );
+        let formation = row(&formations, "formation_id", &ids.formation_id);
+        assert_eq!(
+            (formation["name"].clone(), formation["cluster_id"].clone()),
+            (json!("site"), json!(path.cluster_id)),
+            "{formation}"
+        );
+        let in_formation = [("formation_id", ids.formation_id.as_str())];
+        let components = view("weft.formations.FormationComponents", &in_formation);
+        let component = row(&components, "component_id", &ids.component_id);
+        assert_eq!(component["name"], json!("site"), "{component}");
+        let revisions = view("weft.formations.FormationRevisions", &in_formation);
+        let revision = row(&revisions, "revision_id", &ids.revision_id);
+        assert_eq!(
+            revision["formation_id"],
+            json!(ids.formation_id),
+            "{revision}"
+        );
+        let environments = view("weft.formations.Environments", &in_formation);
+        let environment = row(&environments, "environment_id", &ids.environment_id);
+        assert_eq!(environment["name"], json!("prod"), "{environment}");
+        let artifacts = view("weft.artifacts.Artifacts", &[]);
+        let artifact = row(&artifacts, "artifact_digest", &ids.artifact_digest);
+        assert_eq!(
+            artifact["artifact_digest"],
+            json!(input::ARTIFACT_DIGEST),
+            "{artifact}"
+        );
+        // `Artifacts` has no `kind`; the account's `ArtifactList` shows it.
+        let listed = view(
+            "weft.artifacts.ArtifactList",
+            &[("account_id", &path.account_id)],
+        );
+        let artifact = row(&listed, "artifact_digest", &ids.artifact_digest);
+        assert_eq!(artifact["kind"], json!("Snippet"), "{artifact}");
+
+        // 2. The workload of the Snippet runtime with its one Main process, and its service.
+        let workloads = view("weft.workloads.WorkloadList", &in_formation);
+        let workload = row(&workloads, "workload_id", &ids.workload_id);
+        assert_eq!(workload["package_kind"], json!("Snippet"), "{workload}");
+        // `WorkloadList` has no `processes`; the workload's `WorkloadDetail` shows them.
+        let detail = view(
+            "weft.workloads.WorkloadDetail",
+            &[("workload_id", &ids.workload_id)],
+        );
+        let detail = row(&detail, "workload_id", &ids.workload_id);
+        let processes = rows(&json!({"rows": detail["processes"]}));
+        assert_eq!(processes.len(), 1, "{detail}");
+        assert_eq!(
+            (
+                processes[0]["role"].clone(),
+                processes[0]["command"].clone()
+            ),
+            (json!("Main"), json!(["sh", "-c", "echo weft"])),
+            "{detail}"
+        );
+        assert_eq!(detail["runtime_id"], json!(ids.runtime_id), "{detail}");
+        let services = view("weft.workloads.Services", &[]);
+        let service = row(&services, "service_id", &ids.service_id);
+        assert_eq!(
+            (service["replicas"].clone(), service["workload_id"].clone()),
+            (json!(1), json!(ids.workload_id)),
+            "{service}"
+        );
+
+        // `protected` is in no view of the environment: read through the storage port.
+        host.stop();
+        let ports = weft_impl::Ports::open(&host.state_path()).expect("the state file opens");
+        let environment =
+            EnvironmentStorage::get(&ports, &EnvironmentId(Uuid(ids.environment_id.clone())))
+                .expect("the environment row");
+        assert!(!environment.data.protected, "{environment:?}");
+    }
+
+    /// Statement 3: a runtime that does not run `Snippet` is refused `runtime-kind` and adds no
+    /// workload; the same request naming the `Snippet` runtime is accepted.
+    #[test]
+    fn define_workload_naming_a_runtime_without_snippet_answers_runtime_kind_and_adds_no_workload()
+    {
+        let host = ControlHost::start();
+        let client = host.client();
+        let path = steps::run_path(&client);
+        let caller = steps::account_caller(&path.tenant_id, &path.account_id);
+        let account_id = path.account_id.as_str();
+        let formation_id = steps::create_formation(&client, &caller, account_id, &path.cluster_id);
+        steps::add_component(&client, &caller, &formation_id, account_id);
+        let revision_id = steps::commit_revision(&client, &caller, &formation_id, account_id);
+        let environment_id = steps::create_environment(&client, &caller, &formation_id, account_id);
+        steps::register_artifact(&client, &caller, account_id);
+        let image_runtime = steps::register_runtime(&client, &["Image"]);
+        let snippet_runtime = steps::register_runtime(&client, &["Snippet"]);
+        let request = |runtime_id: &str| {
+            input::define_workload(input::WorkloadOf {
+                account_id,
+                formation_id: &formation_id,
+                formation_revision_id: &revision_id,
+                environment_id: &environment_id,
+                runtime_id,
+            })
+        };
+        let workloads = || {
+            rows(
+                &client
+                    .view(
+                        "weft.workloads.WorkloadList",
+                        &[("formation_id", &formation_id)],
+                    )
+                    .ok_body(200),
+            )
+        };
+
+        let refused = client
+            .command(
+                "weft.workloads.DefineWorkload",
+                steps::DEPLOYER,
+                caller.clone(),
+                request(&image_runtime),
+            )
+            .expect("the control host answers");
+        assert_eq!(
+            refused.body["outcome"],
+            json!("runtime-kind"),
+            "{}",
+            refused.body
+        );
+        assert_eq!(workloads(), Vec::<Value>::new());
+
+        let workload_id = steps::define_workload(&client, &caller, request(&snippet_runtime));
+        let listed = workloads();
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(listed[0]["workload_id"], json!(workload_id));
+    }
+
+    /// Each guard of the seven obligations, in declaration order, against a control host in
+    /// this process: its storage port arranges what no command of the path reaches (a retired
+    /// formation, a deleted cluster, a closed account, a revoked artifact, a retired runtime or
+    /// workload, another account's cluster or workload).
+    mod guards {
+        use std::net::TcpListener;
+        use std::sync::Arc;
+
+        use serde_json::{json, Value};
+        use weft_client::Client;
+        use weft_impl::context::mint;
+        use weft_impl::Ports;
+        use weft_testkit::steps::{self, input, Definitions, Path};
+        use weft_types::behaviour::{
+            AccountStorage, ArtifactStorage, ClusterStorage, ComponentStorage, EnvironmentStorage,
+            FormationRevisionStorage, FormationStorage, RuntimeStorage, ServiceStorage,
+            WorkloadStorage,
+        };
+        use weft_types::primitives::Uuid;
+        use weft_types::shared::{
+            AccountId, ArtifactDigest, ClusterId, EnvironmentId, FormationId, RuntimeId, WorkloadId,
+        };
+
+        const CREATE_FORMATION: &str = "weft.formations.CreateFormation";
+        const ADD_COMPONENT: &str = "weft.formations.AddComponent";
+        const COMMIT_REVISION: &str = "weft.formations.CommitRevision";
+        const CREATE_ENVIRONMENT: &str = "weft.formations.CreateEnvironment";
+        const REGISTER_ARTIFACT: &str = "weft.artifacts.RegisterArtifact";
+        const DEFINE_WORKLOAD: &str = "weft.workloads.DefineWorkload";
+        const DEFINE_SERVICE: &str = "weft.workloads.DefineService";
+
+        /// The path and the definitions of [`steps::run_definitions`] in account `acme`, and a
+        /// second tenant `globex` with its account, on a control host served from this process.
+        struct World {
+            host: Arc<weft_bin::Host>,
+            client: Client,
+            path: Path,
+            ids: Definitions,
+            /// A caller acting in `acme`'s account.
+            caller: Value,
+            /// `globex`'s account.
+            other_account: String,
+            /// A caller acting in `globex`'s account.
+            other: Value,
+            _dir: weft_testkit::TempDir,
+        }
+
+        impl World {
+            fn new() -> Self {
+                let dir = weft_testkit::TempDir::new();
+                let host = Arc::new(
+                    weft_bin::Host::open(
+                        &dir.path().join("state.db"),
+                        &dir.path().join("control-host.log"),
+                    )
+                    .expect("the host opens"),
+                );
+                let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port binds");
+                let client = Client::new(listener.local_addr().expect("the listener's address"));
+                let serving = Arc::clone(&host);
+                std::thread::spawn(move || serving.serve(&listener, true));
+                let path = steps::run_path(&client);
+                let ids = steps::run_definitions(&client, &path);
+                let caller = steps::account_caller(&path.tenant_id, &path.account_id);
+                let other_tenant = steps::create_tenant(&client, "globex");
+                let other_account = steps::create_account(&client, &other_tenant);
+                let other = steps::account_caller(&other_tenant, &other_account);
+                Self {
+                    host,
+                    client,
+                    path,
+                    ids,
+                    caller,
+                    other_account,
+                    other,
+                    _dir: dir,
+                }
+            }
+
+            fn acme(&self) -> &str {
+                &self.path.account_id
+            }
+
+            fn ports(&self) -> Ports {
+                self.host.ports().clone()
+            }
+
+            /// The outcome `command` answers to `input` sent as `actor` with `caller`.
+            fn outcome(&self, actor: &str, caller: &Value, command: &str, input: &Value) -> String {
+                let answer = self
+                    .client
+                    .command(command, actor, caller.clone(), input.clone())
+                    .expect("the control host answers");
+                answer.body["outcome"]
+                    .as_str()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{command} {input}: no outcome in {} {}",
+                            answer.status, answer.body
+                        )
+                    })
+                    .to_owned()
+            }
+
+            /// `input` answers the refusal `outcome`, and the rows `count` counts stay as many.
+            fn refuses(
+                &self,
+                actor: &str,
+                caller: &Value,
+                command: &str,
+                input: &Value,
+                outcome: &str,
+                count: fn(&Ports) -> usize,
+            ) {
+                let before = count(&self.ports());
+                assert_eq!(
+                    self.outcome(actor, caller, command, input),
+                    outcome,
+                    "{command} {input}"
+                );
+                assert_eq!(
+                    count(&self.ports()),
+                    before,
+                    "{command} {input} wrote a row"
+                );
+            }
+
+            /// `input` answers the accepting `outcome`: the body.
+            fn accepts(
+                &self,
+                actor: &str,
+                caller: &Value,
+                command: &str,
+                input: &Value,
+                outcome: &str,
+            ) -> Value {
+                let answer = self
+                    .client
+                    .command(command, actor, caller.clone(), input.clone())
+                    .expect("the control host answers");
+                assert_eq!(
+                    answer.body["outcome"],
+                    json!(outcome),
+                    "{command} {input}: {}",
+                    answer.body
+                );
+                answer.body
+            }
+
+            /// `input` of `command` sent by a Deployer of `globex`'s account on a formation of
+            /// `acme`: refused as a missing formation (`NoSuchFormation`), and the formations,
+            /// components and revisions are as they were.
+            fn isolated(&self, command: &str, input: &Value) {
+                let rows = |ports: &Ports| {
+                    format!(
+                        "{:?} {:?} {:?}",
+                        FormationStorage::list(ports),
+                        ComponentStorage::list(ports),
+                        FormationRevisionStorage::list(ports)
+                    )
+                };
+                let before = rows(&self.ports());
+                let answer = self
+                    .client
+                    .command(command, steps::DEPLOYER, self.other.clone(), input.clone())
+                    .expect("the control host answers");
+                let outcome = answer.body["outcome"].as_str().unwrap_or_default();
+                assert!(
+                    ["not-callers-account", "formation-of-other-account"].contains(&outcome),
+                    "{command} {input}: {} {}",
+                    answer.status,
+                    answer.body
+                );
+                assert!(
+                    answer.body.to_string().contains("NoSuchFormation"),
+                    "{command} {input}: {}",
+                    answer.body
+                );
+                assert_eq!(
+                    rows(&self.ports()),
+                    before,
+                    "{command} {input} changed a row"
+                );
+            }
+
+            /// A formation of `acme` named `name` in the default cluster, with one component when
+            /// `component`: its identity.
+            fn formation(&self, name: &str, component: bool) -> String {
+                let input = json!({"account_id": self.acme(), "name": name, "zones": [], "cluster_id": self.path.cluster_id});
+                let body = self.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &self.caller,
+                    CREATE_FORMATION,
+                    &input,
+                    "created",
+                );
+                let id = published(&body, "formation_id");
+                if component {
+                    steps::add_component(&self.client, &self.caller, &id, self.acme());
+                }
+                id
+            }
+
+            /// `AddComponent` of a component `name` to `acme`'s formation `formation`.
+            fn component(&self, formation: &str, name: &str) {
+                let input =
+                    json!({"formation_id": formation, "account_id": self.acme(), "name": name});
+                self.accepts(
+                    steps::DEPLOYER,
+                    &self.caller,
+                    ADD_COMPONENT,
+                    &input,
+                    "added",
+                );
+            }
+
+            /// A copy of environment `of` under a new identity, changed by `change`: its
+            /// identity.
+            fn environment(
+                &self,
+                of: &str,
+                change: impl FnOnce(&mut weft_types::formations::EnvironmentSnapshot),
+            ) -> String {
+                let mut ports = self.ports();
+                let key = EnvironmentId(Uuid(of.to_owned()));
+                let mut row = EnvironmentStorage::get(&ports, &key).expect("the environment row");
+                let id = mint();
+                row.data.environment_id = EnvironmentId(Uuid(id.clone()));
+                change(&mut row);
+                EnvironmentStorage::put(&mut ports, row);
+                id
+            }
+
+            /// Moves formation `id` to `Retired` through the storage port.
+            fn retire_formation(&self, id: &str) {
+                let mut ports = self.ports();
+                let key = FormationId(Uuid(id.to_owned()));
+                let mut row = FormationStorage::get(&ports, &key).expect("the formation row");
+                row.state = weft_types::formations::FormationState::Retired;
+                FormationStorage::put(&mut ports, row);
+            }
+
+            /// A copy of the default cluster under a new identity, changed by `change`: its
+            /// identity.
+            fn cluster(
+                &self,
+                change: impl FnOnce(&mut weft_types::cluster::ClusterSnapshot),
+            ) -> String {
+                let mut ports = self.ports();
+                let key = ClusterId(Uuid(self.path.cluster_id.clone()));
+                let mut row = ClusterStorage::get(&ports, &key).expect("the default cluster row");
+                let id = mint();
+                row.data.cluster_id = ClusterId(Uuid(id.clone()));
+                change(&mut row);
+                ClusterStorage::put(&mut ports, row);
+                id
+            }
+
+            /// A copy of workload `of` under a new identity, changed by `change`: its identity.
+            fn workload(
+                &self,
+                of: &str,
+                change: impl FnOnce(&mut weft_types::workloads::WorkloadSnapshot),
+            ) -> String {
+                let mut ports = self.ports();
+                let key = WorkloadId(Uuid(of.to_owned()));
+                let mut row = WorkloadStorage::get(&ports, &key).expect("the workload row");
+                let id = mint();
+                row.data.workload_id = WorkloadId(Uuid(id.clone()));
+                change(&mut row);
+                WorkloadStorage::put(&mut ports, row);
+                id
+            }
+
+            /// The request of the skeleton's workload in `acme`'s formation `site`.
+            fn workload_request(&self) -> Value {
+                input::define_workload(input::WorkloadOf {
+                    account_id: self.acme(),
+                    formation_id: &self.ids.formation_id,
+                    formation_revision_id: &self.ids.revision_id,
+                    environment_id: &self.ids.environment_id,
+                    runtime_id: &self.ids.runtime_id,
+                })
+            }
+
+            /// `RegisterArtifact` of `digest` of `kind` by the account `account_id` with
+            /// `caller`.
+            fn artifact(&self, caller: &Value, account_id: &str, digest: &str, kind: &str) {
+                let mut input = input::register_artifact(account_id);
+                input["artifact_digest"] = json!(digest);
+                input["kind"] = json!(kind);
+                self.accepts(
+                    steps::DEPLOYER,
+                    caller,
+                    REGISTER_ARTIFACT,
+                    &input,
+                    "registered",
+                );
+            }
+
+            /// `RegisterRuntime` of `kinds` at minimum isolation `minimum`: its identity.
+            fn runtime(&self, kinds: &[&str], minimum: &str) -> String {
+                let mut input = input::register_runtime(kinds);
+                input["minimum_isolation"] = json!(minimum);
+                let body = self.accepts(
+                    steps::OPERATOR,
+                    &json!({}),
+                    "weft.workloads.RegisterRuntime",
+                    &input,
+                    "registered",
+                );
+                published(&body, "runtime_id")
+            }
+        }
+
+        /// The member `field` of the first published event's payload.
+        fn published(body: &Value, field: &str) -> String {
+            body["published"][0]["payload"][field]
+                .as_str()
+                .unwrap_or_else(|| panic!("no {field} in the published payload of {body}"))
+                .to_owned()
+        }
+
+        /// `base` with the member at `pointer` (a JSON pointer) replaced by `value`.
+        fn with(base: &Value, pointer: &str, value: Value) -> Value {
+            let mut changed = base.clone();
+            *changed
+                .pointer_mut(pointer)
+                .unwrap_or_else(|| panic!("no {pointer} in {base}")) = value;
+            changed
+        }
+
+        fn formations(ports: &Ports) -> usize {
+            FormationStorage::list(ports).len()
+        }
+
+        fn components(ports: &Ports) -> usize {
+            ComponentStorage::list(ports).len()
+        }
+
+        fn revisions(ports: &Ports) -> usize {
+            FormationRevisionStorage::list(ports).len()
+        }
+
+        fn environments(ports: &Ports) -> usize {
+            EnvironmentStorage::list(ports).len()
+        }
+
+        fn artifacts(ports: &Ports) -> usize {
+            ArtifactStorage::list(ports).len()
+        }
+
+        fn workloads(ports: &Ports) -> usize {
+            WorkloadStorage::list(ports).len()
+        }
+
+        fn services(ports: &Ports) -> usize {
+            ServiceStorage::list(ports).len()
+        }
+
+        #[test]
+        fn create_formation_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::ACCOUNT_ADMIN,
+                    caller,
+                    CREATE_FORMATION,
+                    &input,
+                    outcome,
+                    formations,
+                );
+            };
+            let request = |account: &str, name: &str, cluster: &str| json!({"account_id": account, "name": name, "zones": ["z1"], "cluster_id": cluster});
+            let default = w.path.cluster_id.clone();
+
+            // no-such-account: an account no row holds, the caller acting in it; and a closed one.
+            let nobody = mint();
+            let nobody_caller = steps::account_caller(&w.path.tenant_id, &nobody);
+            refuses(
+                &nobody_caller,
+                request(&nobody, "a", &default),
+                "no-such-account",
+            );
+            let closing_tenant = steps::create_tenant(&w.client, "initech");
+            let closing = steps::create_account(&w.client, &closing_tenant);
+            let mut ports = w.ports();
+            let key = AccountId(Uuid(closing.clone()));
+            let mut account = AccountStorage::get(&ports, &key).expect("the account row");
+            account.state = weft_types::accounts::AccountState::Closed;
+            AccountStorage::put(&mut ports, account);
+            let closing_caller = steps::account_caller(&closing_tenant, &closing);
+            refuses(
+                &closing_caller,
+                request(&closing, "a", &default),
+                "no-such-account",
+            );
+
+            // not-callers-account.
+            refuses(
+                &w.other,
+                request(w.acme(), "a", &default),
+                "not-callers-account",
+            );
+
+            // no-such-cluster, then a deleted one, then one of another account.
+            refuses(
+                &w.caller,
+                request(w.acme(), "a", &mint()),
+                "no-such-cluster",
+            );
+            let deleted = w.cluster(|row| row.state = weft_types::cluster::ClusterState::Deleted);
+            refuses(
+                &w.caller,
+                request(w.acme(), "a", &deleted),
+                "cluster-deleted",
+            );
+            let globex = AccountId(Uuid(w.other_account.clone()));
+            let foreign = w.cluster(|row| row.data.account_id = Some(globex));
+            refuses(
+                &w.caller,
+                request(w.acme(), "a", &foreign),
+                "cluster-of-other-account",
+            );
+            let acme = AccountId(Uuid(w.acme().to_owned()));
+            let own = w.cluster(|row| row.data.account_id = Some(acme));
+            let body = w.accepts(
+                steps::ACCOUNT_ADMIN,
+                &w.caller,
+                CREATE_FORMATION,
+                &request(w.acme(), "own", &own),
+                "created",
+            );
+
+            // The row: the values sent, its internal domain, Active.
+            let id = FormationId(Uuid(published(&body, "formation_id")));
+            let row = FormationStorage::get(&w.ports(), &id).expect("the formation row");
+            assert_eq!(row.state, weft_types::formations::FormationState::Active);
+            assert_eq!(row.data.internal_domain, "own.internal");
+            assert_eq!(row.data.cluster_id, ClusterId(Uuid(own)));
+            assert_eq!(
+                row.data.zones,
+                vec![weft_types::shared::ZoneName("z1".to_owned())]
+            );
+            assert!(row.data.quota_slice.is_empty());
+
+            // name-taken: `site` again in `acme`; in `globex`'s account the name is free.
+            refuses(&w.caller, request(w.acme(), "site", &default), "name-taken");
+            w.accepts(
+                steps::ACCOUNT_ADMIN,
+                &w.other,
+                CREATE_FORMATION,
+                &request(&w.other_account, "site", &default),
+                "created",
+            );
+        }
+
+        #[test]
+        fn add_component_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::DEPLOYER,
+                    caller,
+                    ADD_COMPONENT,
+                    &input,
+                    outcome,
+                    components,
+                );
+            };
+            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "account_id": account, "name": name});
+            let site = w.ids.formation_id.clone();
+
+            refuses(
+                &w.other,
+                request(&site, w.acme(), "a"),
+                "not-callers-account",
+            );
+            refuses(
+                &w.caller,
+                request(&mint(), w.acme(), "a"),
+                "no-such-formation",
+            );
+            let other_account = w.other_account.clone();
+            refuses(
+                &w.other,
+                request(&site, &other_account, "a"),
+                "formation-of-other-account",
+            );
+            let retired = w.formation("retired", true);
+            w.retire_formation(&retired);
+            refuses(&w.caller, request(&retired, w.acme(), "a"), "retired");
+            refuses(&w.caller, request(&site, w.acme(), "site"), "name-taken");
+
+            // In another formation the name is free; the row has its internal name.
+            let other = w.formation("other", false);
+            let body = w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                ADD_COMPONENT,
+                &request(&other, w.acme(), "site"),
+                "added",
+            );
+            assert_eq!(
+                body["published"][0]["payload"]["internal_name"],
+                json!("site.other.internal"),
+                "{body}"
+            );
+            let id = weft_types::shared::ComponentId(Uuid(published(&body, "component_id")));
+            let row = ComponentStorage::get(&w.ports(), &id).expect("the component row");
+            assert_eq!(row.data.internal_name.0, "site.other.internal");
+            assert!(!row.data.on_border);
+        }
+
+        #[test]
+        fn commit_revision_answers_each_guard_and_numbers_its_revisions() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::DEPLOYER,
+                    caller,
+                    COMMIT_REVISION,
+                    &input,
+                    outcome,
+                    revisions,
+                );
+            };
+            let request = |formation: &str, account: &str| json!({"formation_id": formation, "account_id": account});
+            let site = w.ids.formation_id.clone();
+
+            refuses(&w.other, request(&site, w.acme()), "not-callers-account");
+            refuses(&w.caller, request(&mint(), w.acme()), "no-such-formation");
+            let other_account = w.other_account.clone();
+            refuses(
+                &w.other,
+                request(&site, &other_account),
+                "formation-of-other-account",
+            );
+            let retired = w.formation("retired", true);
+            w.retire_formation(&retired);
+            refuses(&w.caller, request(&retired, w.acme()), "retired");
+            let bare = w.formation("bare", false);
+            refuses(&w.caller, request(&bare, w.acme()), "empty");
+
+            // The first revision of `site` froze it before environment `prod`: the second,
+            // number 2, has another digest; the third, of the same document, the second's; a
+            // component more makes number 4 with another digest again.
+            let commit = |formation: &str| {
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    COMMIT_REVISION,
+                    &request(formation, w.acme()),
+                    "committed",
+                );
+                let payload = body["published"][0]["payload"].clone();
+                (
+                    payload["number"].clone(),
+                    payload["document_digest"].clone(),
+                )
+            };
+            let first = FormationRevisionStorage::get(
+                &w.ports(),
+                &weft_types::shared::FormationRevisionId(Uuid(w.ids.revision_id.clone())),
+            )
+            .expect("the first revision row");
+            assert_eq!(first.data.number, 1);
+            let (number, digest) = commit(&w.ids.formation_id);
+            assert_eq!(number, json!(2));
+            assert_ne!(digest, json!(first.data.document_digest.0));
+            assert_eq!(commit(&w.ids.formation_id), (json!(3), digest.clone()));
+            steps::add_component(&w.client, &w.caller, &bare, w.acme());
+            w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                ADD_COMPONENT,
+                &json!({"formation_id": w.ids.formation_id, "account_id": w.acme(), "name": "api"}),
+                "added",
+            );
+            let (number, fourth) = commit(&w.ids.formation_id);
+            assert_eq!(number, json!(4));
+            assert_ne!(fourth, digest);
+            assert!(
+                fourth
+                    .as_str()
+                    .is_some_and(|text| text.len() == 71 && text.starts_with("sha256:")),
+                "{fourth}"
+            );
+            // Another formation starts at 1.
+            assert_eq!(commit(&bare).0, json!(1));
+        }
+
+        /// `AddComponent` on `acme`'s formation by a Deployer of `globex`'s account, acting in its
+        /// own account or naming `acme`'s: `NoSuchFormation`, and no row changes.
+        #[test]
+        fn a_deployer_of_another_account_gets_no_such_formation_adding_a_component() {
+            let w = World::new();
+            for account in [w.other_account.clone(), w.acme().to_owned()] {
+                let input = json!({"formation_id": w.ids.formation_id, "account_id": account, "name": "intruder"});
+                w.isolated(ADD_COMPONENT, &input);
+            }
+        }
+
+        /// `CommitRevision` of `acme`'s formation by a Deployer of `globex`'s account, acting in
+        /// its own account or naming `acme`'s: `NoSuchFormation`, and no row changes.
+        #[test]
+        fn a_deployer_of_another_account_gets_no_such_formation_committing_a_revision() {
+            let w = World::new();
+            for account in [w.other_account.clone(), w.acme().to_owned()] {
+                let input = json!({"formation_id": w.ids.formation_id, "account_id": account});
+                w.isolated(COMMIT_REVISION, &input);
+            }
+        }
+
+        #[test]
+        fn create_environment_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::ACCOUNT_ADMIN,
+                    caller,
+                    CREATE_ENVIRONMENT,
+                    &input,
+                    outcome,
+                    environments,
+                );
+            };
+            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "account_id": account, "name": name, "protected": true});
+            let site = w.ids.formation_id.clone();
+
+            refuses(
+                &w.other,
+                request(&site, w.acme(), "staging"),
+                "not-callers-account",
+            );
+            refuses(
+                &w.caller,
+                request(&mint(), w.acme(), "staging"),
+                "no-such-formation",
+            );
+            let globex =
+                steps::create_formation(&w.client, &w.other, &w.other_account, &w.path.cluster_id);
+            refuses(
+                &w.caller,
+                request(&globex, w.acme(), "staging"),
+                "formation-of-other-account",
+            );
+            let retired = w.formation("retired", false);
+            w.retire_formation(&retired);
+            refuses(&w.caller, request(&retired, w.acme(), "staging"), "retired");
+            refuses(&w.caller, request(&site, w.acme(), "prod"), "name-taken");
+
+            let body = w.accepts(
+                steps::ACCOUNT_ADMIN,
+                &w.caller,
+                CREATE_ENVIRONMENT,
+                &request(&site, w.acme(), "staging"),
+                "created",
+            );
+            let id = weft_types::shared::EnvironmentId(Uuid(published(&body, "environment_id")));
+            let row = EnvironmentStorage::get(&w.ports(), &id).expect("the environment row");
+            assert!(row.data.protected);
+            assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
+            assert_eq!(
+                row.data.origin,
+                weft_types::formations::EnvironmentOrigin::Manual
+            );
+            assert_eq!(row.data.name.0, "staging");
+            assert_eq!(row.state, weft_types::formations::EnvironmentState::Active);
+        }
+
+        #[test]
+        fn register_artifact_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::DEPLOYER,
+                    caller,
+                    REGISTER_ARTIFACT,
+                    &input,
+                    outcome,
+                    artifacts,
+                );
+            };
+            let base = with(
+                &input::register_artifact(w.acme()),
+                "/artifact_digest",
+                json!("sha256:next"),
+            );
+
+            refuses(&w.other, base.clone(), "not-callers-account");
+            refuses(&w.caller, with(&base, "/signature", json!("")), "unsigned");
+            // Both unsigned and of a negative size: the first declared answers.
+            let unsigned_negative = with(
+                &with(&base, "/signature", json!("")),
+                "/size_bytes",
+                json!(-1),
+            );
+            refuses(&w.caller, unsigned_negative, "unsigned");
+            refuses(
+                &w.caller,
+                with(&base, "/size_bytes", json!(-1)),
+                "negative-size",
+            );
+            // bad-signature: no signing key is trusted yet; the decider takes it for none.
+            refuses(
+                &w.caller,
+                with(&base, "/built_from", json!("sha256:none")),
+                "built-from-missing",
+            );
+            w.artifact(&w.other, &w.other_account, "sha256:globex", "Snippet");
+            refuses(
+                &w.caller,
+                with(&base, "/built_from", json!("sha256:globex")),
+                "built-from-foreign",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/artifact_digest", json!(input::ARTIFACT_DIGEST)),
+                "exists",
+            );
+            // One digest for the whole cluster: another account's registration of it exists too.
+            let theirs = with(
+                &input::register_artifact(&w.other_account),
+                "/artifact_digest",
+                json!(input::ARTIFACT_DIGEST),
+            );
+            refuses(&w.other, theirs, "exists");
+
+            let built = with(&base, "/built_from", json!(input::ARTIFACT_DIGEST));
+            w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                REGISTER_ARTIFACT,
+                &built,
+                "registered",
+            );
+            let row = ArtifactStorage::get(&w.ports(), &ArtifactDigest("sha256:next".to_owned()))
+                .expect("the artifact row");
+            assert_eq!(row.state, weft_types::artifacts::ArtifactState::Registered);
+            assert_eq!(row.data.kind, weft_types::artifacts::ArtifactKind::Snippet);
+            assert_eq!(
+                row.data.built_from,
+                Some(ArtifactDigest(input::ARTIFACT_DIGEST.to_owned()))
+            );
+            assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
+        }
+
+        #[test]
+        fn define_workload_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::DEPLOYER,
+                    caller,
+                    DEFINE_WORKLOAD,
+                    &input,
+                    outcome,
+                    workloads,
+                );
+            };
+            let base = w.workload_request();
+            let check = json!({
+                "role": "Ready", "kind": "Tcp", "port": 8080, "path": null, "command": null,
+                "service": null, "initial_delay_seconds": 0, "period_seconds": 10,
+                "timeout_seconds": 1, "failure_threshold": 3, "success_threshold": 1,
+            });
+            let sidecar = with(&input::process(), "/role", json!("Sidecar"));
+
+            // The input guards.
+            refuses(&w.other, base.clone(), "not-callers-account");
+            refuses(
+                &w.caller,
+                with(&base, "/package_kind", json!("Agent")),
+                "spec-kind",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/shape", json!("Box")),
+                "box-package",
+            );
+            refuses(&w.caller, with(&base, "/processes", json!([])), "no-main");
+            refuses(
+                &w.caller,
+                with(&base, "/processes", json!([sidecar])),
+                "no-main",
+            );
+            let http_without_port =
+                with(&with(&check, "/kind", json!("Http")), "/port", json!(null));
+            let unchecked = with(&base, "/processes/0/checks", json!([http_without_port]));
+            refuses(&w.caller, unchecked, "invalid-check");
+            refuses(
+                &w.caller,
+                with(
+                    &base,
+                    "/processes/0/checks",
+                    json!([with(&check, "/period_seconds", json!(0))]),
+                ),
+                "invalid-check",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/restart_policy/backoff_initial_seconds", json!(0)),
+                "invalid-restart-policy",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/restart_policy/backoff_max_seconds", json!(0)),
+                "invalid-restart-policy",
+            );
+            // Settings tagged with another shape: refused with the input refusals, ahead of
+            // every row read (here, a formation that does not exist).
+            let job_settings = json!({
+                "shape": "job",
+                "value": {"parallelism": 1, "gang": false, "max_retries": 0, "backoff": "PT1S"},
+            });
+            refuses(
+                &w.caller,
+                with(&base, "/settings", job_settings.clone()),
+                "settings-shape-mismatch",
+            );
+            refuses(
+                &w.caller,
+                with(
+                    &with(&base, "/settings", job_settings),
+                    "/formation_id",
+                    json!(mint()),
+                ),
+                "settings-shape-mismatch",
+            );
+            let daemon_settings = json!({"shape": "daemon", "value": {"node_selector": {}}});
+            refuses(
+                &w.caller,
+                with(&base, "/settings", daemon_settings),
+                "settings-shape-mismatch",
+            );
+
+            // Existence, in declaration order, ahead of every predicate: another account's
+            // formation and no runtime answer `no-runtime`.
+            let globex =
+                steps::create_formation(&w.client, &w.other, &w.other_account, &w.path.cluster_id);
+            steps::add_component(&w.client, &w.other, &globex, &w.other_account);
+            refuses(
+                &w.caller,
+                with(&base, "/formation_id", json!(mint())),
+                "formation-missing",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/environment_id", json!(mint())),
+                "environment-missing",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/formation_revision_id", json!(mint())),
+                "revision-missing",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/runtime_id", json!(mint())),
+                "no-runtime",
+            );
+            let foreign_without_runtime = with(
+                &with(&base, "/formation_id", json!(globex)),
+                "/runtime_id",
+                json!(mint()),
+            );
+            refuses(&w.caller, foreign_without_runtime, "no-runtime");
+            // A component the formation does not have: after `no-runtime`, ahead of the
+            // predicates (another account's formation without the component answers it too).
+            let absent = with(&base, "/component", json!("absent"));
+            refuses(&w.caller, absent.clone(), "component-missing");
+            refuses(
+                &w.caller,
+                with(&absent, "/runtime_id", json!(mint())),
+                "no-runtime",
+            );
+            refuses(
+                &w.caller,
+                with(&absent, "/formation_id", json!(globex)),
+                "component-missing",
+            );
+
+            // The predicates on the related rows.
+            refuses(
+                &w.caller,
+                with(&base, "/formation_id", json!(globex)),
+                "formation-foreign",
+            );
+            let other = w.formation("other", true);
+            // A component of another formation is not one of this formation's.
+            w.component(&other, "elsewhere");
+            refuses(
+                &w.caller,
+                with(&base, "/component", json!("elsewhere")),
+                "component-missing",
+            );
+            let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.acme());
+            let other_environment =
+                steps::create_environment(&w.client, &w.caller, &other, w.acme());
+            refuses(
+                &w.caller,
+                with(&base, "/environment_id", json!(other_environment)),
+                "environment-foreign",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/formation_revision_id", json!(other_revision)),
+                "revision-foreign",
+            );
+            let retired = w.runtime(&["Snippet"], "Container");
+            let mut ports = w.ports();
+            let key = RuntimeId(Uuid(retired.clone()));
+            let mut runtime = RuntimeStorage::get(&ports, &key).expect("the runtime row");
+            runtime.state = weft_types::workloads::RuntimeState::Retired;
+            RuntimeStorage::put(&mut ports, runtime);
+            refuses(
+                &w.caller,
+                with(&base, "/runtime_id", json!(retired)),
+                "runtime-retired",
+            );
+            // A retired environment, then a retired formation: after the foreign checks, ahead
+            // of the runtime's state.
+            let retired_environment = w.environment(&w.ids.environment_id, |row| {
+                row.state = weft_types::formations::EnvironmentState::Retired
+            });
+            let in_retired_environment = with(&base, "/environment_id", json!(retired_environment));
+            refuses(
+                &w.caller,
+                in_retired_environment.clone(),
+                "environment-retired",
+            );
+            refuses(
+                &w.caller,
+                with(&in_retired_environment, "/runtime_id", json!(retired)),
+                "environment-retired",
+            );
+            let in_other = with(
+                &with(&base, "/formation_id", json!(other)),
+                "/formation_revision_id",
+                json!(other_revision),
+            );
+            let in_other = with(&in_other, "/environment_id", json!(other_environment));
+            w.retire_formation(&other);
+            refuses(&w.caller, in_other.clone(), "formation-retired");
+            refuses(
+                &w.caller,
+                with(&in_other, "/runtime_id", json!(retired)),
+                "formation-retired",
+            );
+            let other_retired_environment = w.environment(&other_environment, |row| {
+                row.state = weft_types::formations::EnvironmentState::Retired
+            });
+            refuses(
+                &w.caller,
+                with(
+                    &in_other,
+                    "/environment_id",
+                    json!(other_retired_environment),
+                ),
+                "formation-retired",
+            );
+            // Another account's retired formation answers as another account's.
+            w.retire_formation(&globex);
+            refuses(
+                &w.caller,
+                with(&base, "/formation_id", json!(globex)),
+                "formation-foreign",
+            );
+            let image = w.runtime(&["Image", "Wasm"], "Container");
+            refuses(
+                &w.caller,
+                with(&base, "/runtime_id", json!(image)),
+                "runtime-kind",
+            );
+            let microvm = w.runtime(&["Snippet"], "MicroVm");
+            refuses(
+                &w.caller,
+                with(&base, "/runtime_id", json!(microvm)),
+                "below-runtime-isolation",
+            );
+            let user_kernel = w.runtime(&["Snippet"], "UserKernel");
+            refuses(
+                &w.caller,
+                with(&base, "/runtime_id", json!(user_kernel)),
+                "below-runtime-isolation",
+            );
+            let sandboxed = with(&base, "/isolation", json!("ProcessSandbox"));
+            refuses(&w.caller, sandboxed, "below-runtime-isolation");
+
+            // The artifact, decided from the artifacts domain's rows.
+            refuses(
+                &w.caller,
+                with(&base, "/artifact_digest", json!("sha256:none")),
+                "no-artifact",
+            );
+            w.artifact(&w.other, &w.other_account, "sha256:globex", "Snippet");
+            refuses(
+                &w.caller,
+                with(&base, "/artifact_digest", json!("sha256:globex")),
+                "artifact-foreign",
+            );
+            w.artifact(&w.caller, w.acme(), "sha256:revoked", "Snippet");
+            let mut ports = w.ports();
+            let key = ArtifactDigest("sha256:revoked".to_owned());
+            let mut artifact = ArtifactStorage::get(&ports, &key).expect("the artifact row");
+            artifact.state = weft_types::artifacts::ArtifactState::Revoked;
+            ArtifactStorage::put(&mut ports, artifact);
+            refuses(
+                &w.caller,
+                with(&base, "/artifact_digest", json!("sha256:revoked")),
+                "artifact-revoked",
+            );
+            w.artifact(&w.caller, w.acme(), "sha256:image", "Image");
+            refuses(
+                &w.caller,
+                with(&base, "/artifact_digest", json!("sha256:image")),
+                "artifact-kind",
+            );
+
+            // Accepted: a stronger isolation on the MicroVm runtime, and a valid check.
+            let strong = with(
+                &with(&base, "/runtime_id", json!(microvm)),
+                "/isolation",
+                json!("MicroVm"),
+            );
+            w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &strong,
+                "defined",
+            );
+            let checked = with(
+                &base,
+                "/processes",
+                json!([sidecar, with(&input::process(), "/checks", json!([check]))]),
+            );
+            let body = w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &checked,
+                "defined",
+            );
+            let id = WorkloadId(Uuid(published(&body, "workload_id")));
+            let row = WorkloadStorage::get(&w.ports(), &id).expect("the workload row");
+            assert_eq!(row.state, weft_types::workloads::WorkloadState::Defined);
+            assert_eq!(row.data.processes.len(), 2);
+            assert_eq!(
+                row.data.runtime_id,
+                RuntimeId(Uuid(w.ids.runtime_id.clone()))
+            );
+            assert_eq!(row.data.priority.0, "standard");
+        }
+
+        #[test]
+        fn define_service_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::DEPLOYER,
+                    caller,
+                    DEFINE_SERVICE,
+                    &input,
+                    outcome,
+                    services,
+                );
+            };
+            w.component(&w.ids.formation_id, "second");
+            let second = steps::define_workload(
+                &w.client,
+                &w.caller,
+                with(&w.workload_request(), "/component", json!("second")),
+            );
+            let base = input::define_service(&second, w.acme());
+            let bounds = |min: i64, max: i64, replicas: i64| {
+                with(
+                    &with(
+                        &with(&base, "/scale_rule/min_replicas", json!(min)),
+                        "/scale_rule/max_replicas",
+                        json!(max),
+                    ),
+                    "/replicas",
+                    json!(replicas),
+                )
+            };
+            let sleep = json!({"idle_after": "PT5M", "kind": "Stop"});
+
+            refuses(&w.other, base.clone(), "not-callers-account");
+            refuses(&w.caller, bounds(-1, 6, 1), "bad-bounds");
+            refuses(&w.caller, bounds(3, 2, 2), "bad-bounds");
+            refuses(&w.caller, bounds(2, 6, 1), "bad-bounds");
+            refuses(&w.caller, bounds(1, 6, 7), "bad-bounds");
+            refuses(&w.caller, bounds(0, 6, 0), "sleep-needs-policy");
+            refuses(
+                &w.caller,
+                with(&base, "/sleep_policy", sleep.clone()),
+                "policy-needs-min-zero",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(mint())),
+                "no-workload",
+            );
+            let globex = AccountId(Uuid(w.other_account.clone()));
+            let foreign = w.workload(&second, |row| row.data.account_id = globex);
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(foreign)),
+                "workload-of-other-account",
+            );
+            let retired = w.workload(&second, |row| {
+                row.state = weft_types::workloads::WorkloadState::Retired
+            });
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(retired)),
+                "workload-retired",
+            );
+            let job = w.workload(&second, |row| {
+                row.data.shape = weft_types::workloads::ShapeKind::Job
+            });
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(job)),
+                "not-a-service",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(w.ids.workload_id)),
+                "exists",
+            );
+
+            // A service that sleeps: min 0 with its policy.
+            let sleeper = w.workload(&second, |_| {});
+            let asleep = with(
+                &with(&bounds(0, 6, 0), "/sleep_policy", sleep),
+                "/workload_id",
+                json!(sleeper),
+            );
+            w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_SERVICE,
+                &asleep,
+                "defined",
+            );
+            let body = w.accepts(steps::DEPLOYER, &w.caller, DEFINE_SERVICE, &base, "defined");
+            let id = weft_types::shared::ServiceId(Uuid(published(&body, "service_id")));
+            let row = ServiceStorage::get(&w.ports(), &id).expect("the service row");
+            assert_eq!(row.state, weft_types::workloads::ServiceState::Awake);
+            assert_eq!((row.data.replicas, row.data.running_replicas), (1, 0));
+            assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
+            assert_eq!(row.data.workload_id, WorkloadId(Uuid(second)));
+            assert!(row.data.sleep_snapshots.is_empty() && row.data.backoff_until.is_none());
+        }
+
+        /// Cases of the adversary pass on `story:skeleton-workload-definitions`: the values the
+        /// seven obligations write and publish, the inputs of the document digest, and the
+        /// shape/settings agreement.
+        mod adversary {
+            use serde_json::{json, Value};
+            use weft_testkit::steps;
+            use weft_types::behaviour::{
+                FormationRevisionStorage, ServiceStorage, WorkloadStorage,
+            };
+            use weft_types::primitives::Uuid;
+            use weft_types::shared::{
+                ArtifactDigest, ComponentName, EnvironmentId, FormationRevisionId, IsolationLevel,
+                ServiceId, WorkloadId,
+            };
+
+            use super::{
+                published, with, workloads, World, ADD_COMPONENT, COMMIT_REVISION,
+                CREATE_ENVIRONMENT, CREATE_FORMATION, DEFINE_SERVICE, DEFINE_WORKLOAD,
+                REGISTER_ARTIFACT,
+            };
+
+            /// The payload of the first event `body` published.
+            fn payload(body: &Value) -> Value {
+                body["published"][0]["payload"].clone()
+            }
+
+            /// `CommitRevision` of `formation` by `acme`: the published (number, digest).
+            fn commit(w: &World, formation: &str) -> (Value, Value) {
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    COMMIT_REVISION,
+                    &json!({"formation_id": formation, "account_id": w.acme()}),
+                    "committed",
+                );
+                let payload = payload(&body);
+                (
+                    payload["number"].clone(),
+                    payload["document_digest"].clone(),
+                )
+            }
+
+            /// `ess/4-applications/workloads.yaml`, DefineWorkload `settings-shape-mismatch`: the
+            /// shape and the tag of `settings` agree. A `Service` workload carrying `job`
+            /// settings is not defined, and no workload row is added.
+            #[test]
+            fn a_workload_whose_settings_tag_is_not_its_shape_is_not_defined() {
+                let w = World::new();
+                w.component(&w.ids.formation_id, "mismatched");
+                let job_settings = json!({
+                    "shape": "job",
+                    "value": {"parallelism": 1, "gang": false, "max_retries": 0, "backoff": "PT1S"},
+                });
+                let mismatched = with(
+                    &with(&w.workload_request(), "/component", json!("mismatched")),
+                    "/settings",
+                    job_settings,
+                );
+                let before = workloads(&w.ports());
+                let answer = w
+                    .client
+                    .command(
+                        DEFINE_WORKLOAD,
+                        steps::DEPLOYER,
+                        w.caller.clone(),
+                        mismatched.clone(),
+                    )
+                    .expect("the control host answers");
+                assert_ne!(
+                    answer.body["outcome"],
+                    json!("defined"),
+                    "shape Service with settings tagged job was defined: {} {}",
+                    answer.status,
+                    answer.body
+                );
+                assert_eq!(workloads(&w.ports()), before, "a workload row was added");
+            }
+
+            /// The workload row and `WorkloadDefined` hold every value sent, on a request whose
+            /// isolation (`MicroVm`) is stronger than the runtime's minimum (`Container`): a
+            /// row that took the runtime's minimum, or a payload field from another input, is
+            /// caught.
+            #[test]
+            fn define_workload_writes_and_publishes_the_values_sent() {
+                let w = World::new();
+                w.component(&w.ids.formation_id, "strong");
+                let request = with(
+                    &with(&w.workload_request(), "/component", json!("strong")),
+                    "/isolation",
+                    json!("MicroVm"),
+                );
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    DEFINE_WORKLOAD,
+                    &request,
+                    "defined",
+                );
+                let sent = payload(&body);
+                for field in [
+                    "account_id",
+                    "formation_id",
+                    "environment_id",
+                    "component",
+                    "package_kind",
+                    "artifact_digest",
+                    "shape",
+                    "isolation",
+                ] {
+                    assert_eq!(
+                        sent[field], request[field],
+                        "WorkloadDefined.{field}: {body}"
+                    );
+                }
+                let id = WorkloadId(Uuid(published(&body, "workload_id")));
+                let row = WorkloadStorage::get(&w.ports(), &id).expect("the workload row");
+                assert_eq!(row.data.isolation, IsolationLevel::MicroVm);
+                assert_eq!(row.data.shape, weft_types::workloads::ShapeKind::Service);
+                assert_eq!(row.data.component, ComponentName("strong".to_owned()));
+                assert_eq!(
+                    row.data.environment_id,
+                    EnvironmentId(Uuid(w.ids.environment_id.clone()))
+                );
+                assert_eq!(
+                    row.data.formation_revision_id,
+                    FormationRevisionId(Uuid(w.ids.revision_id.clone()))
+                );
+                assert_eq!(
+                    row.data.artifact_digest,
+                    ArtifactDigest(steps::input::ARTIFACT_DIGEST.to_owned())
+                );
+                assert!(
+                    matches!(
+                        row.data.settings,
+                        weft_types::workloads::ShapeSettings::Service(_)
+                    ),
+                    "{:?}",
+                    row.data.settings
+                );
+                assert_eq!(row.data.claims.len(), 1);
+                let policy = &row.data.restart_policy;
+                assert_eq!(
+                    (
+                        policy.backoff_initial_seconds,
+                        policy.backoff_max_seconds,
+                        policy.backoff_limit,
+                        policy.backoff_window_seconds
+                    ),
+                    (1, 60, 5, 600)
+                );
+            }
+
+            /// A sleeping service's row keeps its sleep policy and scale rule, and
+            /// `ServiceDefined` carries the replicas and scale rule sent.
+            #[test]
+            fn define_service_writes_and_publishes_the_values_sent() {
+                let w = World::new();
+                w.component(&w.ids.formation_id, "sleeper");
+                let workload = steps::define_workload(
+                    &w.client,
+                    &w.caller,
+                    with(&w.workload_request(), "/component", json!("sleeper")),
+                );
+                let base = steps::input::define_service(&workload, w.acme());
+                let request = with(
+                    &with(
+                        &with(&base, "/scale_rule/min_replicas", json!(0)),
+                        "/replicas",
+                        json!(0),
+                    ),
+                    "/sleep_policy",
+                    json!({"idle_after": "PT5M", "kind": "Stop"}),
+                );
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    DEFINE_SERVICE,
+                    &request,
+                    "defined",
+                );
+                let sent = payload(&body);
+                assert_eq!(sent["workload_id"], json!(workload), "{body}");
+                assert_eq!(sent["replicas"], json!(0), "{body}");
+                assert_eq!(sent["scale_rule"], request["scale_rule"], "{body}");
+                let id = ServiceId(Uuid(published(&body, "service_id")));
+                let row = ServiceStorage::get(&w.ports(), &id).expect("the service row");
+                assert_eq!(row.data.replicas, 0);
+                assert_eq!(
+                    (
+                        row.data.scale_rule.min_replicas,
+                        row.data.scale_rule.max_replicas
+                    ),
+                    (0, 6)
+                );
+                let policy = row.data.sleep_policy.expect("the sleep policy sent");
+                assert_eq!(policy.idle_after.0, "PT5M");
+            }
+
+            /// The payloads of `CreateFormation`, `AddComponent`, `CreateEnvironment`,
+            /// `RegisterArtifact` and `CommitRevision` carry the values sent, and the revision's
+            /// payload is its row.
+            #[test]
+            fn the_formation_and_artifact_events_carry_the_values_sent() {
+                let w = World::new();
+                let formation = json!({"account_id": w.acme(), "name": "events", "zones": [], "cluster_id": w.path.cluster_id});
+                let body = w.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &w.caller,
+                    CREATE_FORMATION,
+                    &formation,
+                    "created",
+                );
+                let sent = payload(&body);
+                assert_eq!(
+                    (sent["account_id"].clone(), sent["name"].clone()),
+                    (json!(w.acme()), json!("events")),
+                    "{body}"
+                );
+                let id = published(&body, "formation_id");
+
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    ADD_COMPONENT,
+                    &json!({"formation_id": id, "account_id": w.acme(), "name": "api"}),
+                    "added",
+                );
+                let sent = payload(&body);
+                assert_eq!(
+                    (sent["formation_id"].clone(), sent["name"].clone()),
+                    (json!(id), json!("api")),
+                    "{body}"
+                );
+
+                let body = w.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &w.caller,
+                    CREATE_ENVIRONMENT,
+                    &json!({"formation_id": id, "account_id": w.acme(), "name": "staging", "protected": false}),
+                    "created",
+                );
+                let sent = payload(&body);
+                assert_eq!(
+                    (sent["formation_id"].clone(), sent["name"].clone()),
+                    (json!(id), json!("staging")),
+                    "{body}"
+                );
+
+                let mut artifact = steps::input::register_artifact(w.acme());
+                artifact["artifact_digest"] = json!("sha256:events");
+                artifact["kind"] = json!("Wasm");
+                artifact["signer_key_id"] = json!("k-events");
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    REGISTER_ARTIFACT,
+                    &artifact,
+                    "registered",
+                );
+                let sent = payload(&body);
+                for field in ["artifact_digest", "account_id", "kind", "signer_key_id"] {
+                    assert_eq!(
+                        sent[field], artifact[field],
+                        "ArtifactRegistered.{field}: {body}"
+                    );
+                }
+
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    COMMIT_REVISION,
+                    &json!({"formation_id": id, "account_id": w.acme()}),
+                    "committed",
+                );
+                let sent = payload(&body);
+                assert_eq!(sent["formation_id"], json!(id), "{body}");
+                let revision = FormationRevisionId(Uuid(published(&body, "revision_id")));
+                let row =
+                    FormationRevisionStorage::get(&w.ports(), &revision).expect("the revision row");
+                assert_eq!(
+                    (json!(row.data.number), json!(row.data.document_digest.0)),
+                    (sent["number"].clone(), sent["document_digest"].clone()),
+                    "{body}"
+                );
+            }
+
+            /// A formation's document is its own rows: a component or an environment added to
+            /// another formation of the account leaves its digest as it was.
+            #[test]
+            fn another_formations_rows_leave_the_digest_as_it_was() {
+                let w = World::new();
+                let site = w.ids.formation_id.clone();
+                let (_, before) = commit(&w, &site);
+                let other = w.formation("neighbour", true);
+                steps::create_environment(&w.client, &w.caller, &other, w.acme());
+                let (number, after) = commit(&w, &site);
+                assert_eq!(number, json!(3));
+                assert_eq!(
+                    after, before,
+                    "another formation's rows changed site's digest"
+                );
+            }
+
+            /// The digest is the SHA-256 of the canonical form `commit_revision.rs` documents:
+            /// `["twin", [[name, internal name, on border], ...], [[name, protected], ...]]`,
+            /// each list sorted by name, compact JSON. Components added in reverse order and a
+            /// protected environment; other formations of the store hold rows too. The literal is
+            /// `printf '%s' '<that document>' | sha256sum`.
+            #[test]
+            fn the_digest_is_the_documented_canonical_form() {
+                let w = World::new();
+                let twin = w.formation("twin", false);
+                for name in ["e", "d", "c", "b", "a"] {
+                    w.accepts(
+                        steps::DEPLOYER,
+                        &w.caller,
+                        ADD_COMPONENT,
+                        &json!({"formation_id": twin, "account_id": w.acme(), "name": name}),
+                        "added",
+                    );
+                }
+                w.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &w.caller,
+                    CREATE_ENVIRONMENT,
+                    &json!({"formation_id": twin, "account_id": w.acme(), "name": "prod", "protected": true}),
+                    "created",
+                );
+                let (number, digest) = commit(&w, &twin);
+                assert_eq!(number, json!(1));
+                assert_eq!(
+                    digest,
+                    json!(
+                        "sha256:bb3b0e3a3d8b7aada2cabe5eefa65099db3fb80c42f138cdfcb50e03b1f4864e"
+                    )
+                );
+            }
+        }
     }
 }

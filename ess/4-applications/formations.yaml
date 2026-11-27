@@ -882,9 +882,22 @@ commands:
       display: Commit a formation revision
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Isolation pass 2: the account the request acts in, so the formation can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing formation (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.formations.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      # Isolation pass 2: a formation of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: formation-of-other-account
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
         error: weft.formations.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}
@@ -1153,10 +1166,23 @@ commands:
       display: Add a component
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Isolation pass 2: the account the request acts in, so the formation can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: name, type: weft.shared.ComponentName}
     outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing formation (an input guard answers ahead of every row check).
+      - name: not-callers-account
+        when: account_id != caller.account_id
+        error: weft.formations.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
+        error: weft.formations.NoSuchFormation
+      # Isolation pass 2: a formation of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: formation-of-other-account
+        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
         error: weft.formations.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}

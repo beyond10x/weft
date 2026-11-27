@@ -1,0 +1,17 @@
+{
+  "format": "ess-diff-acknowledgements/1",
+  "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
+  "after": "37cd7b55a706e1eea0e1a51c5942ebe012950de7cf2f05b9e39d476aca564870",
+  "acknowledged": [
+    "command/weft.formations.AddComponent/input-added/account_id",
+    "command/weft.formations.AddComponent/outcome-added/formation-of-other-account",
+    "command/weft.formations.AddComponent/outcome-added/not-callers-account",
+    "command/weft.formations.CommitRevision/input-added/account_id",
+    "command/weft.formations.CommitRevision/outcome-added/formation-of-other-account",
+    "command/weft.formations.CommitRevision/outcome-added/not-callers-account",
+    "command/weft.workloads.DefineWorkload/outcome-added/component-missing",
+    "command/weft.workloads.DefineWorkload/outcome-added/environment-retired",
+    "command/weft.workloads.DefineWorkload/outcome-added/formation-retired",
+    "command/weft.workloads.DefineWorkload/outcome-added/settings-shape-mismatch"
+  ]
+}

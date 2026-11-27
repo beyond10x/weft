@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T19:01:42Z",
+  "actor": "human:operator",
+  "artifact": "story:docs-ux-harness",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#17, merged 5f1a229",
+    "reference": "https://github.com/beyond10x/weft/pull/17"
+  }
+}

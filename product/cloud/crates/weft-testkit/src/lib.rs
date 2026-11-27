@@ -177,6 +177,12 @@ impl ControlHost {
         Self::start_in(dir)
     }
 
+    /// Stops this control host; its state file and log stay until drop, for a read through the
+    /// storage port ([`weft_impl::Ports::open`]) of what no view shows.
+    pub fn stop(&mut self) {
+        self.kill();
+    }
+
     /// A client of this control host.
     pub fn client(&self) -> Client {
         Client::new(self.address)

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-node-join-session
 kind: story
-status: active
+status: implemented
 title: weft-agent joins with its token and opens its session through the node-channel endpoint of the control host
 relations:
 - decomposes: epic:walking-skeleton
@@ -34,10 +34,11 @@ scope:
   path: product/cloud/crates/weft-impl/src/behaviours/supersede_node_session.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/src
-revision: 27
+revision: 28
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T17:18:35Z", actor: "human:operator", revision: 24, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T17:18:35Z", actor: "human:operator", revision: 25, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T19:03:22Z", actor: "human:operator", revision: 28, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
