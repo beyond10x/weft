@@ -5,13 +5,32 @@ tasks:
     cmds: [{task: check}]
 
   check:
-    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter and weft-sim.
+    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter and weft-sim, test the root workspace, self-test the test budget, then the hooks of tools/check.d.
     cmds:
       - task: spec
       - task: layers
       - task: stamped-time
       - task: ci-paths
       - task: sim-test
+      - task: test
+      - task: gate-budget
+      - tools/run-hooks.sh tools/check.d
+
+  test:
+    desc: Test the root workspace. Builds the test binaries first; then tools/test-step.sh checks rustc against rust-toolchain.toml, runs the hooks of tools/test-setup.d, the tests (a test over 60 s is killed, the step ends at 120 s with exit 124), the hooks of tools/test-teardown.d, and prints the ten slowest tests.
+    cmds:
+      - cargo nextest run --workspace --no-run
+      - tools/test-step.sh
+
+  gate-budget:
+    desc: Self-test of the test budget on the fixture tools/budget-fixture, both sides of each limit, and the real limits read from the files.
+    cmds:
+      - tools/test-gate-budget.sh
+
+  slow:
+    desc: The slow lane, never part of check. Runs the hooks of tools/slow.d (regeneration that compares bytes).
+    cmds:
+      - tools/run-hooks.sh tools/slow.d
 
   ci-paths:
     desc: Test the planning-only path filter of the CI gate on both sides.
