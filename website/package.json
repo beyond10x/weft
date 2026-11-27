@@ -8,7 +8,8 @@
     "build": "docusaurus build",
     "clear": "docusaurus clear",
     "serve": "docusaurus serve",
-    "typecheck": "tsc"
+    "typecheck": "tsc",
+    "ux": "timeout 120 playwright test"
   },
   "dependencies": {
     "@beyond10x/docs-system": "git+https://github.com/beyond10x/docs-system.git#081e05f7481cebf1d6c13aff0ca2cdbc9815a11b",
@@ -25,9 +26,11 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
     "@docusaurus/module-type-aliases": "3.10.2",
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",
+    "@playwright/test": "1.65.1",
     "@types/react": "^19.0.0",
     "typescript": "~7.0.2"
   },

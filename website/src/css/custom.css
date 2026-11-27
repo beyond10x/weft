@@ -94,3 +94,26 @@ tr[id] {
     display: none;
   }
 }
+
+/* The docs sidebar stays in view to the end of a page (UX gate 2, website/ux/): it is fixed beside the
+   viewport rather than sticky in its column, which ends where the footer begins, and the footer of a
+   docs page starts right of it. The column drops its clip path, which would clip the fixed sidebar to
+   the column (the sidebar is not hideable, so the clip has nothing to animate). */
+@media (min-width: 997px) {
+  .theme-doc-sidebar-container > div:first-child {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    width: var(--doc-sidebar-width);
+    height: auto;
+    max-height: none;
+  }
+
+  .theme-doc-sidebar-container {
+    clip-path: none;
+  }
+
+  html:has(.theme-doc-sidebar-container) .theme-layout-footer {
+    margin-left: var(--doc-sidebar-width);
+  }
+}
