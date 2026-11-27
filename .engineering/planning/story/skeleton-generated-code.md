@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-generated-code
 kind: story
-status: active
+status: implemented
 title: Generated domain code from ess/ committed under generated/ with a source digest, checked fast and regenerated in the slow lane
 relations:
 - decomposes: epic:walking-skeleton
@@ -27,10 +27,11 @@ scope:
   path: tools/test-generated.sh
 - confidence: cited
   path: tools/test-setup.d/10-generated.sh
-revision: 13
+revision: 14
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T10:36:58Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T10:36:58Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T13:18:53Z", actor: "human:operator", revision: 14, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

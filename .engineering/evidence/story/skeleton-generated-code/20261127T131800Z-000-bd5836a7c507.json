@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T13:18:00Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-generated-code",
+  "kind": "story",
+  "revision": 13,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#8, merged 82eadb3",
+    "reference": "https://github.com/beyond10x/weft/pull/8"
+  }
+}

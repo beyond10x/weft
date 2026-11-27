@@ -1,0 +1,2 @@
+[env]
+WEFT_SUBSTRATE_SOCKET = { value = "target/substrate/sock", relative = true }
