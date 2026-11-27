@@ -14,8 +14,8 @@ use weft_types::behaviour::{NodeSessionStorage, NodeStorage};
 use weft_types::infrastructure::NodeState;
 use weft_types::nodes::obligations::OpenNodeSessionBehavior;
 use weft_types::nodes::{
-    NodeIdentityRefused, NodeSessionData, NodeSessionOpened, NodeSessionSnapshot, NodeSessionState, OpenNodeSession,
-    OpenNodeSessionOutcome, ReceivedInFuture, SessionAlreadyOpen,
+    NodeIdentityRefused, NodeSessionData, NodeSessionOpened, NodeSessionSnapshot, NodeSessionState,
+    OpenNodeSession, OpenNodeSessionOutcome, ReceivedInFuture, SessionAlreadyOpen,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -27,11 +27,15 @@ use crate::Ports;
 /// Whether `node_id` is "a joined node of the cluster": its `weft.infrastructure.Node` row exists
 /// and is neither `Provisioning` (not joined yet) nor `Gone`.
 pub(crate) fn joined(ports: &Ports, node_id: &NodeId) -> bool {
-    NodeStorage::get(ports, node_id).is_some_and(|node| !matches!(node.state, NodeState::Provisioning | NodeState::Gone))
+    NodeStorage::get(ports, node_id)
+        .is_some_and(|node| !matches!(node.state, NodeState::Provisioning | NodeState::Gone))
 }
 
 impl OpenNodeSessionBehavior for Ports {
-    fn open_node_session(&mut self, input: OpenNodeSession) -> Result<OpenNodeSessionOutcome, UnmetObligation> {
+    fn open_node_session(
+        &mut self,
+        input: OpenNodeSession,
+    ) -> Result<OpenNodeSessionOutcome, UnmetObligation> {
         let now = self.now();
         // The decoder admits only RFC 3339; an instant it admits that this clock cannot read is
         // a decision that cannot be made, refused naming the command.
@@ -40,16 +44,22 @@ impl OpenNodeSessionBehavior for Ports {
             source: "weft.nodes.OpenNodeSession",
         })?;
         if received_at > now {
-            return Ok(OpenNodeSessionOutcome::ReceivedInFuture { error: ReceivedInFuture });
+            return Ok(OpenNodeSessionOutcome::ReceivedInFuture {
+                error: ReceivedInFuture,
+            });
         }
         if !joined(self, &input.node_id) {
-            return Ok(OpenNodeSessionOutcome::IdentityRefused { error: NodeIdentityRefused });
+            return Ok(OpenNodeSessionOutcome::IdentityRefused {
+                error: NodeIdentityRefused,
+            });
         }
         if NodeSessionStorage::list(self)
             .iter()
             .any(|row| row.data.node_id == input.node_id && row.state == NodeSessionState::Open)
         {
-            return Ok(OpenNodeSessionOutcome::AlreadyOpen { error: SessionAlreadyOpen });
+            return Ok(OpenNodeSessionOutcome::AlreadyOpen {
+                error: SessionAlreadyOpen,
+            });
         }
         let session_id = NodeSessionId(Uuid(mint()));
         NodeSessionStorage::put(

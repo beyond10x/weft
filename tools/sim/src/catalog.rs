@@ -44,7 +44,12 @@ fn compare_atoms(p: &Predicate, negated: bool, out: &mut Vec<(String, String, Co
             }
         }
         Predicate::Not(inner) => compare_atoms(inner, !negated, out),
-        Predicate::Compare { left: Operand::Fact(a), op, right: Operand::Fact(b), .. } => {
+        Predicate::Compare {
+            left: Operand::Fact(a),
+            op,
+            right: Operand::Fact(b),
+            ..
+        } => {
             let input_of = |path: &ess_primitives::FactPath| -> Option<String> {
                 let s = path.segments();
                 (s.len() == 2 && s[0] == "input").then(|| s[1].clone())
@@ -54,7 +59,9 @@ fn compare_atoms(p: &Predicate, negated: bool, out: &mut Vec<(String, String, Co
                 (s.len() == 1 && s[0] != "input").then(|| s[0].clone())
             };
             let pair = match (row_of(a), input_of(b), input_of(a), row_of(b)) {
-                (Some(row), Some(input), _, _) | (_, _, Some(input), Some(row)) => Some((row, input)),
+                (Some(row), Some(input), _, _) | (_, _, Some(input), Some(row)) => {
+                    Some((row, input))
+                }
                 _ => None,
             };
             let op = match (op, negated) {
@@ -83,11 +90,19 @@ fn state_atoms(p: &Predicate, ent: &Ent, out: &mut Vec<usize>) {
             }
         }
         Predicate::AnyOf { path, values } if path.segments() == ["state"] => {
-            out.extend(values.iter().filter_map(text).filter_map(|s| ent.state_index(&s)));
+            out.extend(
+                values
+                    .iter()
+                    .filter_map(text)
+                    .filter_map(|s| ent.state_index(&s)),
+            );
         }
-        Predicate::Compare { left: Operand::Fact(path), op: CompareOp::Eq, right: Operand::Literal(v), .. }
-            if path.segments() == ["state"] =>
-        {
+        Predicate::Compare {
+            left: Operand::Fact(path),
+            op: CompareOp::Eq,
+            right: Operand::Literal(v),
+            ..
+        } if path.segments() == ["state"] => {
             out.extend(text(v).and_then(|s| ent.state_index(&s)));
         }
         _ => {}
@@ -267,9 +282,8 @@ fn condition_kind(c: &ResolvedCondition) -> &'static str {
 
 fn input_guard(c: &ResolvedCondition) -> Option<Predicate> {
     match c {
-        ResolvedCondition::When { predicate } | ResolvedCondition::ExternalWhen { predicate, .. } => {
-            Some(predicate.clone())
-        }
+        ResolvedCondition::When { predicate }
+        | ResolvedCondition::ExternalWhen { predicate, .. } => Some(predicate.clone()),
         ResolvedCondition::SubjectPredicate { input, .. }
         | ResolvedCondition::Related { input, .. }
         | ResolvedCondition::RelatedSet { input, .. }
@@ -284,9 +298,14 @@ fn input_guard(c: &ResolvedCondition) -> Option<Predicate> {
 /// Text of every guard that reads the subject row, to find the fields guards read.
 fn subject_guard_text(c: &ResolvedCondition) -> Option<String> {
     match c {
-        ResolvedCondition::SubjectField { field, predicate, .. } => Some(format!(
+        ResolvedCondition::SubjectField {
+            field, predicate, ..
+        } => Some(format!(
             "{field} {}",
-            predicate.as_ref().map(ToString::to_string).unwrap_or_default()
+            predicate
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_default()
         )),
         ResolvedCondition::SubjectPredicate { predicate, .. }
         | ResolvedCondition::ExternalSubject { predicate, .. } => Some(predicate.to_string()),
@@ -327,7 +346,12 @@ impl Catalog {
         let mut tr_base = 0;
         let mut domains: BTreeSet<String> = BTreeSet::new();
         for (name, entity) in ir.entities() {
-            let states: Vec<String> = entity.lifecycle.states.iter().map(ToString::to_string).collect();
+            let states: Vec<String> = entity
+                .lifecycle
+                .states
+                .iter()
+                .map(ToString::to_string)
+                .collect();
             let index_of = |s: &ess_domain::entity::StateName| {
                 states.iter().position(|x| *x == s.to_string()).unwrap_or(0)
             };
@@ -341,7 +365,11 @@ impl Catalog {
                     to: index_of(&t.to),
                 })
                 .collect();
-            let identity_type = entity.identity.type_ref.declared().map(|h| h.name().clone());
+            let identity_type = entity
+                .identity
+                .type_ref
+                .declared()
+                .map(|h| h.name().clone());
             if let Some(t) = &identity_type {
                 identity_types.insert(t.clone(), entities.len());
             }
@@ -470,7 +498,8 @@ impl Catalog {
                     }
                 }
                 for affect in &outcome.affects {
-                    if let (Some(ent), Some(t)) = (ent_index.get(affect.entity.name()), &affect.moves)
+                    if let (Some(ent), Some(t)) =
+                        (ent_index.get(affect.entity.name()), &affect.moves)
                     {
                         if let Some(tr) = entities[*ent].transition_index(&t.name) {
                             set_moves.push((*ent, tr));
@@ -492,7 +521,11 @@ impl Catalog {
                     set_moves,
                     gid,
                     reads_rows: match &outcome.condition {
-                        ResolvedCondition::Related { test: ResolvedRelatedTest::Absent, also, .. } => !also.is_empty(),
+                        ResolvedCondition::Related {
+                            test: ResolvedRelatedTest::Absent,
+                            also,
+                            ..
+                        } => !also.is_empty(),
                         ResolvedCondition::Related { .. }
                         | ResolvedCondition::RelatedSet { .. }
                         | ResolvedCondition::SubjectField { .. }
@@ -513,7 +546,9 @@ impl Catalog {
                 .filter(|f| !f.type_ref.is_optional())
                 .filter_map(|f| {
                     let t = f.type_ref.declared()?.name().clone();
-                    identity_types.contains_key(&t).then(|| (f.name.clone(), t.to_string()))
+                    identity_types
+                        .contains_key(&t)
+                        .then(|| (f.name.clone(), t.to_string()))
                 })
                 .filter(|(n, _)| !create_inputs.contains(n))
                 .collect();
@@ -527,41 +562,59 @@ impl Catalog {
                     _ => None,
                 })
                 .collect();
-            let input_names: BTreeSet<&str> = command.input.iter().map(|f| f.name.as_str()).collect();
+            let input_names: BTreeSet<&str> =
+                command.input.iter().map(|f| f.name.as_str()).collect();
             // The input field naming the command's own subject, for guards over its stored fields.
             let subject_via = outcomes.iter().find_map(|o| match &o.subject {
-                Some(Subj { ent, instance: InstanceSrc::Input(field), effect, .. })
-                    if !matches!(effect, Eff::Creates { .. }) =>
-                {
-                    Some((field.clone(), *ent))
-                }
+                Some(Subj {
+                    ent,
+                    instance: InstanceSrc::Input(field),
+                    effect,
+                    ..
+                }) if !matches!(effect, Eff::Creates { .. }) => Some((field.clone(), *ent)),
                 _ => None,
             });
             let mut ties: Vec<Tie> = Vec::new();
             let mut set_ties: Vec<SetTie> = Vec::new();
-            let add_ties = |via: &str, ent: usize, p: &Predicate, error: bool, ties: &mut Vec<Tie>| {
-                let mut atoms = Vec::new();
-                compare_atoms(p, false, &mut atoms);
-                // A refusal taken when the fields differ, or an acceptance taken when they agree.
-                let wanted = if error { CompareOp::Ne } else { CompareOp::Eq };
-                for (row, input, op) in atoms {
-                    if op == wanted
-                        && input_names.contains(input.as_str())
-                        && entities[ent].fields.contains(&row)
-                        && !ties.iter().any(|t| t.via == via && t.input_field == input)
-                    {
-                        ties.push(Tie { via: via.to_owned(), ent, row_field: row, input_field: input });
+            let add_ties =
+                |via: &str, ent: usize, p: &Predicate, error: bool, ties: &mut Vec<Tie>| {
+                    let mut atoms = Vec::new();
+                    compare_atoms(p, false, &mut atoms);
+                    // A refusal taken when the fields differ, or an acceptance taken when they agree.
+                    let wanted = if error { CompareOp::Ne } else { CompareOp::Eq };
+                    for (row, input, op) in atoms {
+                        if op == wanted
+                            && input_names.contains(input.as_str())
+                            && entities[ent].fields.contains(&row)
+                            && !ties.iter().any(|t| t.via == via && t.input_field == input)
+                        {
+                            ties.push(Tie {
+                                via: via.to_owned(),
+                                ent,
+                                row_field: row,
+                                input_field: input,
+                            });
+                        }
                     }
-                }
-            };
+                };
             for (outcome, out) in command.outcomes.iter().zip(&outcomes) {
                 match &outcome.condition {
-                    ResolvedCondition::Related { via: ResolvedRelatedVia::Input { field, .. }, entity, test, also, .. } => {
-                        if let (Some(&ent), ResolvedRelatedTest::Holds { predicate }) = (ent_index.get(entity.name()), test) {
+                    ResolvedCondition::Related {
+                        via: ResolvedRelatedVia::Input { field, .. },
+                        entity,
+                        test,
+                        also,
+                        ..
+                    } => {
+                        if let (Some(&ent), ResolvedRelatedTest::Holds { predicate }) =
+                            (ent_index.get(entity.name()), test)
+                        {
                             add_ties(field, ent, predicate, out.error, &mut ties);
                         }
                         for a in also {
-                            if let (ResolvedRelatedVia::Input { field, .. }, Some(&ent)) = (&a.via, ent_index.get(a.entity.name())) {
+                            if let (ResolvedRelatedVia::Input { field, .. }, Some(&ent)) =
+                                (&a.via, ent_index.get(a.entity.name()))
+                            {
                                 add_ties(field, ent, &a.predicate, out.error, &mut ties);
                             }
                         }
@@ -572,10 +625,14 @@ impl Catalog {
                             add_ties(field, *ent, predicate, out.error, &mut ties);
                         }
                     }
-                    ResolvedCondition::RelatedSet { selection, test: ResolvedRowSetTest::Exists(exists), .. }
-                        if *exists != out.error =>
-                    {
-                        let Some(&ent) = ent_index.get(selection.entity.name()) else { continue };
+                    ResolvedCondition::RelatedSet {
+                        selection,
+                        test: ResolvedRowSetTest::Exists(exists),
+                        ..
+                    } if *exists != out.error => {
+                        let Some(&ent) = ent_index.get(selection.entity.name()) else {
+                            continue;
+                        };
                         let mut atoms = Vec::new();
                         compare_atoms(&selection.filter, false, &mut atoms);
                         let pairs: Vec<(String, String)> = atoms
@@ -616,7 +673,9 @@ impl Catalog {
         }
 
         for (ei, ent) in entities.iter_mut().enumerate() {
-            let Some(text) = guard_text.get(&ei) else { continue };
+            let Some(text) = guard_text.get(&ei) else {
+                continue;
+            };
             let words: BTreeSet<&str> = text
                 .split(|c: char| !(c.is_alphanumeric() || c == '_'))
                 .filter(|w| !w.is_empty())
