@@ -1,12 +1,11 @@
-// L2, the layout contract, docs variant: every sitemap page, loaded fresh at each gating viewport
-// and read in both themes, at its top and at its end: hard gate 1 (no horizontal page scroll,
-// nothing past its box or cut off), gate 2 (the always-visible elements fully in view) and gate 5
-// (axe-core: no serious or critical violation). One test per page: at each gating viewport the page
-// is loaded once, in one theme, and switched to the other theme in place (`switchTheme`); which
-// theme is loaded fresh alternates between the viewports, so each theme is read once on a fresh
-// load and once switched. The measured-only viewports are read and recorded at the top of the
-// 1280x800 page resized, in the light theme, not gated. The page's moderate and minor axe nodes
-// (the worse viewport) go to the ratchet as `page.<name>`, one fragment per theme.
+// L2, the layout contract, docs variant: every sitemap page, loaded fresh at each gating viewport in
+// each theme and read at its top and at its end: hard gate 1 (no horizontal page scroll, nothing
+// past its box or cut off), gate 2 (the always-visible elements fully in view) and gate 5
+// (axe-core: no serious or critical violation). One test per page, four fresh loads: no theme is
+// switched in place, since a part drawn once at load for the theme then shown would be missed
+// (`theme-switch-adversary.spec.ts`). The measured-only viewports are read and recorded at the top
+// of the 1280x800 page resized, in the light theme, not gated. The page's moderate and minor axe
+// nodes (the worse viewport) go to the ratchet as `page.<name>`, one fragment per theme.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -15,7 +14,7 @@ import type { BrowserContext, Page } from '@playwright/test';
 import { BASE, GATING, MEASURED, NOT_READY, ORIGIN, OUT, THEMES, alwaysVisible, sitemapPages } from './adapter.ts';
 import type { Required, Theme, Viewport } from './adapter.ts';
 import { MEASURE } from './reporter.ts';
-import { assertTheme, axe, gatesHere, hermetic, layoutFailures, nodesOf, prepare, serious, settle, switchTheme, visibilityFailures } from './page.ts';
+import { assertTheme, axe, gatesHere, hermetic, layoutFailures, nodesOf, prepare, serious, settle, visibilityFailures } from './page.ts';
 import type { AxeViolation } from './page.ts';
 
 /**
@@ -54,18 +53,20 @@ async function read(page: Page, where: string, viewport: Viewport, state: 'top' 
   return [...layout.map((f) => `${where} ${state}: gate 1 ${f}`), ...visibility.map((f) => `${where} ${state}: gate 2 ${f}`)];
 }
 
-/**
- * Gate 5, then gates 1 and 2 at both ends of the page as it stands, in the theme it shows. It reads
- * the end it is at first, then scrolls to the other end.
- */
-async function gates(page: Page, viewport: Viewport, theme: Theme, atEnd: boolean): Promise<{ failures: string[]; violations: AxeViolation[] }> {
+/** The page loaded fresh at one gating viewport in one theme: gate 5, then gates 1 and 2 at its top and at its end. */
+async function gatesAt(page: Page, path: string, viewport: Viewport, theme: Theme): Promise<{ failures: string[]; violations: AxeViolation[] }> {
   const where = `${viewport.name} ${theme.name}`;
+  await prepare(page, viewport, theme);
+  const response = await page.goto(`${BASE}${path}`);
+  expect(response?.status(), `${path} answers`).toBe(200);
+  await settle(page, NOT_READY);
   await assertTheme(page, theme);
   const violations = await axe(page);
   const failures = serious(violations).map(
     (v) => `${where}: gate 5 ${v.impact} ${v.id} (${v.help}) at ${v.nodes.length} node(s): ${v.nodes.slice(0, 3).join(', ')}`,
   );
-  for (const end of atEnd ? [true, false] : [false, true]) failures.push(...(await read(page, where, viewport, end ? 'end' : 'top', end !== atEnd)));
+  failures.push(...(await read(page, where, viewport, 'top', false)));
+  failures.push(...(await read(page, where, viewport, 'end', true)));
   return { failures, violations };
 }
 
@@ -141,21 +142,12 @@ for (const site of sitemapPages()) {
     const gating: string[] = [];
     const axeBy: Record<string, Record<string, AxeViolation[]>> = Object.fromEntries(THEMES.map((t) => [t.name, {}]));
     const measured: Record<string, string[]> = {};
-    for (const [i, viewport] of GATING.entries()) {
-      // 1280x800 loads the dark theme and ends in the light one, where the measured-only viewports
-      // are read; 390x844 loads the light theme and switches to the dark one.
-      const order = i % 2 === 0 ? [...THEMES].reverse() : THEMES;
-      await prepare(page, viewport, order[0]!);
-      const response = await page.goto(`${BASE}${site.path}`);
-      expect(response?.status(), `${site.path} answers`).toBe(200);
-      await settle(page, NOT_READY);
-      let atEnd = false;
-      for (const [j, theme] of order.entries()) {
-        if (j > 0) await switchTheme(page, theme);
-        const { failures, violations } = await gates(page, viewport, theme, atEnd);
+    for (const viewport of GATING) {
+      // The light theme last at 1280x800: the measured-only viewports resize that page.
+      for (const theme of viewport === GATING[0] ? [...THEMES].reverse() : THEMES) {
+        const { failures, violations } = await gatesAt(page, site.path, viewport, theme);
         gating.push(...failures);
         axeBy[theme.name]![viewport.name] = violations;
-        atEnd = !atEnd;
       }
       // Measured-only viewports, recorded not gated: the desktop page resized, its top, in one
       // theme (layout does not change with the theme).

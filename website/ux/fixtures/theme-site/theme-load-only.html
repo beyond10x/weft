@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Drawn once at load, in the light theme</title>
+<script>
+  // As Docusaurus with respectPrefersColorScheme: the theme follows the system colour scheme, at
+  // load and on every change of it.
+  (function () {
+    var m = matchMedia('(prefers-color-scheme: dark)');
+    var set = function () { document.documentElement.dataset.theme = m.matches ? 'dark' : 'light'; };
+    set();
+    m.addEventListener('change', set);
+  })();
+</script>
+<style>
+  html[data-theme='light'] { background: #fff; color: #000; }
+  html[data-theme='dark'] { background: #000; color: #fff; }
+  body { margin: 0; font: 16px/1.5 sans-serif; }
+  nav.navbar { position: sticky; top: 0; display: flex; gap: 8px; padding: 8px; background: inherit; }
+  html[data-theme='light'] nav.navbar { background: #fff; }
+  html[data-theme='dark'] nav.navbar { background: #000; }
+  main { padding: 8px; }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+<nav class="navbar" aria-label="Main">
+  <button class="navbar__toggle" type="button">Toggle navigation bar</button>
+  <input class="navbar__search-input" type="search" aria-label="Search">
+  <div class="colorModeToggle_fixture"><button type="button">Switch theme</button></div>
+</nav>
+<main>
+  <h1>Drawn once at load</h1>
+  <p>A component that reads the theme once, when the page loads, and draws for it: on a desktop
+  screen in the light theme it draws a banner wider than the screen. A reader who opens this page
+  in the light theme gets a page that scrolls sideways.</p>
+</main>
+<script>
+  if (document.documentElement.dataset.theme === 'light' && window.innerWidth >= 997) {
+    var banner = document.createElement('div');
+    banner.id = 'banner';
+    banner.style.width = '1600px';
+    banner.textContent = 'a banner drawn once, at load, for the light theme, wider than the screen';
+    document.querySelector('main').appendChild(banner);
+  }
+</script>
+</body>
+</html>

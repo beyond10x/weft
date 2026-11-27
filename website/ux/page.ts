@@ -91,40 +91,6 @@ async function inPage(page: Page, script: string): Promise<void> {
   }
 }
 
-/**
- * Switches a loaded page to the other theme in place: the site follows the system colour scheme
- * (`respectPrefersColorScheme`), so the emulated scheme changes and the page re-renders in that
- * theme as it does for a reader who switches the system theme. Waits until the page shows the
- * theme (at most 5 s, else it throws), then until three reads, two animation frames apart, of where
- * the page stands and of each drawn diagram's size and markup agree, as `settle` asks of a fresh
- * load (the diagrams are re-drawn in the new theme's colours).
- */
-export async function switchTheme(page: Page, theme: Theme): Promise<void> {
-  await page.emulateMedia({ colorScheme: theme.name, reducedMotion: 'reduce' });
-  // In the page, in one call: the theme shown (each animation frame, at most 5 s), then the reads.
-  const shown = await page.evaluate(async (name) => {
-    const frame = () => new Promise<void>((done) => requestAnimationFrame(() => done()));
-    const start = performance.now();
-    while (document.documentElement.dataset.theme !== name && performance.now() - start < 5_000) await frame();
-    if (document.documentElement.dataset.theme !== name) return document.documentElement.dataset.theme ?? '';
-    let last = '';
-    let same = 0;
-    for (let i = 0; i < 40 && same < 2; i += 1) {
-      await frame();
-      await frame();
-      const drawn = [...document.querySelectorAll('svg')].map((s) => {
-        const r = s.getBoundingClientRect();
-        return `${Math.round(r.width)}x${Math.round(r.height)}:${s.innerHTML.length}`;
-      });
-      const now = `${Math.round(window.scrollY)}|${document.documentElement.scrollHeight}|${document.body.innerText.length}|${drawn.join(',')}`;
-      same = now === last ? same + 1 : 0;
-      last = now;
-    }
-    return name;
-  }, theme.name);
-  if (shown !== theme.name) throw new Error(`the page shows theme "${shown}", not "${theme.name}"`);
-}
-
 /** The theme the page shows must be the one asked for: a theme check on the wrong theme proves nothing. */
 export async function assertTheme(page: Page, theme: Theme): Promise<void> {
   const shown = await page.evaluate(() => document.documentElement.dataset.theme ?? '');
