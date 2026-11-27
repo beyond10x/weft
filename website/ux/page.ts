@@ -2,12 +2,10 @@
 // has settled, and reads hard gates 1 (no horizontal scroll, nothing past its box), 2 (the
 // always-visible elements fully in view) and 5 (axe-core) off it.
 
-import AxeBuilder from '@axe-core/playwright';
+import { createRequire } from 'node:module';
 import type { BrowserContext, Page } from '@playwright/test';
 import { fullyVisible, overflow, signature } from './probe.ts';
 import type { Required, Theme, Viewport } from './adapter.ts';
-
-export const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'];
 
 export interface AxeViolation {
   id: string;
@@ -38,36 +36,58 @@ export async function prepare(page: Page, viewport: Viewport, theme: Theme): Pro
 export async function settle(page: Page, notReady: string): Promise<void> {
   await page.waitForLoadState('load');
   await page.waitForFunction((sel) => !document.querySelector(sel), notReady, { timeout: 10_000 }).catch(() => undefined);
-  let last = '';
-  let same = 0;
-  for (let i = 0; i < 150 && same < 2; i += 1) {
-    await page.waitForTimeout(40);
-    const now = await page.evaluate(signature);
-    same = now === last ? same + 1 : 0;
-    last = now;
-  }
+  // The reads run in the page, in one call: 40 ms apart, until three agree (at most 150).
+  await inPage(page, `(async () => {
+    const signature = ${signature.toString()};
+    let last = '';
+    let same = 0;
+    for (let i = 0; i < 150 && same < 2; i += 1) {
+      await new Promise((done) => setTimeout(done, 40));
+      const now = signature();
+      same = now === last ? same + 1 : 0;
+      last = now;
+    }
+  })()`);
 }
 
 /**
  * After a resize or a scroll of a settled page: waits two animation frames at a time until two
- * reads of where the page stands agree (at most about 20 rounds). Cheaper than `settle`.
+ * reads of where the page stands agree (at most about 20 rounds). Cheaper than `settle`. The reads
+ * run in the page, in one call.
  */
 export async function quiet(page: Page): Promise<void> {
+  await inPage(page, `(async () => {${QUIET_LOOP}})()`);
+}
+
+/** The loop of `quiet`, as in-page script: also the wait of `gatesHere` after it scrolls. */
+const QUIET_LOOP = `
   let last = '';
   for (let i = 0; i < 20; i += 1) {
-    const now = await page.evaluate(
-      () =>
-        new Promise<string>((done) =>
-          requestAnimationFrame(() =>
-            requestAnimationFrame(() => {
-              const stops = document.querySelectorAll('[tabindex], a[href], button, input').length;
-              done(`${location.href}|${Math.round(window.scrollY)}|${window.innerWidth}|${document.body.innerText.length}|${stops}`);
-            }),
-          ),
-        ),
+    const now = await new Promise((done) =>
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const stops = document.querySelectorAll('[tabindex], a[href], button, input').length;
+          done(location.href + '|' + Math.round(window.scrollY) + '|' + window.innerWidth + '|' + document.body.innerText.length + '|' + stops);
+        }),
+      ),
     );
-    if (now === last) return;
+    if (now === last) break;
     last = now;
+  }`;
+
+/**
+ * Runs a wait in the page. A document that is replaced while it waits (a click that loads another
+ * page) ends the call: the wait starts again in the new document once it has loaded, at most 3 times.
+ */
+async function inPage(page: Page, script: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await page.evaluate(script);
+      return;
+    } catch (error) {
+      if (attempt >= 3 || !/Execution context was destroyed|navigat/i.test(String(error))) throw error;
+      await page.waitForLoadState('load');
+    }
   }
 }
 
@@ -78,13 +98,44 @@ export async function assertTheme(page: Page, theme: Theme): Promise<void> {
 }
 
 /**
- * Every axe-core violation of the gate's tags, each with its impact. Run in the page (legacy mode):
- * the default mode opens a blank page per run to finish it, about 0.8 s each; the site has no frames.
+ * Every axe-core violation, each with its impact, of every rule axe-core runs by default (see
+ * `AXE_OPTIONS`): gate 5 is not filtered by WCAG tag. Read in the page as `@axe-core/playwright`
+ * does in legacy mode (the default mode opens a blank page per run to finish it, about 0.8 s each;
+ * the site has no frames). axe-core is put into a document once and run there as often as asked:
+ * the builder evaluated its 0.5 MB source twice per run.
  */
 export async function axe(page: Page): Promise<AxeViolation[]> {
-  const result = await new AxeBuilder({ page }).withTags(AXE_TAGS).setLegacyMode(true).options({ resultTypes: ['violations'] }).analyze();
-  return result.violations.map((v) => ({ id: v.id, impact: v.impact ?? 'unknown', help: v.help, nodes: v.nodes.map((n) => n.target.join(' ')) }));
+  const run = () =>
+    page.evaluate(async (options) => {
+      const core = (window as unknown as { axe?: { run: (context: Document, options: unknown) => Promise<AxeResults> } }).axe;
+      if (!core || typeof core.run !== 'function') return null;
+      const result = await core.run(document, options);
+      return result.violations.map((v) => ({ id: v.id, impact: v.impact ?? 'unknown', help: v.help, nodes: v.nodes.map((n) => n.target.join(' ')) }));
+    }, AXE_OPTIONS);
+  const first = await run();
+  if (first) return first;
+  await page.evaluate(`${AXE_SOURCE}\n;axe.configure({ allowedOrigins: ['<same_origin>'], branding: { application: 'playwright' } });`);
+  const result = await run();
+  if (!result) throw new Error('axe-core did not load into the page');
+  return result;
 }
+
+/** What one axe-core run reads back: its violations, each with the target of its nodes. */
+interface AxeResults {
+  violations: { id: string; impact?: string | null; help: string; nodes: { target: string[] }[] }[];
+}
+
+/**
+ * The options of every run: no `runOnly`, so axe-core runs every rule it enables by default (the
+ * WCAG A and AA rules and its best practices; the rules it ships disabled, such as the deprecated
+ * ones, `color-contrast-enhanced` and `target-size`, stay off), and reports violations only. The
+ * harness ran these rules before this file named them: its builder call `withTags([...])` was
+ * followed by `options({ resultTypes })`, which replaced the tag filter.
+ */
+const AXE_OPTIONS = { resultTypes: ['violations'] };
+
+/** The axe-core source `@axe-core/playwright` injects, resolved as that package resolves it. */
+const AXE_SOURCE: string = (createRequire(require.resolve('@axe-core/playwright'))('axe-core') as { source: string }).source;
 
 export const serious = (violations: readonly AxeViolation[]): AxeViolation[] => violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
 
@@ -104,6 +155,32 @@ export async function visibilityFailures(page: Page, required: readonly Required
   );
   return (await page.evaluate(fullyVisible, applicable)).filter((v) => !v.ok).map((v) => `${v.name} ${v.why}`);
 }
+
+/**
+ * Hard gates 1 and 2 in one call into the page, as `layoutFailures` and `visibilityFailures` read
+ * them: first, when `scroll` names an end of the page, it scrolls there and waits as `quiet` does
+ * (two animation frames at a time until two reads of where the page stands agree, at most 20
+ * rounds). The probes are the same functions, sent to the page in one script.
+ */
+export async function gatesHere(page: Page, required: readonly Required[], scroll: 'top' | 'end' | null): Promise<{ layout: string[]; visibility: string[] }> {
+  const read = await page.evaluate(`${READ_SOURCE}(${JSON.stringify({ scroll, required })})`);
+  const { overflows, visible } = read as { overflows: { kind: string; what: string; by: number }[]; visible: { name: string; ok: boolean; why: string }[] };
+  return {
+    layout: overflows.map((o) => `${o.kind} ${o.what} past by ${o.by}px`),
+    visibility: visible.filter((v) => !v.ok).map((v) => `${v.name} ${v.why}`),
+  };
+}
+
+const READ_SOURCE = `(async ({ scroll, required }) => {
+  const overflow = ${overflow.toString()};
+  const fullyVisible = ${fullyVisible.toString()};
+  if (scroll) {
+    window.scrollTo(0, scroll === 'end' ? document.documentElement.scrollHeight : 0);
+    ${QUIET_LOOP}
+  }
+  const applicable = required.filter((r) => !r.onlyWhere || document.querySelector(r.onlyWhere)).map(({ name, selector }) => ({ name, selector }));
+  return { overflows: overflow(), visible: fullyVisible(applicable) };
+})`;
 
 /** Sums every layout shift without recent input from the first paint on, into `window.__uxShift`. Self-contained: sent to the page. */
 export function shiftObserver(): void {

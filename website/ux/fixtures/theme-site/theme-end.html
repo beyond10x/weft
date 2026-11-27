@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A page whose end moves with the theme</title>
+<script>
+  // As Docusaurus with respectPrefersColorScheme: the theme follows the system colour scheme, at
+  // load and on every change of it.
+  (function () {
+    var m = matchMedia('(prefers-color-scheme: dark)');
+    var set = function () { document.documentElement.dataset.theme = m.matches ? 'dark' : 'light'; };
+    set();
+    m.addEventListener('change', set);
+  })();
+</script>
+<style>
+  html[data-theme='light'] { background: #fff; color: #000; }
+  html[data-theme='dark'] { background: #000; color: #fff; }
+  body { margin: 0; font: 16px/1.5 sans-serif; }
+  nav.navbar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 8px; padding: 8px; }
+  html[data-theme='light'] nav.navbar { background: #fff; }
+  html[data-theme='dark'] nav.navbar { background: #000; }
+  .wrapper { display: flex; }
+  a { color: inherit; }
+  .theme-doc-sidebar-container { width: 250px; flex: none; }
+  .docs-sidebar { position: sticky; top: 60px; height: 300px; }
+  main { flex: 1; height: 2000px; padding: 8px; }
+  /* The footer is taller in the light theme: the page is 1000 px longer there. */
+  html[data-theme='light'] footer { height: 1200px; }
+  html[data-theme='dark'] footer { height: 200px; }
+  @media (max-width: 996px) { .theme-doc-sidebar-container { display: none; } }
+</style>
+</head>
+<body>
+<nav class="navbar" aria-label="Main">
+  <button class="navbar__toggle" type="button">Toggle navigation bar</button>
+  <input class="navbar__search-input" type="search" aria-label="Search">
+  <div class="colorModeToggle_fixture"><button type="button">Switch theme</button></div>
+</nav>
+<div class="wrapper">
+  <aside class="theme-doc-sidebar-container">
+    <nav class="docs-sidebar" aria-label="Docs sidebar"><a href="#one">One page</a><br><a href="#two">Another page</a></nav>
+  </aside>
+  <main><h1>The end moves with the theme</h1><p>At the end of this page in the light theme the docs sidebar has scrolled away with its column.</p></main>
+</div>
+<footer><p>The footer.</p></footer>
+</body>
+</html>

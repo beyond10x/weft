@@ -9,6 +9,8 @@ import { BUILD, PORT } from './ux/adapter.ts';
 export default defineConfig({
   testDir: './ux',
   testMatch: '*.spec.ts',
+  // Run output (`ux/.out`) holds no spec of the run (`ux/collect.spec.ts`).
+  testIgnore: '**/.out/**',
   outputDir: './ux/.out/test-results',
   fullyParallel: true,
   workers: 2,
