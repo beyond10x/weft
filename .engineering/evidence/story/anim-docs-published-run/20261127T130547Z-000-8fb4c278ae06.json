@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-27T13:05:47Z",
+  "actor": "human:operator",
+  "artifact": "story:anim-docs-published-run",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:epics-acceptance-round-2",
+    "reference": ".engineering/planning/review-result/epics-acceptance-round-2.md#story/anim-docs-published-run.md:123",
+    "review": "review-result:epics-acceptance-round-2",
+    "outcome": "fixed"
+  }
+}
