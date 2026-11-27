@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:anim-search-record
 kind: story
-status: active
+status: implemented
 title: 'weft-sim search output records the climb: round, axis indices, parent, decision, best so far and walk per point; restart points evaluated'
 relations:
 - decomposes: epic:search-animation
@@ -19,10 +19,11 @@ scope:
   path: tools/sim/tests/main.rs
 - confidence: cited
   path: website/docs/simulator/results.md
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T15:01:08Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-11-27T15:01:08Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-11-27T16:03:30Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"test_result":1,"approval":1,"review_outcome":2}}}
 ---
 ## Epic
 
