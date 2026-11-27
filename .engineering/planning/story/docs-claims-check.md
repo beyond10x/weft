@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-claims-check
 kind: story
-status: draft
+status: active
 title: 'Docs claims check: repository links, Planned banners and AGENTS.md paths held at 0 in pages.yml and task check'
 relations:
 - decomposes: epic:docs-fidelity
@@ -23,7 +23,10 @@ scope:
   path: tools/docs-check.d
 - confidence: inferred
   path: tools/test-docs-check.sh
-revision: 7
+revision: 10
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T15:01:10Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-11-27T15:01:10Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
 ---
 ## Epic
 
@@ -109,8 +112,9 @@ None. This story touches no entity of `ess/`.
    fixture (a link to a missing path, a planned item whose page has no banner, a backticked path
    that does not exist) and 0 on its `pass` fixture.
 6. On `AGENTS.md` as it was before this story, `30-agents-md-paths.sh` reports exactly
-   `surfaces/http/weft-api.yaml` and `surfaces/cli/weft.yaml`.
-7. After this story, `AGENTS.md` lists both paths under a heading that says Planned and
+   `ess/scenarios/`, `surfaces/http/weft-api.yaml` and `surfaces/cli/weft.yaml` in a clean checkout
+   (`ess/scenarios/` is not committed; `ess/ess-inputs.yaml` has `scenarios: []`).
+7. After this story, `AGENTS.md` lists the three paths under a heading that says Planned and
    `30-agents-md-paths.sh` on the tree reports `repo.agents-md-dead-paths 0`.
 
 ## Rules for this work

@@ -21,11 +21,9 @@ none is written before the specification of what it implements.
   `.../target/generated/crates/<crate>/Cargo.toml`" until `tools/synth.sh` has run once;
   `task test` runs it first.
 - `ess/`: the ESS domain model. `system.yaml`, `ess-inputs.yaml`, `components.yaml`,
-  `<layer>/<name>.yaml` (one bounded context per file, one directory per layer, `docs/layers.md`),
-  `scenarios/`. A domain names only domains of its own or a lower layer. Between domains it
-  declares the relation (`references`), from the integration pass on (2026-11-26).
-- `surfaces/http/weft-api.yaml`: the user API, `ess-http/1`.
-- `surfaces/cli/weft.yaml`: the CLI presentation, `ess-cli/2`.
+  `<layer>/<name>.yaml` (one bounded context per file, one directory per layer, `docs/layers.md`).
+  A domain names only domains of its own or a lower layer. Between domains it declares the
+  relation (`references`), from the integration pass on (2026-11-26).
 - `protocols/node-channel.yaml`: session between `weft-control` and `weft-node`, `ess-protospec/1`.
 - `protocols/exec-channel.yaml`: exec, attach, logs and port forward into an instance,
   `ess-protospec/1`.
@@ -67,6 +65,22 @@ none is written before the specification of what it implements.
   host. A page about something not built carries a `:::caution[Planned]` banner.
   `tools/planning-only.sh` lets a `website/`-only change skip the code gate; `--docs` is the
   docs build's filter, where a `website/` path builds.
+- `tools/check-docs.sh` (`task docs-check`, part of `task check`, and the first step of
+  `.github/workflows/pages.yml`, which runs on every pull request): holds
+  `docs.dead-repo-links`, `docs.planned-without-banner` and `repo.agents-md-dead-paths` at 0
+  with the hooks of `tools/docs-check.d/` (contract in its `README.md`); each prints
+  `<kpi-id> <count>` last. `tools/test-docs-check.sh` runs every hook on its `pass` and `fail`
+  tree in `tools/docs-check-fixture/`. A path named in this file exists, is written by a tool
+  its bullet names (`target/generated/` beside `tools/synth.sh`), or stands under a heading that
+  says Planned.
+
+### Planned: named here, not in the tree yet
+
+- `surfaces/http/weft-api.yaml`: the user API, `ess-http/1`. No document exists yet; the site
+  says so on `/docs/specification/read#the-files`.
+- `surfaces/cli/weft.yaml`: the CLI presentation, `ess-cli/2`. No document exists yet.
+- `ess/scenarios/`: the ESS scenarios of the domain model. None is written
+  (`scenarios: []` in `ess/ess-inputs.yaml`).
 
 ## Rules for the specification
 
