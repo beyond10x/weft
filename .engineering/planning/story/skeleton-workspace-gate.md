@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-workspace-gate
 kind: story
-status: active
+status: implemented
 title: Root Cargo workspace, pinned toolchain and a nextest gate with a 60 s kill and a 120 s step
 relations:
 - decomposes: epic:walking-skeleton
@@ -40,10 +40,11 @@ scope:
   path: tools/test-step.sh
 - confidence: cited
   path: tools/test-teardown.d/README.md
-revision: 11
+revision: 12
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T09:54:36Z", actor: "human:operator", revision: 11, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T10:36:58Z", actor: "human:operator", revision: 12, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
