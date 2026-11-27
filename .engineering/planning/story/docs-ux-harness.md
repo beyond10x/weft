@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-ux-harness
 kind: story
-status: active
+status: implemented
 title: Docs site layout, accessibility and screen-only user checks with a baseline.json ratchet in the docs build
 relations:
 - decomposes: epic:docs-fidelity
@@ -25,10 +25,11 @@ scope:
   path: website/tsconfig.json
 - confidence: inferred
   path: website/ux
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T16:03:35Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T16:03:36Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T19:03:22Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1,"review_outcome":1}}}
 ---
 ## Epic
 

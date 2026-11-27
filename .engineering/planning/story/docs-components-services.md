@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-components-services
 kind: story
-status: draft
+status: active
 title: Components and managed services pages generated from ess/, marked Planned
 relations:
 - decomposes: epic:docs-fidelity
@@ -27,7 +27,10 @@ scope:
   path: website/sidebars.ts
 - confidence: inferred
   path: website/ux/baseline.json
-revision: 11
+revision: 13
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 12, decided_on: {"recorded":{"approval":1,"review_outcome":7}}}
+- {from: "proposed", to: "active", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 13, decided_on: {"recorded":{"approval":1,"review_outcome":7}}}
 ---
 ## Epic
 
