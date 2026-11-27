@@ -257,6 +257,32 @@ fn a_setup_step_not_accepted_as_declared_fails_the_run() {
 }
 
 #[test]
+fn an_explore_run_cut_by_max_seconds_fails_and_still_writes_its_result() {
+    // Hardening pass 3, finding D1, decided A: how many walks fit the cap depends on the host's
+    // load, so a run that did not finish must not read as passed.
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("explore-cut");
+    let _ = std::fs::remove_dir_all(&out);
+    let run = |extra: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_weft-sim"))
+            .args(["explore", "--steps", "4", "--threads", "1"])
+            .args(extra)
+            .arg("--spec")
+            .arg(fixture())
+            .arg("--out")
+            .arg(&out)
+            .output()
+            .unwrap()
+    };
+    let cut = run(&["--walks", "1000000", "--max-seconds", "0"]);
+    let stderr = String::from_utf8_lossy(&cut.stderr);
+    assert_eq!(cut.status.code(), Some(4), "{stderr}");
+    assert!(stderr.contains("cut by --max-seconds"), "{stderr}");
+    assert!(out.join("result.json").is_file(), "the cut run still writes its result");
+    let whole = run(&["--walks", "8", "--max-seconds", "60"]);
+    assert!(whole.status.success(), "{}", String::from_utf8_lossy(&whole.stderr));
+}
+
+#[test]
 fn a_lost_binding_the_model_does_not_declare_is_refused() {
     let err = weft_sim::spec::load_without(&fixture(), &["no-such-binding".to_owned()]).expect_err("unknown binding");
     assert!(err.contains("0 of them are declared"), "{err}");
