@@ -10,6 +10,8 @@ relations:
 - depends_on: story:kpi-repository
 scope:
 - confidence: cited
+  path: tools/sim/src/experiment.rs
+- confidence: cited
   path: tools/sim/src/simulate.rs
 - confidence: inferred
   path: tools/sim/tests/fixture-search
@@ -17,7 +19,7 @@ scope:
   path: tools/sim/tests/main.rs
 - confidence: cited
   path: website/docs/simulator/results.md
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T15:01:08Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-11-27T15:01:08Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}

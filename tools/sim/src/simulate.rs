@@ -1612,7 +1612,7 @@ fn search_info(exp: &Experiment, search: &crate::experiment::Search) -> Value {
 /// `info.search` until that file exists (at most 30 s), so a test reads the live snapshot before
 /// the first row.
 fn hold_search() {
-    let Some(path) = std::env::var_os("WEFT_SIM_SEARCH_HOLD") else { return };
+    let Some(path) = std::env::var_os("WEFT_SIM_SEARCH_HOLD").filter(|p| !p.is_empty()) else { return };
     let path = std::path::PathBuf::from(path);
     let started = std::time::Instant::now();
     while !path.exists() && started.elapsed() < std::time::Duration::from_secs(30) {

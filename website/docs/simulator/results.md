@@ -73,15 +73,17 @@ restart is evaluated in a round of its own, counts against `budget` and becomes 
 point. The search ends when the budget is spent or every point is visited.
 
 `info.search` describes the search. It is written before the first point is evaluated, so the
-live page has it from the start:
+live page has it from the start. The variable `WEFT_SIM_SEARCH_HOLD` is for tests only: naming a
+file, it makes the search wait after writing `info.search` until that file exists (at most 30 s);
+empty or unset, it does nothing.
 
 | Field | Meaning |
 |---|---|
 | `mode` | `fit` or `exhaustive` |
 | `seed` | the experiment's seed; it also draws the restarts |
-| `budget` | the most points a `fit` search evaluates |
+| `budget` | the most points a `fit` search evaluates, at least 1; the experiment is refused at load with a `fit` budget of 0 |
 | `limit` | the most combinations an `exhaustive` search accepts |
-| `weights` | the weight of each KPI in the fitness |
+| `weights` | the weight of each KPI in the fitness, each a finite number; the experiment is refused at load with a weight that is not |
 | `gates` | the KPIs that must be 0 for a point to be feasible |
 | `axes` | each mutation's `name`, `kind`, `point` and its `values` in order |
 
