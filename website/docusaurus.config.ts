@@ -80,6 +80,17 @@ const config: Config = {
       items: [
         {to: '/docs/', label: 'Documentation', position: 'left'},
         {to: '/docs/getting-started', label: 'Getting started', position: 'left'},
+        {
+          type: 'dropdown',
+          label: 'Concepts',
+          to: '/docs/concepts',
+          position: 'left',
+          items: [
+            {to: '/docs/concepts', label: 'All concepts'},
+            {to: '/docs/concepts/components', label: 'Components'},
+            {to: '/docs/concepts/managed-services', label: 'Managed services'},
+          ],
+        },
         {to: '/docs/specification/read', label: 'Specification', position: 'left'},
         {to: '/docs/simulator/run', label: 'weft-sim', position: 'left'},
         {to: '/docs/status', label: 'Status', position: 'left'},
@@ -93,7 +104,7 @@ const config: Config = {
           items: [
             {label: 'What weft is', to: '/docs/'},
             {label: 'Getting started', to: '/docs/getting-started'},
-            {label: 'Concepts', to: '/docs/concepts/tenants-and-accounts'},
+            {label: 'Concepts', to: '/docs/concepts'},
             {label: 'Read the specification', to: '/docs/specification/read'},
             {label: 'Validate the specification', to: '/docs/specification/validate'},
             {label: 'weft-sim', to: '/docs/simulator/run'},

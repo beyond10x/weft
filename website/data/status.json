@@ -75,16 +75,30 @@
     },
     {
       "area": "Implementation",
-      "detail": "The binary that runs weft-api and weft-control.",
+      "detail": "The binary that runs weft-api and weft-control. A walking skeleton, weft, serves their HTTP surfaces with no login yet.",
       "href": "/docs/run/control-host-and-node",
       "label": "Control host",
       "status": "planned"
     },
     {
       "area": "Implementation",
-      "detail": "The node agent, weft-node, on substrate.",
+      "detail": "The node agent of the weft-node component, on substrate. A walking skeleton, weft-agent, joins a node and opens its session.",
       "href": "/docs/run/control-host-and-node",
       "label": "Node agent",
+      "status": "planned"
+    },
+    {
+      "area": "Implementation",
+      "detail": "weft-api, weft-control, weft-node and weft-edge as the services that run weft, each owning its domains of the specification.",
+      "href": "/docs/concepts/components",
+      "label": "Server components",
+      "status": "planned"
+    },
+    {
+      "area": "Implementation",
+      "detail": "Queues, streams, caches, databases, object stores, search and single sign-on by name: the catalog, its plans, service instances, bindings and products.",
+      "href": "/docs/concepts/managed-services",
+      "label": "Managed services",
       "status": "planned"
     },
     {

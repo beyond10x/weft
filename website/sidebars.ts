@@ -8,12 +8,19 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Concepts',
       collapsed: false,
+      link: {
+        type: 'generated-index',
+        slug: '/concepts',
+        description: 'The objects weft manages, the components that will run it and the services it will offer by name.',
+      },
       items: [
         'concepts/tenants-and-accounts',
         'concepts/formations',
         'concepts/workloads',
         'concepts/claims',
         'concepts/nodes-and-clusters',
+        'concepts/components',
+        'concepts/managed-services',
       ],
     },
     {

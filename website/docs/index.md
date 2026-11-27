@@ -25,10 +25,11 @@ implements it.
 | Experiments: a full setup, node loss, duplicate delivery and others | [`sim/experiments/`](https://github.com/beyond10x/weft/tree/main/sim/experiments) | Exist |
 | The gate, `task check` | [`Taskfile.yml`](https://github.com/beyond10x/weft/blob/main/Taskfile.yml) | Runs on every change |
 | HTTP API and CLI surfaces | none yet | Planned |
-| Control host binary, node agent, `weft` CLI | none yet | Planned |
+| Control host binary `weft`, node agent `weft-agent`: a walking skeleton, no release | [`product/cloud/`](https://github.com/beyond10x/weft/tree/main/product/cloud) | Planned |
+| `weft` CLI | none yet | Planned |
 
-No control host, node agent or `weft` CLI exists. Pages about running weft carry a **Planned**
-banner and describe the intended design, not something you can run.
+No release of a control host or node agent exists, and no `weft` CLI. Pages about running weft
+carry a **Planned** banner and describe the intended design, not something you can install.
 
 ## Planned implementation
 

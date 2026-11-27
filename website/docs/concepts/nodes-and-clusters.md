@@ -9,7 +9,7 @@ each node's session), `weft.node` (the node agent's own records), `weft.scheduli
 `weft.cluster` (tenant clusters).
 
 :::info[Specified, not built]
-This page describes the specification. No control host or node agent exists yet
+This page describes the specification. No release of a control host or node agent exists yet
 ([Run weft](../run/control-host-and-node.md) is planned).
 :::
 
