@@ -7,9 +7,10 @@
 #      target/substrate/$version/.
 #   2. On a GitHub Actions runner (GITHUB_ACTIONS=true) the runner is prepared as root, here and
 #      not in the workflow, so the local gate and the forge run the same steps: bubblewrap and
-#      /usr/bin/socat (the daemon's startup probe needs both); an AppArmor profile that grants
-#      user namespaces to /usr/bin/bwrap alone where Ubuntu restricts them
-#      (kernel.apparmor_restrict_unprivileged_userns=1); and a systemd user manager for the
+#      /usr/bin/socat (the daemon's startup probe needs both); where Ubuntu restricts user
+#      namespaces (kernel.apparmor_restrict_unprivileged_userns=1), the shipped profile
+#      bwrap-userns-restrict unloaded and an AppArmor profile that grants them to /usr/bin/bwrap
+#      alone loaded in its place; and a systemd user manager for the
 #      runner user (linger), which step 3 asks for a delegated cgroup.
 #   3. The daemon runs as a transient unit of the user's systemd manager with Delegate=yes: a
 #      cgroup v2 subtree it owns, no root. Its first command moves itself into the child group
@@ -100,13 +101,29 @@ if [ "${GITHUB_ACTIONS:-}" = true ]; then
         sudo apt-get -o DPkg::Lock::Timeout=60 install -y -q --no-install-recommends $need >/dev/null; } ||
       fail "apt-get could not install$need"
   fi
-  if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ] &&
-    [ ! -f /etc/apparmor.d/weft-bwrap ]; then
-    say "granting user namespaces to /usr/bin/bwrap (AppArmor profile weft-bwrap)"
-    printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
-      'profile weft-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' |
-      sudo tee /etc/apparmor.d/weft-bwrap >/dev/null
-    sudo apparmor_parser -r -W /etc/apparmor.d/weft-bwrap
+  if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = 1 ]; then
+    # Ubuntu 26.04 loads bwrap-userns-restrict, which also attaches to /usr/bin/bwrap and leaves
+    # it no capability in its namespace (bwrap: "loopback: Failed RTM_NEWADDR: Operation not
+    # permitted"). It is unloaded so weft-bwrap is the one profile of /usr/bin/bwrap. The
+    # restriction stays on for every other binary: kernel.apparmor_restrict_unprivileged_userns=0
+    # would lift it for all of them.
+    restrict=/etc/apparmor.d/bwrap-userns-restrict
+    # A profile not loaded makes apparmor_parser -R fail; that is the state wanted, and the
+    # readiness check below fails the hook if bubblewrap still cannot confine.
+    if [ -f "$restrict" ]; then
+      if sudo apparmor_parser -R "$restrict" 2>/dev/null; then
+        say "unloaded the AppArmor profiles of $restrict"
+      else
+        say "the AppArmor profiles of $restrict are not loaded"
+      fi
+    fi
+    if [ ! -f /etc/apparmor.d/weft-bwrap ]; then
+      say "granting user namespaces to /usr/bin/bwrap (AppArmor profile weft-bwrap)"
+      printf '%s\n' 'abi <abi/4.0>,' 'include <tunables/global>' \
+        'profile weft-bwrap /usr/bin/bwrap flags=(unconfined) {' '  userns,' '}' |
+        sudo tee /etc/apparmor.d/weft-bwrap >/dev/null
+      sudo apparmor_parser -r -W /etc/apparmor.d/weft-bwrap
+    fi
   fi
   sudo loginctl enable-linger "$(id -un)"
   i=0
@@ -158,6 +175,8 @@ systemd-run --user --quiet --collect --unit "$unit" -p Delegate=yes -p RuntimeMa
 
 # What the host offers for confinement, printed when the daemon cannot run an exec.
 diagnose() {
+  # Each probe below may fail; that is what it reports, so a failure must not end the hook here.
+  set +e
   {
     echo "--- daemon log ($log)"
     tail -n 60 "$log" || true
@@ -170,6 +189,9 @@ diagnose() {
       echo "$key=$(sysctl -n "$key" 2>/dev/null || echo absent)"
     done
     echo "apparmor profiles naming bwrap or userns: $(ls /etc/apparmor.d 2>/dev/null | grep -i -E 'bwrap|userns' | tr '\n' ' ')"
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      echo "loaded: $(sudo cat /sys/kernel/security/apparmor/profiles 2>&1 | grep -i -E 'bwrap|userns' | tr '\n' ' ')"
+    fi
     cg=$(systemctl --user show -p ControlGroup --value "$unit.service" 2>/dev/null || true)
     echo "unit cgroup: ${cg:-none}"
     if [ -n "$cg" ]; then
