@@ -25,7 +25,8 @@
 #               synthesis would not write.
 #   attack      the cases of the adversarial review, first (TEST_GENERATED_ONLY=attack runs them
 #               alone): a changed tools/synth.sh makes the cache stale; a lock is removed only
-#               when it is still the gone holder's; a run ended by timeout leaves no ess.
+#               when it is still the gone holder's; the lock holds under a mkdir that does not
+#               refuse an existing directory (uutils mkdir); a run ended by timeout leaves no ess.
 # Then, on ess/ itself, the transformation case: tools/synth-input.sh, and the difference between
 # ess/ and target/synth-input/ read as parsed YAML (yq to JSON, compared with jq), which must be
 # each transformation of tools/synth-input.sh at its count and nothing else. The counts are read
@@ -100,25 +101,25 @@ check "attack key: a changed tools/synth.sh makes the cache stale, the old cache
 rm -rf "$akey" "$work/no-ess.called"
 
 # lock: a run that read the pid of a gone holder must not remove the lock another run took since.
-# A cat that is slow on the lock's pid file stands in for a run descheduled between reading the
+# A cat that is slow on the lock file (it holds the pid) stands in for a run descheduled between reading the
 # pid and removing the lock; an ess that sits 3 s inside the synthesis marks an overlap.
 mkdir -p "$work/attack-bin"
-printf '#!/bin/sh\n"%s" "$@"\nrc=$?\ncase "$*" in *.lock/pid) [ -z "${ATTACK_SLOW_CAT:-}" ] || sleep "$ATTACK_SLOW_CAT" ;; esac\nexit $rc\n' "$(command -v cat)" > "$work/attack-bin/cat"
+printf '#!/bin/sh\n"%s" "$@"\nrc=$?\ncase "$*" in *.lock) [ -z "${ATTACK_SLOW_CAT:-}" ] || sleep "$ATTACK_SLOW_CAT" ;; esac\nexit $rc\n' "$(command -v cat)" > "$work/attack-bin/cat"
 cat > "$work/attack-ess" <<EOF
 #!/bin/sh
 [ "\$1" = --version ] && exec "$real_ess" --version
-mkdir "$root/$work/attack-ess.inside" 2>/dev/null || touch "$root/$work/attack-ess.overlap"
+(set -C; : > "$root/$work/attack-ess.inside") 2>/dev/null || touch "$root/$work/attack-ess.overlap"
 "$real_ess" "\$@"
 r=\$?
 sleep 3
-rmdir "$root/$work/attack-ess.inside" 2>/dev/null
+rm -f "$root/$work/attack-ess.inside"
 exit \$r
 EOF
 chmod +x "$work/attack-bin/cat" "$work/attack-ess"
 arace=$work/attack-race
 rm -rf "$arace" "$arace".lock "$work/attack-ess.inside" "$work/attack-ess.overlap"
 gone=$(sh -c 'echo $$')
-mkdir "$arace.lock" && echo "$gone" > "$arace.lock/pid"
+echo "$gone" > "$arace.lock"
 env PATH="$root/$work/attack-bin:$PATH" ATTACK_SLOW_CAT=2 WEFT_SYNTH_ESS="$root/$work/attack-ess" tools/synth.sh --spec "$spec" --out "$arace" > "$work/attack-race-b.log" 2>&1 &
 pb=$!
 sleep 0.5
@@ -131,6 +132,32 @@ rb=$?
 check "attack lock: two runs after a gone holder's lock, never two inside the synthesis, both pass (exit $ra, $rb)" '[ "$ra" = 0 ] && [ "$rb" = 0 ] && [ ! -e "$work/attack-ess.overlap" ] && [ -z "$(ls -d "$arace".tmp.* "$arace".old.* "$arace".lock 2>/dev/null)" ]' ||
   { show "$work/attack-race-a.log"; show "$work/attack-race-b.log"; }
 rm -rf "$arace" "$arace".tmp.* "$arace".old.* "$arace".lock "$work/attack-ess.inside" "$work/attack-ess.overlap"
+
+# mkdir: the lock must not rest on mkdir failing for a directory that exists. The CI runner's
+# image is Ubuntu 26.04, whose mkdir is uutils coreutils: in an ubuntu:26.04 container (uutils
+# mkdir 0.10.0) two `mkdir d` started together both exited 0 in 593 of 1000 rounds (GNU mkdir 9.4:
+# 0), and in CI run 46012223252 both runs of the case "concurrent" synthesized. A mkdir first on
+# PATH that exits 0 for a directory that exists stands in for that race: a second run started
+# while the first holds the lock must wait and reuse its cache.
+mkdir -p "$work/attack-mkdir-bin"
+printf '#!/bin/sh\nfor a in "$@"; do case $a in -*) ;; *) [ -d "$a" ] && exit 0 ;; esac; done\nexec "%s" "$@"\n' "$(command -v mkdir)" > "$work/attack-mkdir-bin/mkdir"
+chmod +x "$work/attack-mkdir-bin/mkdir"
+amk=$work/attack-mkdir
+rm -rf "$amk" "$amk".* "$work/attack-ess.inside" "$work/attack-ess.overlap"
+env PATH="$root/$work/attack-mkdir-bin:$PATH" WEFT_SYNTH_ESS="$root/$work/attack-ess" tools/synth.sh --spec "$spec" --out "$amk" > "$work/attack-mkdir-a.log" 2>&1 &
+pa=$!
+sleep 0.5
+env PATH="$root/$work/attack-mkdir-bin:$PATH" WEFT_SYNTH_ESS="$root/$work/attack-ess" tools/synth.sh --spec "$spec" --out "$amk" > "$work/attack-mkdir-b.log" 2>&1 &
+pb=$!
+wait "$pa"
+ra=$?
+wait "$pb"
+rb=$?
+synthesized=$(cat "$work/attack-mkdir-a.log" "$work/attack-mkdir-b.log" | grep -c "synthesizing")
+reused=$(cat "$work/attack-mkdir-a.log" "$work/attack-mkdir-b.log" | grep -c "cache hit at $amk")
+check "attack mkdir: a mkdir that does not refuse an existing directory, a run started while another holds the lock waits and reuses its cache (exit $ra, $rb)" '[ "$ra" = 0 ] && [ "$rb" = 0 ] && [ "$synthesized" = 1 ] && [ "$reused" = 1 ] && [ ! -e "$work/attack-ess.overlap" ] && [ -z "$(ls -d "$amk".tmp.* "$amk".old.* "$amk".lock 2>/dev/null)" ]' ||
+  { show "$work/attack-mkdir-a.log"; show "$work/attack-mkdir-b.log"; }
+rm -rf "$amk" "$amk".* "$work/attack-ess.inside" "$work/attack-ess.overlap"
 
 # bounded: the step runs its setup hooks under `timeout -k 5`; a run ended that way during the
 # synthesis must not leave the ess it started running (tools/synth.sh starts ess under a timeout
@@ -226,7 +253,7 @@ while [ -n "$killed_ess" ] && kill -0 "$killed_ess" 2>/dev/null && [ "$n" -lt 50
 check "killed: the run was inside the synthesis when it was killed" '[ -e "$work/part-ess.started" ]'
 check "killed: only tools/synth.sh was killed, and no ess is left within 5 s" '[ -n "$killed_ess" ] && ! kill -0 "$killed_ess" 2>/dev/null' ||
   { echo "  | ess pid ${killed_ess:-none}: $(ps -o pid=,args= -p "${killed_ess:-0}" 2>/dev/null)" >&2; [ -z "$killed_ess" ] || kill -9 "$killed_ess" 2>/dev/null; }
-check "killed: no cache, the partial output only in a temporary directory" '[ ! -e "$cache" ] && ls -d "$cache".tmp.* >/dev/null 2>&1 && [ -d "$cache.lock" ]'
+check "killed: no cache, the partial output only in a temporary directory" '[ ! -e "$cache" ] && ls -d "$cache".tmp.* >/dev/null 2>&1 && [ -f "$cache.lock" ]'
 run "$work/killed2.log" tools/synth.sh --spec "$spec" --out "$cache"
 check "killed: the next run removes the lock and the leftovers and synthesizes (exit $rc)" '[ "$rc" = 0 ] && said "$work/killed2.log" "which is gone" && diff -r -q "$work/cache.good" "$cache" >/dev/null && [ -z "$(leftovers)" ]' || show "$work/killed2.log"
 
