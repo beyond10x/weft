@@ -13,28 +13,28 @@ scope:
 - confidence: inferred
   path: Cargo.lock
 - confidence: inferred
-  path: crates/weft-bin/Cargo.toml
+  path: product/cloud/crates/weft-bin/Cargo.toml
 - confidence: cited
-  path: crates/weft-bin/src/main.rs
+  path: product/cloud/crates/weft-bin/src/main.rs
 - confidence: cited
-  path: crates/weft-controllers/Cargo.toml
+  path: product/cloud/crates/weft-controllers/Cargo.toml
 - confidence: cited
-  path: crates/weft-controllers/src/lib.rs
+  path: product/cloud/crates/weft-controllers/src/lib.rs
 - confidence: cited
-  path: crates/weft-controllers/src/replicas.rs
+  path: product/cloud/crates/weft-controllers/src/replicas.rs
 - confidence: cited
-  path: crates/weft-controllers/tests/main.rs
+  path: product/cloud/crates/weft-controllers/tests/main.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_instance.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_instance.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/submit_scheduling_request.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/submit_scheduling_request.rs
 - confidence: cited
-  path: crates/weft-impl/src/bindings
+  path: product/cloud/crates/weft-impl/src/bindings
 - confidence: inferred
-  path: crates/weft-impl/src/lib.rs
+  path: product/cloud/crates/weft-impl/src/lib.rs
 - confidence: cited
-  path: crates/weft-testkit/src
-revision: 10
+  path: product/cloud/crates/weft-testkit/src
+revision: 22
 ---
 ## Epic
 
@@ -45,7 +45,7 @@ transformations of `story:skeleton-generated-code` removed on its part of the pa
 
 ## Context
 
-- `crates/weft-controllers` (created here): the level and time steps of `ess/components.yaml`
+- `product/cloud/crates/weft-controllers` (created here): the level and time steps of `ess/components.yaml`
   (bindings block, lines 1103-1150) that no binding runs, as functions over the same ports the
   generated behaviours use: `tick(system, clock)` reads a gap view through the generated query and
   sends one command per row through `weft_server::weft_control::handle` as the actor the step names.
@@ -53,7 +53,7 @@ transformations of `story:skeleton-generated-code` removed on its part of the pa
   `story:skeleton-control-host`; tests call `tick` in-process on a system the testkit builds.
 - Step R1 level: `weft.workloads.ServicesBelowScale` -> `weft.workloads.RequestReplica` as
   Scheduler; the replica index is the lowest index below `replicas` with no live instance.
-- Binding runner (created here, `crates/weft-impl/src/bindings/`). The generated System has no seam
+- Binding runner (created here, `product/cloud/crates/weft-impl/src/bindings/`). The generated System has no seam
   for a per-refusal policy (its `deliver_*` functions are private, a declared refusal goes to a
   private `held_*` list, and `run_*` drops `take_invocations()`; design critic, 2026-11-27). So
   `tools/synth-input.sh` of `story:skeleton-generated-code` removes the eight bindings of the path
@@ -80,7 +80,7 @@ transformations of `story:skeleton-generated-code` removed on its part of the pa
     `weft.scheduling.SubmitSchedulingRequest`; drops `already-requested`, retries every other
     refusal.
   `story:skeleton-controllers` adds the four `r4-*` entries.
-- Obligations implemented here, each in its own file under `crates/weft-impl/src/behaviours/`:
+- Obligations implemented here, each in its own file under `product/cloud/crates/weft-impl/src/behaviours/`:
   `weft.workloads.CreateInstance` and `weft.scheduling.SubmitSchedulingRequest` (2 of the 24 command
   behaviours on the skeleton path). `RequestReplica` is generated.
 - When ESS ships E2 or E3, the removal in `tools/synth-input.sh` and its runner entry
@@ -98,11 +98,11 @@ transformations of `story:skeleton-generated-code` removed on its part of the pa
 
 ## Scope
 
-- `crates/weft-controllers/` (`src/lib.rs`, `src/replicas.rs`, `tests/main.rs` module `replicas`)
-- `crates/weft-impl/` (`src/behaviours/`: `create_instance.rs`,
+- `product/cloud/crates/weft-controllers/` (`src/lib.rs`, `src/replicas.rs`, `tests/main.rs` module `replicas`)
+- `product/cloud/crates/weft-impl/` (`src/behaviours/`: `create_instance.rs`,
   `submit_scheduling_request.rs`; `src/bindings/`: the runner and its two `r1-*` entries)
-- `crates/weft-bin/` (`src/main.rs`: the controller loop, `--tick-ms`)
-- `crates/weft-testkit/` (`src/`: an in-process system on a seeded state file)
+- `product/cloud/crates/weft-bin/` (`src/main.rs`: the controller loop, `--tick-ms`)
+- `product/cloud/crates/weft-testkit/` (`src/`: an in-process system on a seeded state file)
 
 ## Acceptance
 

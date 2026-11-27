@@ -12,8 +12,8 @@ relations:
 - serves: vision:weft
 scope:
 - confidence: cited
-  path: crates/weft-testkit/tests/main.rs
-revision: 10
+  path: product/cloud/crates/weft-testkit/tests/main.rs
+revision: 12
 ---
 ## Epic
 
@@ -73,7 +73,7 @@ once for this test; there is one such test in the step. The test is timed before
 
 ## Scope
 
-- `crates/weft-testkit/tests/main.rs`: the module `skeleton` only (it composes the existing
+- `product/cloud/crates/weft-testkit/tests/main.rs`: the module `skeleton` only (it composes the existing
   starters)
 
 ## Acceptance

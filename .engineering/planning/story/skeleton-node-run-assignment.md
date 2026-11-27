@@ -13,26 +13,26 @@ relations:
 - depends_on: story:skeleton-controllers
 scope:
 - confidence: cited
-  path: crates/weft-agent/src/agent.rs
+  path: product/cloud/crates/weft-agent/src/agent.rs
 - confidence: cited
-  path: crates/weft-agent/src/follow.rs
+  path: product/cloud/crates/weft-agent/src/follow.rs
 - confidence: cited
-  path: crates/weft-agent/src/report.rs
+  path: product/cloud/crates/weft-agent/src/report.rs
 - confidence: cited
-  path: crates/weft-agent/tests/main.rs
+  path: product/cloud/crates/weft-agent/tests/main.rs
 - confidence: cited
-  path: crates/weft-agent/tests/seeds
+  path: product/cloud/crates/weft-agent/tests/seeds
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/record_artifact_verified.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/record_artifact_verified.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/record_backend_ready.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/record_backend_ready.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/record_instance_running.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/record_instance_running.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/restore_backend.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/restore_backend.rs
 - confidence: cited
-  path: crates/weft-impl/src/bindings
-revision: 14
+  path: product/cloud/crates/weft-impl/src/bindings
+revision: 25
 ---
 ## Epic
 
@@ -64,7 +64,7 @@ policies.
   so `tools/synth-input.sh` of `story:skeleton-generated-code` removes them (rule of the
   coordinator, 2026-11-27: every path binding with a per-refusal policy is hand-run), and this
   story adds their two entries to the binding runner of `story:skeleton-replica-instances`
-  (`crates/weft-impl/src/bindings/`), each with a comment naming ESS
+  (`product/cloud/crates/weft-impl/src/bindings/`), each with a comment naming ESS
   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`,
   invoked through `WeftEdge::record_backend_ready` and `WeftEdge::restore_backend`:
   - `edge-backend-ready`: `InstanceReady` -> `RecordBackendReady` (`instance_id`,
@@ -73,7 +73,7 @@ policies.
     `not-out-of-traffic`, retries the rest.
   On an instance's first readiness `RecordBackendReady` answers `added` and `RestoreBackend`
   refuses `not-out-of-traffic`, which the entry drops as declared.
-- Obligations implemented here, each in its own file under `crates/weft-impl/src/behaviours/`:
+- Obligations implemented here, each in its own file under `product/cloud/crates/weft-impl/src/behaviours/`:
   `weft.workloads.RecordArtifactVerified`, `weft.workloads.RecordInstanceRunning`,
   `weft.edge.RecordBackendReady` and `weft.edge.RestoreBackend` (the last 4 of the 24 command
   behaviours on the skeleton path).
@@ -118,10 +118,10 @@ policies.
 
 ## Scope
 
-- `crates/weft-agent/` (`src/follow.rs`, wiring in `src/agent.rs`, the process, started and pass
+- `product/cloud/crates/weft-agent/` (`src/follow.rs`, wiring in `src/agent.rs`, the process, started and pass
   lines in `src/report.rs`, `tests/main.rs` module `follow`,
   `tests/seeds/`)
-- `crates/weft-impl/` (`src/behaviours/`: `record_artifact_verified.rs`,
+- `product/cloud/crates/weft-impl/` (`src/behaviours/`: `record_artifact_verified.rs`,
   `record_instance_running.rs`, `record_backend_ready.rs`, `restore_backend.rs`; the two `edge-*`
   entries of the binding runner in `src/bindings/`)
 

@@ -10,24 +10,24 @@ relations:
 - depends_on: story:skeleton-control-host
 scope:
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/add_component.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/add_component.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/commit_revision.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/commit_revision.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_environment.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_environment.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_formation.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_formation.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/define_service.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/define_service.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/define_workload.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/define_workload.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/register_artifact.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/register_artifact.rs
 - confidence: cited
-  path: crates/weft-testkit/src
+  path: product/cloud/crates/weft-testkit/src
 - confidence: cited
-  path: crates/weft-testkit/tests/main.rs
-revision: 13
+  path: product/cloud/crates/weft-testkit/tests/main.rs
+revision: 23
 ---
 ## Epic
 
@@ -39,7 +39,7 @@ the path). Depends on `story:skeleton-control-host` (the control host, `weft-imp
 
 The tenant part of the path (`sim/experiments/full-setup.yaml:54-61`, deployed into the default
 cluster) defines what will run. Obligations implemented here, each in its own file under
-`crates/weft-impl/src/behaviours/` against its contract in `generated/PLAN.md` § Obligations:
+`product/cloud/crates/weft-impl/src/behaviours/` against its contract in `generated/PLAN.md` § Obligations:
 `weft.formations.CreateFormation`, `weft.formations.AddComponent`, `weft.formations.CommitRevision`,
 `weft.formations.CreateEnvironment`, `weft.artifacts.RegisterArtifact`,
 `weft.workloads.DefineWorkload`, `weft.workloads.DefineService` (7 of the 24 command behaviours on
@@ -66,8 +66,8 @@ The workload of the skeleton: package kind `Snippet`, one `Main` process
 
 ## Scope
 
-- `crates/weft-impl/` (`src/behaviours/`: one file per obligation listed above)
-- `crates/weft-testkit/` (`src/` path functions; `tests/main.rs` module `definitions`)
+- `product/cloud/crates/weft-impl/` (`src/behaviours/`: one file per obligation listed above)
+- `product/cloud/crates/weft-testkit/` (`src/` path functions; `tests/main.rs` module `definitions`)
 
 ## Acceptance
 
