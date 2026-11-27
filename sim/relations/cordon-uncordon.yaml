@@ -1,0 +1,5 @@
+# Steps appended to the derived run of sim/experiments/full-setup.yaml for the cordon round trip
+# (docs/hardening/pass-3.md, technique 5): a node cordoned and uncordoned again ("cordoned back to
+# ready", docs/domain-sketch.md line 451) leaves every view as if it was never cordoned.
+- {label: cordon-shared-0, command: weft.infrastructure.CordonNode, actor: weft.actors.ClusterOperator, input: {node_id: "${node_s_0}"}, expect: cordoned}
+- {label: uncordon-shared-0, command: weft.infrastructure.UncordonNode, actor: weft.actors.ClusterOperator, input: {node_id: "${node_s_0}"}, expect: uncordoned}
