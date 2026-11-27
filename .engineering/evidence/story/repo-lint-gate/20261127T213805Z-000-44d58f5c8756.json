@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T21:38:05Z",
+  "actor": "human:operator",
+  "artifact": "story:repo-lint-gate",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#22, merged b558d92",
+    "reference": "https://github.com/beyond10x/weft/pull/22"
+  }
+}
