@@ -29,6 +29,7 @@ interface Row {
 interface Snapshot {
   running?: boolean;
   info: { search: { axes: Axis[] } };
+  run?: { spec?: string; out?: string; command?: string };
   search: Row[];
   [key: string]: unknown;
 }
@@ -395,5 +396,141 @@ test('a landscape wider than the screen scrolls in its own box at 390x844, the p
   expect(await layoutFailures(page)).toEqual([]);
   await page.locator('[data-cell="9,0"]').scrollIntoViewIfNeeded();
   expect(await visibilityFailures(page, [{ name: 'the last column', selector: '[data-cell="9,0"]' }])).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+// The replay of the selected point: its walk number and the command that reruns it.
+
+const selectedWalk = (page: Page) => page.locator('[data-selected-walk]');
+const replayCommand = (page: Page) => page.locator('[data-replay-command]');
+
+test('selected point shows its replay', async ({ page }) => {
+  const errors = await open(page);
+  const row = ROWS.find((r) => r.decision === 'rejected')!;
+  await page.locator(`[data-path-step="${row.seq}"]`).click();
+  await expect(selectedWalk(page)).toHaveText(String(row.walk));
+  await expect(replayCommand(page)).toHaveText(/^weft-sim replay /);
+  const words = (await replayCommand(page).textContent())!.split(/\s+/);
+  const after = (flag: string) => words[words.indexOf(flag) + 1];
+  expect(after('--walk')).toBe(String(row.walk));
+  expect(after('--spec')).toBe(SNAP.run!.spec);
+  expect(after('--trace')).toBe(`${SNAP.run!.out}/result.json`);
+  expect(words.filter((w) => w.startsWith('/') || w.startsWith('~')), 'no absolute path').toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test('the selection is the frame row until a cell or a mark is clicked, by walk not seq, and follows the keyboard', async ({ page }) => {
+  const errors = await open(page);
+  // Walks unlike seqs, as in a run whose rounds ran several points at once.
+  const rows: Row[] = ROWS.map((r) => ({ ...r, walk: 1000 + r.seq * 7 }));
+  await receive(page, { ...SNAP, search: rows });
+  const at = (seq: number) => String(rows[seq - 1]!.walk);
+  await expect(selectedWalk(page), 'the row of the last frame').toHaveText(at(LAST.seq));
+  await button(page, 'Step back').click();
+  await expect(selectedWalk(page), 'the row of the frame stepped to').toHaveText(at(LAST.seq - 1));
+
+  // A cell, clicked off its mark: the row drawn in it.
+  const cellRow = rows.find((r) => r.decision === 'accepted' && r.seq < LAST.seq - 2)!;
+  const [i, j] = cellRow.index as number[];
+  await page.locator(`[data-cell="${i},${j}"]`).click({ position: { x: 5, y: 5 } });
+  await expect(selectedWalk(page)).toHaveText(String(cellRow.walk));
+  await expect(replayCommand(page)).toContainText(`--walk ${cellRow.walk}`);
+  // A mark.
+  const markRow = rows.find((r) => r.decision === 'restart')!;
+  if (markRow.seq <= LAST.seq - 1) {
+    await page.locator(`[data-path-step="${markRow.seq}"]`).click();
+    await expect(selectedWalk(page)).toHaveText(String(markRow.walk));
+  }
+  // The keyboard moves the frame, and the selection with it.
+  await page.getByRole('slider', { name: 'Frame' }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(player(page)).toHaveAttribute('data-frame', String(LAST.seq - 2));
+  await expect(selectedWalk(page)).toHaveText(at(LAST.seq - 2));
+  expect(errors).toEqual([]);
+});
+
+test('a replay command of odd paths stays one quoted text inside the screen at 390x844', async ({ page }) => {
+  await prepare(page, GATING.find((v) => v.width === 390)!, THEMES[0]!);
+  const errors = await open(page);
+  const out = `runs/it's here/<b id=injected>x</b>/${'a-long-directory-name/'.repeat(6)}out`;
+  await receive(page, { ...SNAP, run: { spec: 'ess', out } });
+  await expect(page.locator('#injected')).toHaveCount(0);
+  const quoted = `'${`${out}/result.json`.replace(/'/g, `'\\''`)}'`;
+  await expect(replayCommand(page)).toContainText(`--spec ess --trace ${quoted} --walk ${LAST.walk}`);
+  await replayCommand(page).scrollIntoViewIfNeeded();
+  expect(await layoutFailures(page)).toEqual([]);
+  expect(await visibilityFailures(page, [{ name: 'replay command', selector: '[data-replay-command]' }])).toEqual([]);
+  // A result written before the run named its paths: they come from its command line.
+  await receive(page, { ...SNAP, run: { command: 'weft-sim simulate --spec specs/a --experiment e.yaml --out sim/out/b --threads 2' } });
+  await expect(replayCommand(page)).toContainText('--spec specs/a --trace sim/out/b/result.json');
+  expect(errors).toEqual([]);
+});
+
+// Adversary: the clickable marks from the keyboard, and a word a shell expands.
+
+test('adversary: a landscape mark is focusable, named, and selected with Enter', async ({ page }) => {
+  const errors = await open(page);
+  const row = ROWS.find((r) => r.decision === 'rejected' && r.seq !== LAST.seq)!;
+  const mark = page.locator(`[data-path-step="${row.seq}"]`);
+  const focusable = await page
+    .locator('#p-land [data-path-step], #p-land [data-cell][data-seq]')
+    .evaluateAll((all) => all.filter((e) => (e as SVGElement).tabIndex >= 0).length);
+  expect(focusable, 'marks and cells with a row are in the Tab order').toBeGreaterThan(0);
+  await mark.focus();
+  await expect(mark).toBeFocused();
+  await expect(mark).toHaveAccessibleName(/\S/);
+  await page.keyboard.press('Enter');
+  await expect(selectedWalk(page)).toHaveText(String(row.walk));
+  expect(errors).toEqual([]);
+});
+
+test('adversary: a path word starting with = is quoted (zsh EQUALS expands an unquoted =word)', async ({ page }) => {
+  const errors = await open(page);
+  await receive(page, { ...SNAP, run: { spec: '=specs', out: 'sim/out/x' } });
+  await expect(replayCommand(page)).toContainText("--spec '=specs' ");
+  expect(errors).toEqual([]);
+});
+
+test('every landscape mark and cell with a row is a named button; Space selects a cell and its focus stays shown', async ({ page }) => {
+  const errors = await open(page);
+  // An early frame, so that some cells have no row yet.
+  await goTo(page, 3);
+  const drawn = await page.locator('#p-land [data-path-step], #p-land [data-cell]').evaluateAll((all) =>
+    all.map((e) => ({
+      what: e.getAttribute('data-path-step') ?? e.getAttribute('data-cell'),
+      row: e.hasAttribute('data-path-step') || e.hasAttribute('data-seq'),
+      tab: (e as SVGElement).tabIndex,
+      role: e.getAttribute('role'),
+      label: e.getAttribute('aria-label') ?? '',
+    })),
+  );
+  expect(drawn.some((d) => !d.row), 'the fixture draws empty cells').toBe(true);
+  for (const d of drawn) {
+    if (d.row) expect([d.tab, d.role, d.label !== ''], `${d.what}: in the Tab order, a named button`).toEqual([0, 'button', true]);
+    else expect([d.tab, d.role], `${d.what}: no row, not focusable`).toEqual([-1, null]);
+  }
+
+  const cell = page.locator('#p-land [data-cell][data-seq]').first();
+  const where = (await cell.getAttribute('data-cell'))!;
+  const seq = Number(await cell.getAttribute('data-seq'));
+  const row = ROWS.find((r) => r.seq === seq)!;
+  const point = row.point as Record<string, unknown>;
+  for (const axis of AXES) await expect(cell, axis.name).toHaveAccessibleName(new RegExp(`${axis.name} ${valueText(point[axis.name])}\\b`));
+  await expect(cell).toHaveAccessibleName(new RegExp(`walk ${row.walk}\\b`));
+  await cell.focus();
+  await page.keyboard.press(' ');
+  await expect(selectedWalk(page)).toHaveText(String(row.walk));
+  const again = page.locator(`#p-land [data-cell="${where}"]`);
+  await expect(again, 'the focus stays on the cell after the redraw').toBeFocused();
+  expect(await again.evaluate((e) => getComputedStyle(e).outlineStyle), 'the focus is shown').not.toBe('none');
+  expect(errors).toEqual([]);
+});
+
+test('a path word starting with ~ or % is quoted, an = inside a word is not', async ({ page }) => {
+  const errors = await open(page);
+  await receive(page, { ...SNAP, run: { spec: '~/specs', out: '%1' } });
+  await expect(replayCommand(page)).toContainText("--spec '~/specs' --trace '%1/result.json' ");
+  await receive(page, { ...SNAP, run: { spec: 'a=b', out: 'sim/out/x' } });
+  await expect(replayCommand(page)).toContainText('--spec a=b --trace sim/out/x/result.json ');
   expect(errors).toEqual([]);
 });

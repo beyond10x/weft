@@ -112,6 +112,41 @@ setup again first.
 
 When explore finds a violation, it prints the replay command for the first walk of each kind.
 
+### Replay a search point
+
+A `simulate` run with a search keeps no trace of its points, but each row of `search` names the
+walk its point ran as. Replay reruns that point by its walk number, from the same directory as
+the run:
+
+```shell-session
+$ weft-sim replay --spec ess --trace sim/out/simulate/result.json --walk 14
+```
+
+It loads the experiment the result names (`run.experiment`), applies the row's point, and runs
+it once at walk 14 with its timeline recorded. It prints each KPI of the rerun beside the recorded
+one, such as `steps: 6 (recorded 6)`, and a summary such as `walk 14: 0 of 20 KPIs differ`. It
+exits 0 when every KPI is equal and 2 when one differs. It writes `result.json` and `index.html`
+to `--out` (default `sim/out/replay-14`); the page's Experiment timeline shows the setup, traffic,
+faults and controller ticks of that point. A walk number that no search row and no trace of the
+result holds is refused with exit status 2.
+
+The rerun reproduces the point only from the inputs the run read, so `simulate` records a digest of
+each of them in the result (`run.digests`): each top-level key of the experiment, and
+`ess-inputs.yaml` of the spec with every file it lists. Before it runs anything, replay refuses with
+exit status 2:
+
+- an experiment key or a spec file that changed, was added or was removed since the run; the
+  message names it, such as ``experiment key `seed` of exps/a.yaml: changed since the run``;
+- a key of the point that is no mutation of the experiment;
+- a result that records no digests (written before they were recorded): it cannot be checked, so
+  run `simulate` again;
+- an `--out` that is the directory holding the trace, whose `result.json` the replay would
+  overwrite.
+
+On the page of the run, the player shows the walk of the selected point and this command: the
+point of the current frame, or the one whose cell or path mark you click or select with Tab and
+Enter or Space.
+
 ## Describe
 
 ```shell-session
@@ -125,7 +160,7 @@ fields and its outcomes; with no prefix, or `--prefix bindings`, also every bind
 
 | Status | Meaning |
 |---|---|
-| 0 | the run ended with no violation; for `replay`, every answer as recorded |
+| 0 | the run ended with no violation; for `replay`, every answer (or every KPI of a search point) as recorded |
 | 1 | an invariant was violated |
-| 2 | a usage error or a specification that does not load; for `replay`, an answer differs from the recording |
+| 2 | a usage error or a specification that does not load; for `replay`, an answer or a KPI differs from the recording, no trace and no search row has the walk, or a search point is refused before it runs (its inputs changed since the run or cannot be checked, or `--out` holds the trace) |
 | 3 | a setup step was not accepted as declared (its `expect`, or an accepting outcome without one); with `--from` this stops the run before any walk |
