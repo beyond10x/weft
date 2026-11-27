@@ -146,6 +146,51 @@ cases=$((cases + 1))
 got=$?
 [ "$got" = 0 ] || { no "30-agents-md-paths/new-file: want exit 0 got $got"; sed 's/^/  /' "$out"; }
 
+# 40-status-claims on the repository's own proofs and counts: website/, ess/ and Taskfile.yml are
+# copied (a case changes them), the rest of the tree is linked.
+real_tree() { # real_tree <dir>
+  mkdir -p "$1/website"
+  for e in "$root"/* "$root"/.github; do
+    b=$(basename "$e")
+    case "$b" in website | ess | Taskfile.yml | target) continue ;; esac
+    ln -s "$e" "$1/$b"
+  done
+  cp -R "$root/website/data" "$root/website/docs" "$1/website/"
+  cp "$root/website/product.json" "$1/website/"
+  cp -R "$root/ess" "$1/ess"
+  cp "$root/Taskfile.yml" "$1/Taskfile.yml"
+}
+real_case() { # real_case <case> <want> <tree>
+  cases=$((cases + 1))
+  "$hooks/40-status-claims.sh" "$3" > "$out" 2>&1
+  got=$?
+  [ "$got" = "$2" ] || { no "40-status-claims/real-$1: want exit $2 got $got"; sed 's/^/  /' "$out"; }
+}
+t=$gitdir/40-real-baseline
+real_tree "$t"
+real_case baseline 0 "$t"
+# "files" is no noun of the specification alone: weft-sim's two output files are not 25.
+t=$gitdir/40-real-other-files
+real_tree "$t"
+printf '%s\n' '# Results' '' 'weft-sim writes 2 files: result.json and index.html.' > "$t/website/docs/zz-results.md"
+real_case other-files 0 "$t"
+# The gate no longer validates the specification: "The domain model" says it does.
+t=$gitdir/40-real-spec-commented
+real_tree "$t"
+sed 's/^      - task: spec$/      # - task: spec/' "$root/Taskfile.yml" > "$t/Taskfile.yml"
+real_case spec-commented 1 "$t"
+# The spec task no longer runs ess: its command is a comment.
+t=$gitdir/40-real-validate-commented
+real_tree "$t"
+sed 's/^      - ess specify validate --path ess --strict-requires$/      - echo validation off\
+      # - ess specify validate --path ess --strict-requires/' "$root/Taskfile.yml" > "$t/Taskfile.yml"
+real_case validate-commented 1 "$t"
+# An empty directory is not in the forge's checkout and is no layer of ess/ess-inputs.yaml.
+t=$gitdir/40-real-empty-layer-dir
+real_tree "$t"
+mkdir -p "$t/ess/9-old"
+real_case empty-layer-dir 0 "$t"
+
 # tools/check-docs.sh runs every hook, prints every KPI line and then fails with the highest exit
 # (DOCS_CHECK_HOOKS names a directory of stub hooks).
 stubs=$gitdir/hooks

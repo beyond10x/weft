@@ -27,7 +27,9 @@ scope:
   path: website/data/status.json
 - confidence: cited
   path: website/docs/status.md
-revision: 11
+- confidence: cited
+  path: website/product.json
+revision: 12
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T16:03:33Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T16:03:33Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":1}}}
