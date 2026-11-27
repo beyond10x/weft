@@ -42,7 +42,8 @@ const USAGE: &str = "usage:
 --serve serves the live page (default 127.0.0.1:7480, loopback only) and keeps it served after the
 run until Ctrl-C, or exits with --exit-when-done. Exit status 1 on an invariant violation; 3 when a
 setup step is not accepted as declared (its `expect`, or an accepting outcome without one); with
---from such a step stops the run before any walk.";
+--from such a step stops the run before any walk; 4 when --max-seconds cut an explore run before all
+its walks ran (a violation still exits 1).";
 
 pub const DEFAULT_ADDR: &str = "127.0.0.1:7480";
 const ESS_REV: &str = "c0b5f560cb7cae0b04d845f27b06341d3013218e (main, 2026-11-26; tag 0.99.2 cannot parse the current spec)";
@@ -264,11 +265,12 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
     let live = start_live(args, &cat, &cov)?;
     let started = Instant::now();
     // One pattern per run of the walk loop: the first is matched; more run in turn.
+    let mut cut = false;
     if patterns.is_empty() {
-        explore::run(&cat, &cov, &cands, &config, None);
+        cut = explore::run(&cat, &cov, &cands, &config, None);
     } else {
         for p in &patterns {
-            explore::run(&cat, &cov, &cands, &config, Some(p));
+            cut |= explore::run(&cat, &cov, &cands, &config, Some(p));
         }
     }
     let run_s = started.elapsed().as_secs_f64();
@@ -334,7 +336,14 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
         }
     }
     eprintln!("weft-sim: wrote {}/result.json and {}/index.html", out.display(), out.display());
-    Ok(finish(args, live, snap, violations))
+    let code = finish(args, live, snap, violations);
+    if cut && violations == 0 {
+        // Hardening pass 3, finding D1, decided A: a run that did not finish its walks must not
+        // read as passed; its counts depend on the host's load.
+        eprintln!("weft-sim: explore failed: cut by --max-seconds before all {} walks ran", config.walks);
+        return Ok(ExitCode::from(4));
+    }
+    Ok(code)
 }
 
 fn simulate_cmd(args: &Args) -> Result<ExitCode, String> {
