@@ -589,11 +589,11 @@ mod join_adversary {
     use weft_client::Client;
     use weft_testkit::ControlHost;
 
-    /// The usage line names the control URL `http://<host>:<port>`. `Options::parse` keeps the
-    /// first address the host name resolves to, and the agent dials only that one. Where
-    /// `localhost` resolves to `::1` first (this host: `getent ahosts localhost`), a control
-    /// host on its default `--listen 127.0.0.1` is never reached through
-    /// `--control http://localhost:<port>`.
+    /// The usage line names the control URL `http://<host>:<port>`. Where `localhost` resolves
+    /// to `::1` first (`getent ahosts localhost`), a control host on its default `--listen
+    /// 127.0.0.1` is reached through `--control http://localhost:<port>` only when the agent
+    /// dials every resolved address in order. This case passes on a resolver that gives
+    /// `127.0.0.1` first; `dial::*` checks the order without the resolver.
     #[test]
     fn a_control_url_naming_localhost_reaches_a_control_host_on_127_0_0_1() {
         let host = ControlHost::start();
@@ -614,11 +614,56 @@ mod join_adversary {
             .map(str::to_owned),
         )
         .expect("the arguments parse");
-        let answer = Client::new(options.control).view("weft.infrastructure.Nodes", &[]);
+        let answer = Client::new(options.control.clone()).view("weft.infrastructure.Nodes", &[]);
         assert!(
             answer.as_ref().is_ok_and(|answer| answer.status == 200),
             "--control {url} dials {} only: {answer:?}",
             options.control
         );
+    }
+}
+
+/// The dial of the control host tries every address in order until one connects, as
+/// `TcpStream::connect` does over `to_socket_addrs`; the order is given here, not resolved, so
+/// the cases hold on any resolver.
+mod dial {
+    use std::net::{SocketAddr, TcpListener};
+    use std::time::Duration;
+
+    use weft_client::Client;
+    use weft_testkit::ControlHost;
+
+    /// A loopback address nothing listens on: a port the kernel gave out, then closed.
+    fn dead_address() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port binds");
+        listener.local_addr().expect("the listener has an address")
+    }
+
+    #[test]
+    fn the_dial_connects_to_the_second_address_when_nothing_listens_on_the_first() {
+        let dead = dead_address();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port binds");
+        let live = listener.local_addr().expect("the listener has an address");
+        let stream = weft_client::dial(&[dead, live], Duration::from_secs(5))
+            .expect("the second address connects");
+        assert_eq!(stream.peer_addr().expect("a peer"), live);
+    }
+
+    #[test]
+    fn a_client_whose_first_address_is_dead_reaches_the_control_host_at_the_second() {
+        let host = ControlHost::start();
+        let answer = Client::new(vec![dead_address(), host.address()])
+            .view("weft.infrastructure.Nodes", &[]);
+        assert!(
+            answer.as_ref().is_ok_and(|answer| answer.status == 200),
+            "the client gave up after the first address: {answer:?}"
+        );
+    }
+
+    #[test]
+    fn the_dial_of_only_dead_addresses_fails_with_the_last_error() {
+        let error = weft_client::dial(&[dead_address(), dead_address()], Duration::from_secs(5))
+            .expect_err("nothing listens");
+        assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
     }
 }

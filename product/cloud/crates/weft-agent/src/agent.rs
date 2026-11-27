@@ -16,14 +16,14 @@
 //! Then it holds its session until it is stopped. Heartbeats, lease renewal and the work list come
 //! with later stories.
 
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
-use weft_client::{Answer, Client};
+use weft_client::{Addresses, Answer, Client};
 
 use crate::report::Report;
 
@@ -39,8 +39,9 @@ pub const REDIAL: Duration = Duration::from_millis(3000);
 /// What the agent is started with.
 #[derive(Debug, Clone)]
 pub struct Options {
-    /// The control host's address (`--control http://<host>:<port>`).
-    pub control: SocketAddr,
+    /// Every address the control URL resolves to, in the resolver's order; the agent dials them
+    /// in that order (`--control http://<host>:<port>`).
+    pub control: Addresses,
     /// The node this agent runs (`--node-id`).
     pub node_id: String,
     /// The join token `ProvisionPoolNode` issued for it (`--join-token`).
@@ -87,17 +88,20 @@ impl Options {
     }
 }
 
-/// The address of the control URL `http://<host>:<port>[/]`.
-fn address(url: &str) -> Result<SocketAddr, String> {
+/// Every address the control URL `http://<host>:<port>[/]` resolves to, in order.
+fn address(url: &str) -> Result<Addresses, String> {
     let authority = url
         .strip_prefix("http://")
         .ok_or_else(|| format!("--control {url}: not an http:// URL"))?
         .trim_end_matches('/');
-    authority
+    let addresses = authority
         .to_socket_addrs()
         .map_err(|error| format!("--control {url}: {error}"))?
-        .next()
-        .ok_or_else(|| format!("--control {url} names no address"))
+        .collect::<Vec<_>>();
+    if addresses.is_empty() {
+        return Err(format!("--control {url} names no address"));
+    }
+    Ok(Addresses::from(addresses))
 }
 
 /// Runs the agent: join, observe, open the session, then hold it. Returns only on a failure.
@@ -110,7 +114,7 @@ pub fn run(options: &Options) -> Result<(), String> {
     let isolation_facts = isolation_facts(&options.substrate)?;
     let mut report = Report::open(&options.report)
         .map_err(|error| format!("report {}: {error}", options.report.display()))?;
-    let client = Client::new(options.control);
+    let client = Client::new(options.control.clone());
 
     let joined = command(
         &client,
