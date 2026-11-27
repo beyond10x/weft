@@ -31,6 +31,7 @@ none is written before the specification of what it implements.
 - `tools/check-overlay.sh`: validates the whole system from a frozen snapshot with only named
   files from the working tree, for parallel edits (`--freeze` takes the snapshot).
 - `tools/check-layers.sh [--graph]`: fails on a reference to a higher layer (`task layers`).
+- `tools/gen-domain-map.sh [--block]`: the domain map of `ess/` (layers, domains, references) as a Mermaid block; `tools/check.d/30-domain-map.sh` in `task check` fails when the block between the `domain-map` markers of `website/docs/specification/layers.md` differs from it.
 - `tools/check-stamped-time.sh [--inventory | --negative]`: fails when a command with a
   `weft.shared.StampedAt` input is granted outside `tools/stamped-time-actors` (`task stamped-time`).
 - `tools/check-spec-diff.sh [--acknowledge | --negative]`: classifies the change of `ess/` since

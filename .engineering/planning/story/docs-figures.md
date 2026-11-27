@@ -2,13 +2,15 @@
 format: aep.planning-md/3
 id: story:docs-figures
 kind: story
-status: draft
+status: active
 title: Architecture figure and a domain map of ess/ regenerated from the tree on the docs site
 relations:
 - decomposes: epic:docs-fidelity
 - serves: vision:weft
 - depends_on: story:docs-claims-check
 scope:
+- confidence: cited
+  path: AGENTS.md
 - confidence: inferred
   path: tools/check.d/30-domain-map.sh
 - confidence: inferred
@@ -19,7 +21,10 @@ scope:
   path: website/docs/index.md
 - confidence: cited
   path: website/docs/specification/layers.md
-revision: 8
+revision: 11
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T16:03:32Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-11-27T16:03:32Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
 ---
 ## Epic
 
