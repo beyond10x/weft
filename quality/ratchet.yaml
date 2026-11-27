@@ -161,57 +161,57 @@ assessments:
     measurements:
       gate-seconds:
         kind: sampled
-        output: gate_seconds
+        output: gate-seconds
         boundary: run_time
         scope: run
         unit: s
         better: lower
       test-step-seconds:
         kind: sampled
-        output: test_step_seconds
+        output: test-step-seconds
         boundary: run_time
         scope: run
         unit: s
         better: lower
       slowest-test-seconds:
         kind: sampled
-        output: slowest_test_seconds
+        output: slowest-test-seconds
         scope: run
         unit: s
         better: lower
       gate-budget-cases-failed:
         kind: exact
-        output: gate_budget_cases_failed
+        output: gate-budget-cases-failed
         scope: run
         unit: cases
         better: lower
       test-binaries-per-crate:
         kind: exact
-        output: test_binaries_per_crate
+        output: test-binaries-per-crate
         scope: run
         unit: binaries
         better: lower
       python-files:
         kind: exact
-        output: python_files
+        output: python-files
         scope: run
         unit: files
         better: lower
       toolchain-pins-disagree:
         kind: exact
-        output: toolchain_pins_disagree
+        output: toolchain-pins-disagree
         scope: run
         unit: files
         better: lower
       cache-bypass:
         kind: exact
-        output: cache_bypass
+        output: cache-bypass
         scope: run
         unit: lines
         better: lower
       plan-validate-defects:
         kind: exact
-        output: plan_validate_defects
+        output: plan-validate-defects
         scope: run
         unit: defects
         better: lower

@@ -24,7 +24,7 @@ scope:
   path: tools/kpis.d/30-specification.sh
 - confidence: cited
   path: tools/sim/tests/ratchet/mod.rs
-revision: 10
+revision: 11
 ---
 ## Epic
 
@@ -120,6 +120,9 @@ relations are those recorded with their citations in `story:kpi-repository` § D
 4. Each ratchet-role requirement of this story has a reference record under `ratchet/references/`
    with the value `task kpis` printed at the adopting commit, the 1024-walk explore-from-setup
    figures included.
+   This includes the two requirements `no-lost-outcomes` and `no-new-unsupported-answers`, which
+   `story:kpi-repository` lists in `RECORDS_PENDING` of `tools/sim/tests/ratchet/mod.rs`: this story
+   writes their records and removes both from that list, which is then empty.
 5. The `weft-sim-report@1` and `ess-synthesis@1` declarations declare every output a measurement
    of this story names: `ratchet::the_ratchet_file_is_consistent` of `story:kpi-repository`
    passes (`task sim-test`).

@@ -14,8 +14,8 @@ Contract of a hook:
   guessed value. A hook exits 0 when it printed a line for each of its KPIs.
 - It measures, so `task kpis` starts without the `slot` prefix (the organization's rule "Scripts
   that do not build stay off slot"). A command inside it that builds or tests (`task check`,
-  `task test`, the gate self-test) gets the prefix there, as `slot --here`, so the values come
-  from this host. A time read through `slot` is the run time of the job, not its wait in the
+  `tools/test-step.sh`, the gate self-test) gets the prefix there, as `slot --here`, so the values
+  come from this host. A time read through `slot` is the run time of the job, not its wait in the
   queue: the hook takes the time inside the job.
 - It is never part of `task check` or `task test`, and no file of `tools/check.d/`,
   `tools/test-setup.d/` or `tools/test-teardown.d/` calls it (test `ratchet::check_runs_no_kpi_hook`
