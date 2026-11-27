@@ -601,5 +601,13 @@ pub fn load(path: &Path) -> Result<Experiment, String> {
             experiment.format
         ));
     }
+    if let Some(search) = &experiment.search {
+        if search.mode == "fit" && search.budget == 0 {
+            return Err(format!("{}: search: a fit `budget` of 0 evaluates no point; give at least 1", path.display()));
+        }
+        if let Some((name, w)) = search.weights.iter().find(|(_, w)| !w.is_finite()) {
+            return Err(format!("{}: search: the weight of `{name}` is {w}, not a finite number", path.display()));
+        }
+    }
     Ok(experiment)
 }

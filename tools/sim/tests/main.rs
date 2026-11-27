@@ -540,3 +540,412 @@ fn closed_link_fires_on_a_formation_placed_across_a_closed_link() {
     assert!(v.detail.starts_with("formation 00000000-0000-4000-8000-0000000000f1: placements "), "{}", v.detail);
     assert!(v.detail.contains("in group 00000000-0000-4000-8000-00000000000a") && v.detail.contains("in group 00000000-0000-4000-8000-00000000000b"), "{}", v.detail);
 }
+
+// ---- search output: the climb, row by row ---------------------------------------------------
+
+fn fixture_search() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture-search")
+}
+
+/// The search fixture's experiment with each `(from, to)` text replaced, written under the test
+/// target directory as `<name>.yaml`.
+fn search_experiment(name: &str, edits: &[(&str, &str)]) -> PathBuf {
+    let mut text = std::fs::read_to_string(fixture_search().join("search.yaml")).unwrap();
+    for (from, to) in edits {
+        assert!(text.contains(from), "the fixture has `{from}`");
+        text = text.replace(from, to);
+    }
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("search");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.yaml"));
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+fn search_command(name: &str, edits: &[(&str, &str)]) -> (std::process::Command, PathBuf) {
+    let exp = search_experiment(name, edits);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("search").join(name);
+    let _ = std::fs::remove_dir_all(&out);
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_weft-sim"));
+    cmd.arg("simulate").arg("--spec").arg(fixture_search()).arg("--experiment").arg(&exp).arg("--out").arg(&out).args(["--threads", "2"]);
+    (cmd, out)
+}
+
+/// `weft-sim simulate` on the search fixture: the rows of `search` in its `result.json`, and
+/// the whole file.
+fn search_rows(name: &str, edits: &[(&str, &str)]) -> (Vec<serde_json::Value>, serde_json::Value) {
+    let (mut cmd, out) = search_command(name, edits);
+    let run = cmd.output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+    let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+    let rows = result["search"].as_array().expect("search rows").clone();
+    assert!(!rows.is_empty());
+    (rows, result)
+}
+
+/// The rows of a fit run; `test` names its output directory (tests run in parallel).
+fn fit_rows(test: &str) -> Vec<serde_json::Value> {
+    search_rows(&format!("{test}-fit"), &[]).0
+}
+
+fn exhaustive_rows(test: &str) -> Vec<serde_json::Value> {
+    search_rows(&format!("{test}-exhaustive"), &[("mode: fit", "mode: exhaustive")]).0
+}
+
+fn index_of(row: &serde_json::Value) -> Vec<u64> {
+    row["index"].as_array().unwrap_or_else(|| panic!("index: {row}")).iter().map(|i| i.as_u64().unwrap()).collect()
+}
+
+/// Rows grouped by `round`, in order.
+fn rounds(rows: &[serde_json::Value]) -> Vec<Vec<&serde_json::Value>> {
+    let mut out: Vec<Vec<&serde_json::Value>> = Vec::new();
+    for row in rows {
+        let round = row["round"].as_u64().unwrap_or_else(|| panic!("round: {row}"));
+        match out.last_mut() {
+            Some(last) if last[0]["round"].as_u64() == Some(round) => last.push(row),
+            _ => {
+                assert_eq!(round as usize, out.len() + 1, "rounds count from 1 in order: {row}");
+                out.push(vec![row]);
+            }
+        }
+    }
+    out
+}
+
+/// Acceptance 1: every row of a fit and an exhaustive run carries the climb fields beside the
+/// old ones.
+#[test]
+fn every_search_row_carries_the_climb_fields() {
+    for (mode, rows) in [("fit", fit_rows("fields")), ("exhaustive", exhaustive_rows("fields"))] {
+        for (i, row) in rows.iter().enumerate() {
+            for key in ["point", "kpis", "fitness", "feasible", "seq", "round", "index", "parent", "decision", "best", "walk"] {
+                assert!(row.get(key).is_some(), "{mode} row {i} lacks `{key}`: {row}");
+            }
+            assert_eq!(row["seq"], i + 1, "{mode}: {row}");
+            assert_eq!(index_of(row).len(), 2, "one index per mutation axis: {row}");
+            let decision = row["decision"].as_str().unwrap();
+            assert!(["start", "accepted", "rejected", "restart"].contains(&decision), "{mode}: {row}");
+        }
+        assert_eq!(rows.len(), 16, "{mode}: the fixture has 16 points and the budget covers them");
+    }
+    let exhaustive = exhaustive_rows("fields-rounds");
+    assert!(exhaustive.iter().all(|r| r["round"] == 1 && r["parent"].is_null()));
+}
+
+/// Acceptance 2: the climb starts once, accepts at most one neighbour a round, and every
+/// neighbour names the current point of its round, one step away on one axis.
+#[test]
+fn a_fit_climb_names_its_parent_and_accepts_at_most_one_neighbour_a_round() {
+    let rows = fit_rows("parent");
+    assert_eq!(rows[0]["decision"], "start");
+    assert!(rows[0]["parent"].is_null());
+    assert_eq!(rows.iter().filter(|r| r["decision"] == "start").count(), 1);
+    let by_seq = |seq: u64| &rows[seq as usize - 1];
+    let mut current = rows[0]["seq"].as_u64().unwrap();
+    let mut accepted = 0;
+    for round in rounds(&rows).into_iter().skip(1) {
+        if round[0]["decision"] == "restart" {
+            assert_eq!(round.len(), 1, "a restart is a round of its own: {round:?}");
+            current = round[0]["seq"].as_u64().unwrap();
+            continue;
+        }
+        let taken: Vec<_> = round.iter().filter(|r| r["decision"] == "accepted").collect();
+        assert!(taken.len() <= 1, "{round:?}");
+        for row in &round {
+            assert!(row["decision"] == "accepted" || row["decision"] == "rejected", "{row}");
+            assert_eq!(row["parent"], current, "{row}");
+            let (a, b) = (index_of(row), index_of(by_seq(current)));
+            let steps: Vec<u64> = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).collect();
+            assert_eq!(steps.iter().filter(|d| **d == 1).count(), 1, "{row}");
+            assert_eq!(steps.iter().sum::<u64>(), 1, "{row}");
+        }
+        if let Some(row) = taken.first() {
+            accepted += 1;
+            current = row["seq"].as_u64().unwrap();
+        }
+    }
+    assert!(accepted >= 3, "the fixture's climb takes steps: {accepted}");
+    assert!(rows.iter().any(|r| r["decision"] == "rejected"));
+}
+
+/// Acceptance 3: after a round with no improvement the next row is an evaluated restart at a
+/// point no earlier row has.
+#[test]
+fn a_round_without_improvement_is_followed_by_an_evaluated_restart() {
+    let rows = fit_rows("restart");
+    for (i, row) in rows.iter().enumerate() {
+        if row["decision"] == "restart" {
+            assert!(row["parent"].is_null(), "{row}");
+            assert!(row["kpis"]["steps"].as_u64().is_some_and(|s| s > 0), "its own KPIs: {row}");
+            assert!(row["fitness"].is_number(), "{row}");
+            assert!(rows[..i].iter().all(|r| index_of(r) != index_of(row)), "a point not visited: {row}");
+        }
+    }
+    let rounds = rounds(&rows);
+    let mut checked = 0;
+    for (r, round) in rounds.iter().enumerate().skip(1) {
+        if round.iter().all(|row| row["decision"] == "rejected") {
+            if let Some(next) = rounds.get(r + 1) {
+                assert_eq!(next[0]["decision"], "restart", "after round {}: {}", r + 1, next[0]);
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked >= 1, "the fixture's climb finds a round without improvement");
+}
+
+/// Acceptance 4: a budget smaller than the points bounds the rows, restarts counted.
+#[test]
+fn a_fit_budget_counts_its_restarts() {
+    let (rows, _) = search_rows("fit-budget", &[("budget: 24", "budget: 15")]);
+    assert!(rows.iter().any(|r| r["decision"] == "restart"), "the run restarts");
+    assert!(rows.len() <= 15, "{} rows", rows.len());
+}
+
+/// Acceptance 5: `best` is the largest feasible fitness up to and including the row, null
+/// while no row is feasible.
+#[test]
+fn best_is_the_largest_feasible_fitness_so_far() {
+    for (mode, rows) in [("fit", fit_rows("best")), ("exhaustive", exhaustive_rows("best"))] {
+        assert_eq!(rows[0]["feasible"], false, "{mode}: the fixture starts infeasible");
+        let mut best: Option<f64> = None;
+        for row in &rows {
+            if row["feasible"] == true {
+                let f = row["fitness"].as_f64().unwrap();
+                best = Some(best.map_or(f, |b| b.max(f)));
+            }
+            match best {
+                None => assert!(row["best"].is_null(), "{mode}: {row}"),
+                Some(b) => assert_eq!(row["best"].as_f64(), Some(b), "{mode}: {row}"),
+            }
+        }
+        assert!(best.is_some(), "{mode}: some point is feasible");
+    }
+}
+
+/// Acceptance 6: walk numbers are distinct and never 0 (walk 0 is the best point's rerun).
+#[test]
+fn fit_walk_numbers_are_distinct_and_never_zero() {
+    let rows = fit_rows("walks");
+    let walks: Vec<u64> = rows.iter().map(|r| r["walk"].as_u64().unwrap_or_else(|| panic!("walk: {r}"))).collect();
+    assert!(!walks.contains(&0));
+    let distinct: std::collections::BTreeSet<_> = walks.iter().collect();
+    assert_eq!(distinct.len(), walks.len(), "{walks:?}");
+}
+
+fn http_get(port: u16, path: &str) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
+    write!(stream, "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").ok()?;
+    let mut text = String::new();
+    stream.read_to_string(&mut text).ok()?;
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    (head.split(' ').nth(1) == Some("200")).then(|| body.to_owned())
+}
+
+/// Acceptance 7 and 8: with `--serve` the snapshot holds `info.search` before the first row is
+/// recorded (the search holds until the test has read it), and the written `result.json`
+/// carries the same object.
+#[test]
+fn the_search_header_is_live_before_the_first_row_and_written_with_the_result() {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("search");
+    std::fs::create_dir_all(&dir).unwrap();
+    let hold = dir.join("serve.hold");
+    let _ = std::fs::remove_file(&hold);
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let (mut cmd, out) = search_command("serve", &[]);
+    let log = dir.join("serve.stderr");
+    cmd.args(["--serve", &format!("127.0.0.1:{port}"), "--exit-when-done"])
+        .env("WEFT_SIM_SEARCH_HOLD", &hold)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::fs::File::create(&log).unwrap());
+    let mut child = cmd.spawn().unwrap();
+    let started = std::time::Instant::now();
+    let snap = loop {
+        if let Some(body) = http_get(port, "/snapshot") {
+            let snap: serde_json::Value = serde_json::from_str(&body).unwrap();
+            if snap["info"].get("search").is_some() {
+                break snap;
+            }
+        }
+        if started.elapsed().as_secs() > 20 {
+            let _ = child.kill();
+            panic!("no snapshot with info.search: {}", std::fs::read_to_string(&log).unwrap_or_default());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    std::fs::write(&hold, "").unwrap();
+    assert_eq!(snap["search"], serde_json::json!([]), "read before the first row");
+    let expected = serde_json::json!({
+        "mode": "fit",
+        "seed": 7,
+        "budget": 24,
+        "limit": 16,
+        "weights": {"steps": 1.0},
+        "gates": ["setup-failures"],
+        "axes": [
+            {"name": "opens", "kind": "var", "point": "opens", "values": [1, 2, 3, 4]},
+            {"name": "closes", "kind": "var", "point": "closes", "values": [2, 0, 1, 3]},
+        ],
+    });
+    assert_eq!(snap["info"]["search"], expected);
+    let status = child.wait().unwrap();
+    assert!(status.success(), "{}", std::fs::read_to_string(&log).unwrap_or_default());
+    let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+    assert_eq!(result["info"]["search"], snap["info"]["search"]);
+    assert_eq!(result["search"].as_array().map(Vec::len), Some(16));
+}
+
+// ---- search output: adversarial cases ---------------------------------------------------------
+
+/// `info.search.budget` is documented as "the most points a `fit` search evaluates": a budget of
+/// 0 evaluates no point (or the run refuses the budget); it does not record the start anyway.
+#[test]
+fn a_fit_budget_of_zero_records_no_row() {
+    let (mut cmd, out) = search_command("adv-budget-zero", &[("budget: 24", "budget: 0")]);
+    let run = cmd.output().unwrap();
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    if !run.status.success() {
+        assert!(stderr.contains("budget"), "a refusal names the budget: {stderr}");
+        return;
+    }
+    let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+    let rows = result["search"].as_array().expect("search rows");
+    assert_eq!(rows.len(), 0, "budget 0 recorded rows: {rows:?}");
+}
+
+/// The test hook holds only while it names a file: an empty `WEFT_SIM_SEARCH_HOLD` names none and
+/// must not stall the search for 30 s.
+#[test]
+fn an_empty_search_hold_variable_does_not_hold_the_search() {
+    let (mut cmd, _out) = search_command("adv-hold-empty", &[]);
+    cmd.env("WEFT_SIM_SEARCH_HOLD", "").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    let mut child = cmd.spawn().unwrap();
+    let started = std::time::Instant::now();
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        if started.elapsed().as_secs() >= 10 {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("the search still runs after {:?} with an empty WEFT_SIM_SEARCH_HOLD", started.elapsed());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
+/// Acceptance 1 and the docs: `index` is, per axis in the order of `info.search.axes`, the index
+/// of the row's value in that axis's `values`.
+#[test]
+fn every_row_index_names_its_point_through_the_axes() {
+    for name in ["adv-index-fit", "adv-index-exhaustive"] {
+        let edits: &[(&str, &str)] = if name.ends_with("exhaustive") { &[("mode: fit", "mode: exhaustive")] } else { &[] };
+        let (rows, result) = search_rows(name, edits);
+        let axes = result["info"]["search"]["axes"].as_array().expect("info.search.axes");
+        for row in &rows {
+            let index = index_of(row);
+            assert_eq!(index.len(), axes.len(), "{row}");
+            for (axis, i) in axes.iter().zip(&index) {
+                let value = &axis["values"][*i as usize];
+                assert_eq!(&row["point"][axis["name"].as_str().unwrap()], value, "{name}: axis {} index {i}: {row}", axis["name"]);
+            }
+        }
+    }
+}
+
+/// Acceptance 2 and the docs: the accepted neighbour becomes the current point, so the next round
+/// is its neighbours, unless it has no unvisited neighbour left (then a restart).
+#[test]
+fn the_round_after_an_accepted_neighbour_climbs_from_it() {
+    let (rows, result) = search_rows("adv-accepted-next", &[]);
+    let lens: Vec<u64> = result["info"]["search"]["axes"].as_array().unwrap().iter().map(|a| a["values"].as_array().unwrap().len() as u64).collect();
+    let rounds = rounds(&rows);
+    let mut checked = 0;
+    for (r, round) in rounds.iter().enumerate() {
+        let Some(accepted) = round.iter().find(|row| row["decision"] == "accepted") else { continue };
+        let Some(next) = rounds.get(r + 1) else { continue };
+        let at = index_of(accepted);
+        let visited: Vec<Vec<u64>> = rounds[..=r].iter().flatten().map(|row| index_of(row)).collect();
+        let mut open = 0;
+        for axis in 0..at.len() {
+            for up in [false, true] {
+                let mut n = at.clone();
+                if up && n[axis] + 1 < lens[axis] {
+                    n[axis] += 1;
+                } else if !up && n[axis] > 0 {
+                    n[axis] -= 1;
+                } else {
+                    continue;
+                }
+                if !visited.contains(&n) {
+                    open += 1;
+                }
+            }
+        }
+        if open > 0 {
+            assert_ne!(next[0]["decision"], "restart", "seq {} accepted with {open} unvisited neighbours: {}", accepted["seq"], next[0]);
+            assert!(next.iter().all(|row| row["parent"] == accepted["seq"]), "{next:?}");
+            checked += 1;
+        }
+    }
+    assert!(checked >= 3, "the fixture's climb continues from accepted points: {checked}");
+}
+
+/// Docs: in an `exhaustive` run a row after the first is `accepted` exactly when it raised the
+/// best feasible fitness.
+#[test]
+fn an_exhaustive_row_is_accepted_exactly_when_it_raises_the_best() {
+    let (rows, _) = search_rows("adv-exhaustive-decision", &[("mode: fit", "mode: exhaustive")]);
+    assert_eq!(rows[0]["decision"], "start");
+    let mut accepted = 0;
+    for pair in rows.windows(2) {
+        let (before, row) = (&pair[0], &pair[1]);
+        let raised = row["best"].as_f64().is_some_and(|b| before["best"].as_f64().is_none_or(|p| b > p));
+        let expected = if raised { "accepted" } else { "rejected" };
+        assert_eq!(row["decision"], expected, "{row}");
+        accepted += usize::from(raised);
+    }
+    assert!(accepted >= 2, "the fixture's exhaustive run raises the best: {accepted}");
+}
+
+/// The search rows, `info.search` and the best point depend on the seed, not on `--threads`.
+#[test]
+fn search_rows_do_not_depend_on_threads() {
+    let exp = search_experiment("adv-threads", &[]);
+    let mut seen = Vec::new();
+    for threads in ["1", "8"] {
+        let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("search").join(format!("adv-threads-{threads}"));
+        let _ = std::fs::remove_dir_all(&out);
+        let run = std::process::Command::new(env!("CARGO_BIN_EXE_weft-sim"))
+            .arg("simulate")
+            .arg("--spec")
+            .arg(fixture_search())
+            .arg("--experiment")
+            .arg(&exp)
+            .arg("--out")
+            .arg(&out)
+            .args(["--threads", threads])
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
+        let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+        seen.push((result["search"].clone(), result["info"]["search"].clone(), result["run"]["result"]["best"].clone()));
+    }
+    assert_eq!(seen[0], seen[1]);
+}
+
+/// A weight that is not a finite number makes every fitness infinite or NaN, so no climb step
+/// compares: the experiment is refused at load, naming the weight. A finite weight loads.
+#[test]
+fn a_search_weight_that_is_not_finite_is_refused_at_load() {
+    for (name, weight) in [("inf", ".inf"), ("minus-inf", "-.inf"), ("nan", ".nan")] {
+        let path = search_experiment(&format!("weight-{name}"), &[("weights: {steps: 1}", &format!("weights: {{steps: {weight}}}"))]);
+        let err = experiment::load(&path).expect_err(weight);
+        assert!(err.contains("weight") && err.contains("`steps`"), "{weight}: {err}");
+    }
+    let path = search_experiment("weight-finite", &[("weights: {steps: 1}", "weights: {steps: -2.5}")]);
+    assert!(experiment::load(&path).is_ok());
+}

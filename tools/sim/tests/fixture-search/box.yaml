@@ -1,0 +1,92 @@
+domain: demo.box
+
+summary: Boxes that open, fill and close.
+
+naming:
+  wire: box
+  display: Box
+
+types:
+  - name: demo.box.BoxId
+    kind: newtype
+    of: Uuid
+
+entities:
+  - name: demo.box.Box
+    identity:
+      name: box_id
+      type: demo.box.BoxId
+    fields:
+      - name: label
+        type: String
+      - name: items
+        type: Integer
+    lifecycle:
+      initial: Open
+      states:
+        - Open
+        - Closed
+      terminal: [Closed]
+      transitions:
+        - name: close
+          from: [Open]
+          to: Closed
+
+commands:
+  - name: demo.box.OpenBox
+    input:
+      - {name: label, type: String}
+    outcomes:
+      - name: opened
+        creates: demo.box.Box
+        instance: box_id
+        sets:
+          label: input.label
+          items: {generated: true}
+        emits: [demo.box.BoxOpened]
+        payload:
+          demo.box.BoxOpened:
+            box_id: {generated: true}
+            label: input.label
+
+  - name: demo.box.CloseBox
+    input:
+      - {name: box_id, type: demo.box.BoxId}
+    outcomes:
+      - name: no-such-box
+        unknown_instance: true
+        error: demo.box.BoxNotFound
+      - name: closed
+        moves: demo.box.Box.close
+        instance: box_id
+        emits: [demo.box.BoxClosed]
+        payload:
+          demo.box.BoxClosed:
+            box_id: input.box_id
+      - name: not-open
+        wrong_state: true
+        error: demo.box.BoxNotOpen
+
+events:
+  - name: demo.box.BoxOpened
+    fields:
+      - {name: box_id, type: demo.box.BoxId}
+      - {name: label, type: String}
+  - name: demo.box.BoxClosed
+    fields:
+      - {name: box_id, type: demo.box.BoxId}
+
+errors:
+  - name: demo.box.BoxNotFound
+    summary: No box has this identifier.
+  - name: demo.box.BoxNotOpen
+    summary: The box is closed.
+
+views:
+  - name: demo.box.Boxes
+    source: demo.box.Box
+    consistency: read_your_writes
+    fields:
+      - {name: box_id, type: demo.box.BoxId}
+      - {name: label, type: String}
+      - {name: state, type: demo.box.Box.State}

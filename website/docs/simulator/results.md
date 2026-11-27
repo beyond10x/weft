@@ -48,6 +48,45 @@ The top-level keys used most:
 
 For `simulate`, `run.result` holds the experiment's checks and KPIs.
 
+### Search rows
+
+A `simulate` run whose experiment has a `search` block writes one row to `search` per point it
+evaluated, in evaluation order. The live snapshot of `--serve` holds the same rows as they come.
+
+| Field | Meaning |
+|---|---|
+| `point` | the value of each mutation, by name |
+| `kpis`, `fitness`, `feasible` | the point's KPIs, its weighted fitness, and whether every gate KPI is 0 |
+| `error` | only when the point's run failed: why |
+| `seq` | the row's position, from 1 |
+| `round` | the evaluation batch the point was part of. `fit`: the start is round 1, then each round of neighbours and each restart is a round of its own. `exhaustive`: every point is round 1 |
+| `index` | per mutation axis, in the order of `info.search.axes`, the index of the point's value in that axis's `values` |
+| `parent` | the `seq` of the point this one is a neighbour of; `null` for the start, a restart and every `exhaustive` point |
+| `decision` | `fit`: `start` for the first point, `accepted` for the neighbour that became the current point of its round, `rejected` for every other neighbour, `restart` for a restart. `exhaustive`: `start` for the first point, then `accepted` when the point raised the best fitness so far and `rejected` otherwise |
+| `best` | the best fitness of the feasible rows up to and including this one; `null` while none is feasible |
+| `walk` | the walk number the point was simulated with, unique within the run. Walk 0 is the best point, run again with its timeline recorded |
+
+A `fit` search climbs from the point with index 0 on every axis to the best feasible neighbour
+that improves on the current point. After a round of neighbours with no improvement, or at a
+point with no neighbour left to visit, it restarts at a random point not visited yet. The
+restart is evaluated in a round of its own, counts against `budget` and becomes the current
+point. The search ends when the budget is spent or every point is visited.
+
+`info.search` describes the search. It is written before the first point is evaluated, so the
+live page has it from the start. The variable `WEFT_SIM_SEARCH_HOLD` is for tests only: naming a
+file, it makes the search wait after writing `info.search` until that file exists (at most 30 s);
+empty or unset, it does nothing.
+
+| Field | Meaning |
+|---|---|
+| `mode` | `fit` or `exhaustive` |
+| `seed` | the experiment's seed; it also draws the restarts |
+| `budget` | the most points a `fit` search evaluates, at least 1; the experiment is refused at load with a `fit` budget of 0 |
+| `limit` | the most combinations an `exhaustive` search accepts |
+| `weights` | the weight of each KPI in the fitness, each a finite number; the experiment is refused at load with a weight that is not |
+| `gates` | the KPIs that must be 0 for a point to be feasible |
+| `axes` | each mutation's `name`, `kind`, `point` and its `values` in order |
+
 ## Gaps
 
 `gaps.top` lists the most useful gaps first. Each names the place in the specification:
