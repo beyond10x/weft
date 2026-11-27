@@ -25,7 +25,7 @@ layers were derived from the references the domains make
 
 One box per layer, one node per domain. A domain refers to another through an entity field or a
 declared relation. An arrow between two boxes means that a domain of the upper layer refers to a
-domain of the lower one; an arrow inside a box joins two domains of that layer. The table after
+domain of the lower one; an arrow inside a box joins a domain to another of that layer. The table after
 the figure names, for each domain, every domain it refers to. The map and the table are generated
 from `ess/` by `tools/gen-domain-map.sh`, and the gate fails when they differ from the
 specification.
