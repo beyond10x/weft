@@ -53,14 +53,21 @@ fn rename(value: &Value, names: &BTreeMap<&str, &str>, seen: &mut BTreeSet<Strin
                 Value::String("$minted".into())
             } else if minted_time(s) {
                 Value::String("$minted-time".into())
-            } else if s.strip_prefix("generated-").is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())) {
+            } else if s
+                .strip_prefix("generated-")
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            {
                 Value::String("$minted-text".into())
             } else {
                 value.clone()
             }
         }
         Value::Array(a) => Value::Array(a.iter().map(|v| rename(v, names, seen)).collect()),
-        Value::Object(o) => Value::Object(o.iter().map(|(k, v)| (k.clone(), rename(v, names, seen))).collect()),
+        Value::Object(o) => Value::Object(
+            o.iter()
+                .map(|(k, v)| (k.clone(), rename(v, names, seen)))
+                .collect(),
+        ),
         _ => value.clone(),
     }
 }
@@ -81,13 +88,21 @@ pub fn name_rows(rows: &Fingerprint, vars: &BTreeMap<String, Value>, scope: &Sco
         for row in list {
             total += 1;
             let mut seen = BTreeSet::new();
-            let mut named = rename(&serde_json::to_value(row).unwrap_or(Value::Null), &names, &mut seen);
+            let mut named = rename(
+                &serde_json::to_value(row).unwrap_or(Value::Null),
+                &names,
+                &mut seen,
+            );
             if let Value::Object(o) = &mut named {
                 o.retain(|k, _| !scope.ignore.contains(k));
             }
             let hidden = seen.iter().any(|n| scope.hide.contains(n));
             let observed = seen.iter().any(|n| scope.observe.contains(n));
-            let left_out = if scope.observe.is_empty() { hidden } else { !observed };
+            let left_out = if scope.observe.is_empty() {
+                hidden
+            } else {
+                !observed
+            };
             if left_out {
                 dropped += 1;
                 continue;
@@ -97,7 +112,11 @@ pub fn name_rows(rows: &Fingerprint, vars: &BTreeMap<String, Value>, scope: &Sco
         kept.sort();
         views.insert(view.clone(), kept);
     }
-    Named { views, rows: total, dropped }
+    Named {
+        views,
+        rows: total,
+        dropped,
+    }
 }
 
 /// The rows of each view found in one run more often than in the other, as

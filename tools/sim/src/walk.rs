@@ -57,7 +57,9 @@ pub struct Row {
 impl Row {
     /// The value of `field` as the answers showed it, when the shadow holds one.
     pub fn known(&self, field: &str) -> Option<&Node> {
-        self.fields.get(field).filter(|_| !self.guessed.contains(field))
+        self.fields
+            .get(field)
+            .filter(|_| !self.guessed.contains(field))
     }
 }
 
@@ -209,7 +211,11 @@ fn bucket(node: &Node, kind: FieldKind) -> u64 {
 }
 
 impl<'a> Session<'a> {
-    pub fn new(cat: &'a Catalog, cov: &'a Coverage, emits: Arc<HashMap<QualifiedName, Vec<(usize, usize)>>>) -> Self {
+    pub fn new(
+        cat: &'a Catalog,
+        cov: &'a Coverage,
+        emits: Arc<HashMap<QualifiedName, Vec<(usize, usize)>>>,
+    ) -> Self {
         let clock = SimClock(Arc::new(AtomicU64::new(CLOCK_START)));
         let target = Interpreted::for_model(cat.ir.clone()).with_command_clock(clock.clone());
         Self {
@@ -279,8 +285,16 @@ impl<'a> Session<'a> {
             let mut parts: BTreeMap<String, u32> = BTreeMap::new();
             for ((ent, state, _), c) in &counts {
                 let e = &self.cat.entities[*ent];
-                let short = e.name.to_string().rsplit('.').next().unwrap_or("").to_owned();
-                *parts.entry(format!("{short}:{}", e.states[*state])).or_default() += u32::from(*c);
+                let short = e
+                    .name
+                    .to_string()
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned();
+                *parts
+                    .entry(format!("{short}:{}", e.states[*state]))
+                    .or_default() += u32::from(*c);
             }
             let text: Vec<String> = parts
                 .into_iter()
@@ -323,11 +337,20 @@ impl<'a> Session<'a> {
     }
 
     /// A value of `t` seen together with one of `chosen`, when there is one.
-    pub fn pool_pick_linked(&self, t: &str, chosen: &[Node], rng: &mut crate::rng::Rng) -> Option<Node> {
+    pub fn pool_pick_linked(
+        &self,
+        t: &str,
+        chosen: &[Node],
+        rng: &mut crate::rng::Rng,
+    ) -> Option<Node> {
         let list = self.pool.get(t)?;
         let linked: Vec<&Node> = list
             .iter()
-            .filter(|v| chosen.iter().any(|c| self.links.get(c).is_some_and(|l| l.contains(*v))))
+            .filter(|v| {
+                chosen
+                    .iter()
+                    .any(|c| self.links.get(c).is_some_and(|l| l.contains(*v)))
+            })
             .collect();
         if linked.is_empty() {
             return self.pool_pick(t, rng);
@@ -349,7 +372,13 @@ impl<'a> Session<'a> {
 
     /// The id of a row of `ent` the walk holds: one seen with `chosen` where there is one, one in
     /// a state of `states` where given and held, and one not in a terminal state more often.
-    pub fn live_pick(&self, ent: usize, chosen: &[Node], states: &[usize], rng: &mut crate::rng::Rng) -> Option<&Node> {
+    pub fn live_pick(
+        &self,
+        ent: usize,
+        chosen: &[Node],
+        states: &[usize],
+        rng: &mut crate::rng::Rng,
+    ) -> Option<&Node> {
         let e = &self.cat.entities[ent];
         // `Node::Null` orders first: the rows of `ent` are one range of the map.
         let mut live: Vec<(&Node, &Row)> = self
@@ -362,7 +391,11 @@ impl<'a> Session<'a> {
             return None;
         }
         if !states.is_empty() {
-            let held: Vec<(&Node, &Row)> = live.iter().copied().filter(|(_, r)| states.contains(&r.state)).collect();
+            let held: Vec<(&Node, &Row)> = live
+                .iter()
+                .copied()
+                .filter(|(_, r)| states.contains(&r.state))
+                .collect();
             if !held.is_empty() {
                 live = held;
             }
@@ -371,14 +404,22 @@ impl<'a> Session<'a> {
             let linked: Vec<(&Node, &Row)> = live
                 .iter()
                 .copied()
-                .filter(|(id, _)| chosen.iter().any(|c| self.links.get(c).is_some_and(|l| l.contains(*id))))
+                .filter(|(id, _)| {
+                    chosen
+                        .iter()
+                        .any(|c| self.links.get(c).is_some_and(|l| l.contains(*id)))
+                })
                 .collect();
             if !linked.is_empty() {
                 live = linked;
             }
         }
         if rng.chance(0.75) {
-            let open: Vec<(&Node, &Row)> = live.iter().copied().filter(|(_, r)| !e.terminal.contains(&r.state)).collect();
+            let open: Vec<(&Node, &Row)> = live
+                .iter()
+                .copied()
+                .filter(|(_, r)| !e.terminal.contains(&r.state))
+                .collect();
             if !open.is_empty() {
                 live = open;
             }
@@ -388,19 +429,34 @@ impl<'a> Session<'a> {
 
     /// True when every identity input of `cmd` names a row the walk holds.
     pub fn names_live_rows(&self, cmd: usize, input: &Input) -> bool {
-        self.cat.commands[cmd].id_ents.iter().all(|(field, ent)| match input.get(field) {
-            None | Some(Node::Null) => self.cat.commands[cmd].create_inputs.contains(field) || !self.cat.commands[cmd].id_inputs.iter().any(|(f, _)| f == field),
-            Some(v) => self.cat.commands[cmd].create_inputs.contains(field) || self.rows.contains_key(&(*ent, v.clone())),
-        })
+        self.cat.commands[cmd]
+            .id_ents
+            .iter()
+            .all(|(field, ent)| match input.get(field) {
+                None | Some(Node::Null) => {
+                    self.cat.commands[cmd].create_inputs.contains(field)
+                        || !self.cat.commands[cmd]
+                            .id_inputs
+                            .iter()
+                            .any(|(f, _)| f == field)
+                }
+                Some(v) => {
+                    self.cat.commands[cmd].create_inputs.contains(field)
+                        || self.rows.contains_key(&(*ent, v.clone()))
+                }
+            })
     }
 
     fn hit_state(&self, ent: usize, state: usize) {
-        self.cov.hit_state(self.cat.entities[ent].state_base + state);
+        self.cov
+            .hit_state(self.cat.entities[ent].state_base + state);
     }
 
     fn apply_subject(&mut self, cmd: usize, oi: usize, input: &Input, events: &[ObservedEvent]) {
         let out = &self.cat.commands[cmd].outcomes[oi];
-        let Some(subj) = out.subject.clone() else { return };
+        let Some(subj) = out.subject.clone() else {
+            return;
+        };
         let ent = &self.cat.entities[subj.ent];
         let id = match &subj.instance {
             InstanceSrc::Input(field) => input.get(field).cloned(),
@@ -434,14 +490,25 @@ impl<'a> Session<'a> {
                         }
                     }
                 }
-                self.rows.insert(key.clone(), Row { state: into, fields, guessed: BTreeSet::new() });
+                self.rows.insert(
+                    key.clone(),
+                    Row {
+                        state: into,
+                        fields,
+                        guessed: BTreeSet::new(),
+                    },
+                );
                 self.hit_state(subj.ent, into);
             }
             Eff::Moves { tr, to } => {
                 self.cov.hit_transition(ent.tr_base + tr);
                 self.rows
                     .entry(key.clone())
-                    .or_insert(Row { state: to, fields: BTreeMap::new(), guessed: BTreeSet::new() })
+                    .or_insert(Row {
+                        state: to,
+                        fields: BTreeMap::new(),
+                        guessed: BTreeSet::new(),
+                    })
                     .state = to;
                 self.hit_state(subj.ent, to);
             }
@@ -458,7 +525,10 @@ impl<'a> Session<'a> {
         }
         if let Some(row) = self.rows.get_mut(&key) {
             for (field, src) in &subj.sets {
-                if matches!(src, SetSrc::Literal(_) | SetSrc::Increment(_) | SetSrc::Other) {
+                if matches!(
+                    src,
+                    SetSrc::Literal(_) | SetSrc::Increment(_) | SetSrc::Other
+                ) {
                     row.guessed.insert(field.clone());
                 } else {
                     row.guessed.remove(field);
@@ -488,7 +558,9 @@ impl<'a> Session<'a> {
                         let shown = events
                             .iter()
                             .filter(|e| e.payload.get(&ent.identity_field) == Some(&key.1))
-                            .find_map(|e| e.payload.get(field).filter(|v| !matches!(v, Node::Null)));
+                            .find_map(|e| {
+                                e.payload.get(field).filter(|v| !matches!(v, Node::Null))
+                            });
                         match shown {
                             Some(v) if self.guided => {
                                 row.fields.insert(field.clone(), v.clone());
@@ -531,10 +603,12 @@ impl<'a> Session<'a> {
         let command = CommandRef::new(info.name.clone());
         if let Some(force) = req.force {
             let name = cat.ir.commands()[&info.name].outcomes[force].name.clone();
-            let _ = self.target.configure_external_outcome(ExternalOutcomeControl {
-                force: OutcomeRef::new(command.clone(), name),
-                correlation: self.correlation.clone(),
-            });
+            let _ = self
+                .target
+                .configure_external_outcome(ExternalOutcomeControl {
+                    force: OutcomeRef::new(command.clone(), name),
+                    correlation: self.correlation.clone(),
+                });
         }
         let request = SemanticCommandRequest {
             command: command.clone(),
@@ -556,7 +630,9 @@ impl<'a> Session<'a> {
         match answer {
             Ok(done) => {
                 let oi = done.outcome.as_ref().and_then(|o| {
-                    info.outcomes.iter().position(|x| x.name == o.outcome.to_string())
+                    info.outcomes
+                        .iter()
+                        .position(|x| x.name == o.outcome.to_string())
                 });
                 if let Some(oi) = oi {
                     let gid = info.outcomes[oi].gid;
@@ -624,7 +700,11 @@ impl<'a> Session<'a> {
         }
         if let Some((kind, why)) = &result.error {
             let key = (req.cmd, kind.clone(), normalize(why));
-            let entry = self.findings.errors.entry(key).or_insert((0, String::new()));
+            let entry = self
+                .findings
+                .errors
+                .entry(key)
+                .or_insert((0, String::new()));
             entry.0 += 1;
             if entry.1.is_empty() {
                 entry.1 = why.chars().take(800).collect();
@@ -642,7 +722,8 @@ impl<'a> Session<'a> {
         }
         self.cov.steps.fetch_add(1, Ordering::Relaxed);
         self.cov.command_sends[req.cmd].fetch_add(1, Ordering::Relaxed);
-        self.cov.command_nanos[req.cmd].fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        self.cov.command_nanos[req.cmd]
+            .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
         result
     }
 
@@ -665,16 +746,24 @@ impl<'a> Session<'a> {
                         let seen = self.invocations.entry(b.name.to_string()).or_insert(0);
                         if list.len() > *seen {
                             let fresh = (list.len() - *seen) as u64;
-                            self.cov.binding_invocations[b.command].fetch_add(fresh, Ordering::Relaxed);
+                            self.cov.binding_invocations[b.command]
+                                .fetch_add(fresh, Ordering::Relaxed);
                             *seen = list.len();
                             // A bounded retry that used its whole bound: the spec would retry on.
                             let name = b.name.to_string();
-                            if cat.retry_bound > 0 && fresh >= u64::from(cat.retry_bound) && cat.retry_bounded.contains(&name) {
+                            if cat.retry_bound > 0
+                                && fresh >= u64::from(cat.retry_bound)
+                                && cat.retry_bounded.contains(&name)
+                            {
                                 let why = format!(
                                     "binding {name} retried {} {fresh} times after one event: the spec retries without bound (weft-sim bounds it at {})",
                                     cat.commands[b.command].name, cat.retry_bound
                                 );
-                                let entry = self.findings.errors.entry((b.command, "unbounded-retry".to_owned(), why.clone())).or_insert((0, why));
+                                let entry = self
+                                    .findings
+                                    .errors
+                                    .entry((b.command, "unbounded-retry".to_owned(), why.clone()))
+                                    .or_insert((0, why));
                                 entry.0 += 1;
                             }
                         }
@@ -708,7 +797,9 @@ impl<'a> Session<'a> {
         self.harvest_events(&fresh);
         let mut bound = Vec::new();
         for e in &fresh {
-            let Some(candidates) = emits.get(e.event.name()) else { continue };
+            let Some(candidates) = emits.get(e.event.name()) else {
+                continue;
+            };
             // The outcome is identified when one candidate emits it.
             if candidates.len() != 1 {
                 continue;
@@ -727,7 +818,11 @@ impl<'a> Session<'a> {
     }
 
     /// Reads a view as no actor, every row.
-    pub fn view(&self, name: &str, params: BTreeMap<String, Node>) -> Result<Vec<BTreeMap<String, Node>>, String> {
+    pub fn view(
+        &self,
+        name: &str,
+        params: BTreeMap<String, Node>,
+    ) -> Result<Vec<BTreeMap<String, Node>>, String> {
         let view = QualifiedName::new(name).map_err(|e| e.to_string())?;
         let request = SemanticViewRequest {
             view: ess_conformance::scenario::ViewRef::new(view),

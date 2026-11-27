@@ -28,7 +28,11 @@ pub fn load_without(dir: &Path, lost: &[String]) -> Result<EssIr, String> {
 /// built, each attempt is a full command decision, and one such step took a minute (weft-sim
 /// explore --from, 2026-11-26). The bound keeps a walk going; a binding that reaches it is a
 /// finding of the run, not a silent drop.
-pub fn load_with(dir: &Path, lost: &[String], retry_bound: Option<u32>) -> Result<(EssIr, Vec<String>), String> {
+pub fn load_with(
+    dir: &Path,
+    lost: &[String],
+    retry_bound: Option<u32>,
+) -> Result<(EssIr, Vec<String>), String> {
     let inputs_path = dir.join("ess-inputs.yaml");
     let text = std::fs::read_to_string(&inputs_path)
         .map_err(|e| format!("reading {}: {e}", inputs_path.display()))?;
@@ -64,7 +68,9 @@ pub fn load_with(dir: &Path, lost: &[String], retry_bound: Option<u32>) -> Resul
         found += before - raw.bindings.len();
     }
     if found != lost.len() {
-        return Err(format!("lost_bindings {lost:?}: {found} of them are declared"));
+        return Err(format!(
+            "lost_bindings {lost:?}: {found} of them are declared"
+        ));
     }
     let mut bounded = Vec::new();
     if let Some(attempts) = retry_bound {
@@ -81,8 +87,12 @@ pub fn load_with(dir: &Path, lost: &[String], retry_bound: Option<u32>) -> Resul
                         }
                     }
                 }
-                if f.failure == Failure::Retry && f.retry.is_none() || changed && f.retry.is_none() {
-                    f.retry = Some(ess_domain::binding::retry::RetryBound { attempts, finals: Vec::new() });
+                if f.failure == Failure::Retry && f.retry.is_none() || changed && f.retry.is_none()
+                {
+                    f.retry = Some(ess_domain::binding::retry::RetryBound {
+                        attempts,
+                        finals: Vec::new(),
+                    });
                     changed = true;
                 }
                 if changed {

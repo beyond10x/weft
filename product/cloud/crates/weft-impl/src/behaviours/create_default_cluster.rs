@@ -7,8 +7,9 @@
 use weft_types::behaviour::{CloudStorage, ClusterStorage, ZoneStorage};
 use weft_types::cluster::obligations::CreateDefaultClusterBehavior;
 use weft_types::cluster::{
-    ClusterData, ClusterSnapshot, ClusterState, ControlPlaneMode, CreateDefaultCluster, CreateDefaultClusterOutcome,
-    DefaultClusterCreated, DefaultClusterExists, NoZones, UnknownCloud, UnknownZone,
+    ClusterData, ClusterSnapshot, ClusterState, ControlPlaneMode, CreateDefaultCluster,
+    CreateDefaultClusterOutcome, DefaultClusterCreated, DefaultClusterExists, NoZones,
+    UnknownCloud, UnknownZone,
 };
 use weft_types::infrastructure::ZoneState;
 use weft_types::obligation::UnmetObligation;
@@ -27,7 +28,9 @@ impl CreateDefaultClusterBehavior for Ports {
             return Ok(CreateDefaultClusterOutcome::NoZones { error: NoZones });
         }
         if CloudStorage::get(self, &input.cloud_id).is_none() {
-            return Ok(CreateDefaultClusterOutcome::UnknownCloud { error: UnknownCloud });
+            return Ok(CreateDefaultClusterOutcome::UnknownCloud {
+                error: UnknownCloud,
+            });
         }
         if ZoneStorage::list(self).iter().any(|row| {
             input.zones.contains(&row.data.zone)
@@ -36,9 +39,13 @@ impl CreateDefaultClusterBehavior for Ports {
             return Ok(CreateDefaultClusterOutcome::ZoneUnusable { error: UnknownZone });
         }
         if ClusterStorage::list(self).iter().any(|row| {
-            row.data.cloud_id == input.cloud_id && row.data.account_id.is_none() && row.state != ClusterState::Deleted
+            row.data.cloud_id == input.cloud_id
+                && row.data.account_id.is_none()
+                && row.state != ClusterState::Deleted
         }) {
-            return Ok(CreateDefaultClusterOutcome::DefaultExists { error: DefaultClusterExists });
+            return Ok(CreateDefaultClusterOutcome::DefaultExists {
+                error: DefaultClusterExists,
+            });
         }
         let cluster_id = ClusterId(Uuid(mint()));
         ClusterStorage::put(

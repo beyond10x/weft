@@ -39,16 +39,26 @@ fn main() {
     }
     let types = types(&types_dir);
 
-    let mut out = String::new();
-    out.push_str("// Written by build.rs from target/generated; see its header.\n\n");
-    write_storage(&mut out, &storages);
-    write_codecs(&mut out, &types, &storages);
-    write_behaviours(&mut out, &obligations, &behaviours, &behaviours_dir);
+    // Two files: the generated code, which src/lib.rs includes inside a module clippy does not
+    // lint, and the modules of the hand-written behaviours, which it includes at the crate root.
+    let mut generated = String::new();
+    generated.push_str("// Written by build.rs from target/generated; see its header.\n\n");
+    write_storage(&mut generated, &storages);
+    write_codecs(&mut generated, &types, &storages);
+    write_stubs(&mut generated, &obligations, &behaviours);
+    let mut by_hand = String::new();
+    by_hand.push_str("// Written by build.rs: the modules of src/behaviours/.\n\n");
+    write_behaviours(&mut by_hand, &behaviours, &behaviours_dir);
 
-    let target = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
-        .join("weft_impl_generated.rs");
-    std::fs::write(&target, out)
-        .unwrap_or_else(|error| panic!("cannot write {}: {error}", target.display()));
+    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
+    for (name, text) in [
+        ("weft_impl_generated.rs", generated),
+        ("weft_impl_behaviours.rs", by_hand),
+    ] {
+        let target = out_dir.join(name);
+        std::fs::write(&target, text)
+            .unwrap_or_else(|error| panic!("cannot write {}: {error}", target.display()));
+    }
 }
 
 fn read(path: &Path) -> String {
@@ -244,12 +254,7 @@ fn write_storage(out: &mut String, storages: &[Storage]) {
     }
 }
 
-fn write_behaviours(
-    out: &mut String,
-    obligations: &[(String, String)],
-    behaviours: &BTreeSet<String>,
-    dir: &Path,
-) {
+fn write_behaviours(out: &mut String, behaviours: &BTreeSet<String>, dir: &Path) {
     out.push_str("/// The obligations written by hand, one file each.\nmod behaviours {\n");
     for name in behaviours {
         let path = dir.join(format!("{name}.rs"));
@@ -259,8 +264,13 @@ fn write_behaviours(
             path.display().to_string()
         );
     }
-    out.push_str("}\n\n");
-    out.push_str("// Every other obligation answers the generated stub.\n");
+    out.push_str("}\n");
+}
+
+fn write_stubs(out: &mut String, obligations: &[(String, String)], behaviours: &BTreeSet<String>) {
+    out.push_str(
+        "// Every obligation without a file of src/behaviours/ answers the generated stub.\n",
+    );
     for (method, text) in obligations {
         if !behaviours.contains(method) {
             out.push_str(text);

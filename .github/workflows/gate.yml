@@ -56,6 +56,7 @@ jobs:
         if: steps.paths.outputs.skip != 'true'
         with:
           toolchain: ${{ steps.toolchain.outputs.channel }}
+          components: rustfmt, clippy
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         if: steps.paths.outputs.skip != 'true'

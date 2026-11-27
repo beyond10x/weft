@@ -15,8 +15,8 @@
 
 use weft_types::artifacts::obligations::RegisterArtifactBehavior;
 use weft_types::artifacts::{
-    ArtifactData, ArtifactExists, ArtifactRegistered, ArtifactSnapshot, ArtifactState, ArtifactUnsigned,
-    InvalidAmount, NotFound, RegisterArtifact, RegisterArtifactOutcome,
+    ArtifactData, ArtifactExists, ArtifactRegistered, ArtifactSnapshot, ArtifactState,
+    ArtifactUnsigned, InvalidAmount, NotFound, RegisterArtifact, RegisterArtifactOutcome,
 };
 use weft_types::behaviour::{ArtifactStorage, Context};
 use weft_types::obligation::UnmetObligation;
@@ -24,15 +24,22 @@ use weft_types::obligation::UnmetObligation;
 use crate::Ports;
 
 impl RegisterArtifactBehavior for Ports {
-    fn register_artifact(&mut self, input: RegisterArtifact) -> Result<RegisterArtifactOutcome, UnmetObligation> {
+    fn register_artifact(
+        &mut self,
+        input: RegisterArtifact,
+    ) -> Result<RegisterArtifactOutcome, UnmetObligation> {
         if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
             return Ok(RegisterArtifactOutcome::NotCallersAccount { error: NotFound });
         }
         if input.signature.is_empty() {
-            return Ok(RegisterArtifactOutcome::Unsigned { error: ArtifactUnsigned });
+            return Ok(RegisterArtifactOutcome::Unsigned {
+                error: ArtifactUnsigned,
+            });
         }
         if input.size_bytes < 0 {
-            return Ok(RegisterArtifactOutcome::NegativeSize { error: InvalidAmount });
+            return Ok(RegisterArtifactOutcome::NegativeSize {
+                error: InvalidAmount,
+            });
         }
         if let Some(built_from) = &input.built_from {
             let Some(recipe) = ArtifactStorage::get(self, built_from) else {
@@ -46,7 +53,9 @@ impl RegisterArtifactBehavior for Ports {
             .iter()
             .any(|row| row.data.artifact_digest == input.artifact_digest)
         {
-            return Ok(RegisterArtifactOutcome::Exists { error: ArtifactExists });
+            return Ok(RegisterArtifactOutcome::Exists {
+                error: ArtifactExists,
+            });
         }
         ArtifactStorage::put(
             self,

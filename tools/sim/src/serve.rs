@@ -58,7 +58,9 @@ impl Read for Sse {
             }
             self.first = false;
             let snap = self.live.snapshot();
-            if snap["running"] == Value::Bool(false) && self.live.last.lock().map(|l| l.is_some()).unwrap_or(false) {
+            if snap["running"] == Value::Bool(false)
+                && self.live.last.lock().map(|l| l.is_some()).unwrap_or(false)
+            {
                 self.finished = true;
             }
             self.buf = format!("data: {snap}\n\n").into_bytes();
@@ -101,7 +103,13 @@ pub fn start(addr: SocketAddr, live: Arc<Live>) -> Result<(), String> {
                             .with_header(header("Content-Type", "application/json")),
                     ),
                     "/events" => {
-                        let reader = Sse { live, buf: Vec::new(), pos: 0, first: true, finished: false };
+                        let reader = Sse {
+                            live,
+                            buf: Vec::new(),
+                            pos: 0,
+                            first: true,
+                            finished: false,
+                        };
                         request.respond(Response::new(
                             StatusCode(200),
                             vec![

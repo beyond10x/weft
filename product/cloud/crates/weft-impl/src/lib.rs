@@ -21,7 +21,20 @@ pub mod log;
 pub mod quota;
 pub mod storage;
 
-include!(concat!(env!("OUT_DIR"), "/weft_impl_generated.rs"));
+/// What `build.rs` writes from the generated code: the storage port, the `Row` enum, the codecs
+/// and the stub of every obligation without a file of `src/behaviours/`. Its text follows from
+/// the specification, so clippy does not lint it (`tools/check.d/20-rust-lint.sh`); the
+/// hand-written behaviours are included outside this module and stay linted.
+#[allow(clippy::all)]
+mod generated {
+    use crate::Ports;
+
+    include!(concat!(env!("OUT_DIR"), "/weft_impl_generated.rs"));
+}
+
+pub use generated::{Row, ENTITIES};
+
+include!(concat!(env!("OUT_DIR"), "/weft_impl_behaviours.rs"));
 
 /// The generated behaviours over weft's ports: the behaviour bundle of every component.
 pub type Behaviours = weft_types::behaviour::Generated<Ports>;

@@ -16,8 +16,9 @@ use time::Duration;
 use weft_types::behaviour::{NodePoolStorage, NodeStorage};
 use weft_types::infrastructure::obligations::ProvisionPoolNodeBehavior;
 use weft_types::infrastructure::{
-    InvalidTokenExpiry, NodeData, NodePoolState, NodeRole, NodeSnapshot, NodeState, PoolNodeProvisioned,
-    ProvisionPoolNode, ProvisionPoolNodeOutcome, ProvisionPoolNodeResponse, StateConflict, UnknownNodePool,
+    InvalidTokenExpiry, NodeData, NodePoolState, NodeRole, NodeSnapshot, NodeState,
+    PoolNodeProvisioned, ProvisionPoolNode, ProvisionPoolNodeOutcome, ProvisionPoolNodeResponse,
+    StateConflict, UnknownNodePool,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -27,7 +28,10 @@ use crate::context::{decider::join_token_digest, instant, mint};
 use crate::Ports;
 
 impl ProvisionPoolNodeBehavior for Ports {
-    fn provision_pool_node(&mut self, input: ProvisionPoolNode) -> Result<ProvisionPoolNodeOutcome, UnmetObligation> {
+    fn provision_pool_node(
+        &mut self,
+        input: ProvisionPoolNode,
+    ) -> Result<ProvisionPoolNodeOutcome, UnmetObligation> {
         let now = self.now();
         // The decoder admits only RFC 3339; an instant it admits that this clock cannot read is
         // a decision that cannot be made, refused naming the command.
@@ -36,22 +40,37 @@ impl ProvisionPoolNodeBehavior for Ports {
             source: "weft.infrastructure.ProvisionPoolNode",
         })?;
         if expires <= now {
-            return Ok(ProvisionPoolNodeOutcome::ExpiryNotFuture { error: InvalidTokenExpiry });
+            return Ok(ProvisionPoolNodeOutcome::ExpiryNotFuture {
+                error: InvalidTokenExpiry,
+            });
         }
         if expires > now + Duration::hours(24) {
-            return Ok(ProvisionPoolNodeOutcome::ExpiryTooFar { error: InvalidTokenExpiry });
+            return Ok(ProvisionPoolNodeOutcome::ExpiryTooFar {
+                error: InvalidTokenExpiry,
+            });
         }
         let Some(pool) = NodePoolStorage::get(self, &input.node_pool_id) else {
-            return Ok(ProvisionPoolNodeOutcome::UnknownPool { error: UnknownNodePool });
+            return Ok(ProvisionPoolNodeOutcome::UnknownPool {
+                error: UnknownNodePool,
+            });
         };
         match pool.state {
-            NodePoolState::Deleted => return Ok(ProvisionPoolNodeOutcome::PoolDeleted { error: UnknownNodePool }),
-            NodePoolState::Draining => return Ok(ProvisionPoolNodeOutcome::PoolDraining { error: StateConflict }),
+            NodePoolState::Deleted => {
+                return Ok(ProvisionPoolNodeOutcome::PoolDeleted {
+                    error: UnknownNodePool,
+                })
+            }
+            NodePoolState::Draining => {
+                return Ok(ProvisionPoolNodeOutcome::PoolDraining {
+                    error: StateConflict,
+                })
+            }
             NodePoolState::Active => {}
         }
         let node_id = NodeId(Uuid(mint()));
         let join_token = format!("{}{}", mint().replace('-', ""), mint().replace('-', ""));
-        self.store().set_join_token_digest(&node_id, &join_token_digest(&join_token));
+        self.store()
+            .set_join_token_digest(&node_id, &join_token_digest(&join_token));
         NodeStorage::put(
             self,
             NodeSnapshot {
