@@ -24,7 +24,16 @@ fn catalog() -> Catalog {
 fn explore(cat: &Catalog, threads: usize) -> serde_json::Value {
     let cov = Coverage::new(cat, "explore", threads);
     let cands = Candidates::default();
-    let config = Config { seed: 5, walks: 40, steps: 12, threads, max_seconds: 50, setup: None, controllers: None, checks: Default::default() };
+    let config = Config {
+        seed: 5,
+        walks: 40,
+        steps: 12,
+        threads,
+        max_seconds: 50,
+        setup: None,
+        controllers: None,
+        checks: Default::default(),
+    };
     explore::run(cat, &cov, &cands, &config, None);
     cov.snapshot(cat, true)
 }
@@ -65,7 +74,11 @@ fn explore_reaches_every_outcome_of_the_fixture() {
     let cat = catalog();
     let snap = explore(&cat, 2);
     assert_eq!(snap["outcomes_declared"], 4);
-    assert_eq!(snap["outcomes_reached"], 4, "outcomes: {}", snap["outcome_hits"]);
+    assert_eq!(
+        snap["outcomes_reached"], 4,
+        "outcomes: {}",
+        snap["outcome_hits"]
+    );
     assert_eq!(snap["states_reached"], 2);
     assert_eq!(snap["transitions_reached"], 1);
     assert_eq!(snap["violation_count"], 0);
@@ -91,10 +104,18 @@ fn a_session_keeps_a_shadow_row_per_answer_and_reads_views() {
     let mut sess = Session::new(&cat, &cov, bound_emits(&cat));
     sess.begin(0, 1).unwrap();
     let open = weft_sim::walk::Request {
-        cmd: cat.commands.iter().position(|c| c.name.to_string() == "demo.box.OpenBox").unwrap(),
+        cmd: cat
+            .commands
+            .iter()
+            .position(|c| c.name.to_string() == "demo.box.OpenBox")
+            .unwrap(),
         actor: Some(0),
         caller: None,
-        input: [("label".to_owned(), ess_primitives::node::Node::Text("a".into()))].into(),
+        input: [(
+            "label".to_owned(),
+            ess_primitives::node::Node::Text("a".into()),
+        )]
+        .into(),
         force: None,
     };
     let answer = sess.send(&open);
@@ -129,8 +150,12 @@ fn the_committed_experiments_parse() {
 #[test]
 fn a_variable_name_may_be_built_from_another() {
     use serde_json::json;
-    let vars: std::collections::BTreeMap<String, serde_json::Value> =
-        [("i".to_owned(), json!(1)), ("node_1".to_owned(), json!("n1")), ("n".to_owned(), json!(3))].into();
+    let vars: std::collections::BTreeMap<String, serde_json::Value> = [
+        ("i".to_owned(), json!(1)),
+        ("node_1".to_owned(), json!("n1")),
+        ("n".to_owned(), json!(3)),
+    ]
+    .into();
     let sub = |s: &str| weft_sim::simulate::substitute_vars(&json!(s), &vars);
     assert_eq!(sub("${node_${i}}"), json!("n1"));
     assert_eq!(sub("${n}"), json!(3));
@@ -145,10 +170,18 @@ fn a_view_pattern_joins_rows_and_an_absent_row_must_have_no_match() {
     let mut sess = Session::new(&cat, &cov, bound_emits(&cat));
     sess.begin(0, 1).unwrap();
     let open = |label: &str| weft_sim::walk::Request {
-        cmd: cat.commands.iter().position(|c| c.name.to_string() == "demo.box.OpenBox").unwrap(),
+        cmd: cat
+            .commands
+            .iter()
+            .position(|c| c.name.to_string() == "demo.box.OpenBox")
+            .unwrap(),
         actor: Some(0),
         caller: None,
-        input: [("label".to_owned(), ess_primitives::node::Node::Text(label.into()))].into(),
+        input: [(
+            "label".to_owned(),
+            ess_primitives::node::Node::Text(label.into()),
+        )]
+        .into(),
         force: None,
     };
     let pattern = |text: &str| -> experiment::Pattern { ess_yaml::from_str(text).unwrap() };
@@ -182,7 +215,11 @@ fn explore_from_a_setup_reaches_what_an_empty_store_cannot_and_names_the_guard_t
     let dir = fixture_from();
     let cat = Catalog::new(weft_sim::spec::load(&dir).expect("the fixture compiles"));
     let gid = |cmd: &str, outcome: &str| {
-        let c = cat.commands.iter().find(|c| c.name.to_string() == cmd).unwrap();
+        let c = cat
+            .commands
+            .iter()
+            .find(|c| c.name.to_string() == cmd)
+            .unwrap();
         c.outcomes.iter().find(|o| o.name == outcome).unwrap().gid
     };
     let run = |from: bool| {
@@ -194,22 +231,48 @@ fn explore_from_a_setup_reaches_what_an_empty_store_cannot_and_names_the_guard_t
             assert!(s.refusals.is_empty(), "{:?}", s.refusals);
             s.steps
         });
-        let config = Config { seed: 5, walks: 48, steps: 16, threads: 2, max_seconds: 50, setup, controllers: None, checks: Default::default() };
+        let config = Config {
+            seed: 5,
+            walks: 48,
+            steps: 16,
+            threads: 2,
+            max_seconds: 50,
+            setup,
+            controllers: None,
+            checks: Default::default(),
+        };
         explore::run(&cat, &cov, &cands, &config, None);
         let snap = cov.snapshot(&cat, true);
         let attempts = cov.inner.lock().unwrap().attempts.clone();
-        let gaps = weft_sim::report::gaps(&cat, &snap, &weft_sim::report::Locator::new(&dir), &attempts);
+        let gaps = weft_sim::report::gaps(
+            &cat,
+            &snap,
+            &weft_sim::report::Locator::new(&dir),
+            &attempts,
+        );
         (snap, gaps)
     };
     let never = |gaps: &serde_json::Value, cmd: &str| {
-        gaps["commands_never_accepted"].as_array().unwrap().iter().find(|n| n["command"] == cmd).cloned()
+        gaps["commands_never_accepted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["command"] == cmd)
+            .cloned()
     };
     let (empty, empty_gaps) = run(false);
     let (from, from_gaps) = run(true);
     let hits = |snap: &serde_json::Value, g: usize| snap["outcome_hits"][g].as_u64().unwrap();
 
-    assert_eq!(hits(&empty, gid("demo.shelf.Polish", "polished")), 0, "no random label is gold");
-    assert!(hits(&from, gid("demo.shelf.Polish", "polished")) > 0, "the setup's gold shelf is polished");
+    assert_eq!(
+        hits(&empty, gid("demo.shelf.Polish", "polished")),
+        0,
+        "no random label is gold"
+    );
+    assert!(
+        hits(&from, gid("demo.shelf.Polish", "polished")) > 0,
+        "the setup's gold shelf is polished"
+    );
     // From an empty store no shelf a walk makes is gold: Polish is blocked by the guard the setup
     // passes.
     let polish = never(&empty_gaps, "demo.shelf.Polish").unwrap();
@@ -221,10 +284,16 @@ fn explore_from_a_setup_reaches_what_an_empty_store_cannot_and_names_the_guard_t
     assert_eq!(from["info"]["setup_replay"]["walks_differ"], 0.0);
 
     for (snap, gaps) in [(&empty, &empty_gaps), (&from, &from_gaps)] {
-        assert!(hits(snap, gid("demo.shelf.Relabel", "relabelled")) > 0, "the label is copied from the shelf");
+        assert!(
+            hits(snap, gid("demo.shelf.Relabel", "relabelled")) > 0,
+            "the label is copied from the shelf"
+        );
         let jam = never(gaps, "demo.shelf.Jam").expect("Jam is never accepted");
         let class = jam["class"].as_str().unwrap();
-        assert!(class.starts_with("blocked-by:") && class.contains("shelf.yaml:"), "{jam}");
+        assert!(
+            class.starts_with("blocked-by:") && class.contains("shelf.yaml:"),
+            "{jam}"
+        );
         assert_eq!(jam["blocked_by"]["outcome"], "stuck", "{jam}");
     }
 }
@@ -247,12 +316,29 @@ fn a_setup_step_not_accepted_as_declared_fails_the_run() {
     };
     let path = |f: &str| dir.join(f).display().to_string();
     let ok = sim(&["simulate", "--experiment", &path("setup.yaml")]);
-    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    assert!(
+        ok.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ok.stderr)
+    );
     let bad = sim(&["simulate", "--experiment", &path("setup-refused.yaml")]);
     let stderr = String::from_utf8_lossy(&bad.stderr);
     assert_eq!(bad.status.code(), Some(3), "{stderr}");
-    assert!(stderr.contains("polish-nothing (demo.shelf.Polish) answered no-such-shelf"), "{stderr}");
-    let bad = sim(&["explore", "--walks", "2", "--steps", "2", "--threads", "1", "--from", &path("setup-refused.yaml")]);
+    assert!(
+        stderr.contains("polish-nothing (demo.shelf.Polish) answered no-such-shelf"),
+        "{stderr}"
+    );
+    let bad = sim(&[
+        "explore",
+        "--walks",
+        "2",
+        "--steps",
+        "2",
+        "--threads",
+        "1",
+        "--from",
+        &path("setup-refused.yaml"),
+    ]);
     let stderr = String::from_utf8_lossy(&bad.stderr);
     assert_eq!(bad.status.code(), Some(2), "{stderr}");
     assert!(stderr.contains("polish-nothing"), "{stderr}");
@@ -279,14 +365,22 @@ fn an_explore_run_cut_by_max_seconds_fails_and_still_writes_its_result() {
     let stderr = String::from_utf8_lossy(&cut.stderr);
     assert_eq!(cut.status.code(), Some(4), "{stderr}");
     assert!(stderr.contains("cut by --max-seconds"), "{stderr}");
-    assert!(out.join("result.json").is_file(), "the cut run still writes its result");
+    assert!(
+        out.join("result.json").is_file(),
+        "the cut run still writes its result"
+    );
     let whole = run(&["--walks", "8", "--max-seconds", "60"]);
-    assert!(whole.status.success(), "{}", String::from_utf8_lossy(&whole.stderr));
+    assert!(
+        whole.status.success(),
+        "{}",
+        String::from_utf8_lossy(&whole.stderr)
+    );
 }
 
 #[test]
 fn a_lost_binding_the_model_does_not_declare_is_refused() {
-    let err = weft_sim::spec::load_without(&fixture(), &["no-such-binding".to_owned()]).expect_err("unknown binding");
+    let err = weft_sim::spec::load_without(&fixture(), &["no-such-binding".to_owned()])
+        .expect_err("unknown binding");
     assert!(err.contains("0 of them are declared"), "{err}");
     assert!(weft_sim::spec::load_without(&fixture(), &[]).is_ok());
 }
@@ -301,7 +395,11 @@ fn settle_and_controller_ticks_start_walks_from_what_the_controllers_did() {
     let cat = Catalog::new(weft_sim::spec::load(&dir).expect("the fixture compiles"));
     let exp = experiment::load(&dir.join("setup.yaml")).unwrap();
     let gid = |cmd: &str, outcome: &str| {
-        let c = cat.commands.iter().find(|c| c.name.to_string() == cmd).unwrap();
+        let c = cat
+            .commands
+            .iter()
+            .find(|c| c.name.to_string() == cmd)
+            .unwrap();
         c.outcomes.iter().find(|o| o.name == outcome).unwrap().gid
     };
     let run = |settle: usize, share: f64| {
@@ -310,8 +408,21 @@ fn settle_and_controller_ticks_start_walks_from_what_the_controllers_did() {
         let s = weft_sim::simulate::record_setup(&cat, &cov, &cands, &exp, settle).unwrap();
         assert!(s.refusals.is_empty(), "{:?}", s.refusals);
         let info = (s.setup_steps, s.steps.len(), s.settle_ticks, s.settled_at);
-        let controllers = (share > 0.0).then(|| explore::WalkControllers { exp: exp.clone(), vars: s.vars.clone(), share });
-        let config = Config { seed: 5, walks: 32, steps: 16, threads: 2, max_seconds: 50, setup: Some(s.steps), controllers, checks: Default::default() };
+        let controllers = (share > 0.0).then(|| explore::WalkControllers {
+            exp: exp.clone(),
+            vars: s.vars.clone(),
+            share,
+        });
+        let config = Config {
+            seed: 5,
+            walks: 32,
+            steps: 16,
+            threads: 2,
+            max_seconds: 50,
+            setup: Some(s.steps),
+            controllers,
+            checks: Default::default(),
+        };
         explore::run(&cat, &cov, &cands, &config, None);
         (cov.snapshot(&cat, true), info)
     };
@@ -327,8 +438,15 @@ fn settle_and_controller_ticks_start_walks_from_what_the_controllers_did() {
     // Tick 0 places the setup's job; tick 1 has no work: settled.
     let (settled, info) = run(4, 0.0);
     assert_eq!(info, (1, 2, 2, Some(1)));
-    assert_eq!(hits(&settled, placed), 1, "the settle's placement counts once");
-    assert!(hits(&settled, finished) > 0, "walks start from the placed job");
+    assert_eq!(
+        hits(&settled, placed),
+        1,
+        "the settle's placement counts once"
+    );
+    assert!(
+        hits(&settled, finished) > 0,
+        "walks start from the placed job"
+    );
     assert_eq!(settled["info"]["setup_replay"]["walks_differ"], 0.0);
     assert_eq!(settled["info"]["setup_replay"]["controller_ticks"], 0.0);
 
@@ -336,7 +454,11 @@ fn settle_and_controller_ticks_start_walks_from_what_the_controllers_did() {
     assert!(hits(&ticked, placed) > 1, "ticks place the jobs walks add");
     assert!(hits(&ticked, finished) > hits(&settled, finished));
     let r = &ticked["info"]["setup_replay"];
-    assert!(r["controller_ticks"].as_f64().unwrap() > 0.0 && r["controller_sends"].as_f64().unwrap() > 0.0, "{r}");
+    assert!(
+        r["controller_ticks"].as_f64().unwrap() > 0.0
+            && r["controller_sends"].as_f64().unwrap() > 0.0,
+        "{r}"
+    );
 }
 
 // ---- system invariants inside explore -------------------------------------------------------
@@ -372,38 +494,73 @@ fn without_guard(from: &std::path::Path, file: &str, guard: &str) -> PathBuf {
 }
 
 fn checks(invariants: &[&str], every: usize, converge: usize) -> explore::Checks {
-    explore::Checks { invariants: invariants.iter().map(|s| (*s).to_owned()).collect(), every, converge }
+    explore::Checks {
+        invariants: invariants.iter().map(|s| (*s).to_owned()).collect(),
+        every,
+        converge,
+    }
 }
 
 /// Explores `dir` from an empty store (or from `exp`'s setup) with `checks`.
-fn explore_checked(cat: &Catalog, exp: Option<&experiment::Experiment>, checks: explore::Checks) -> serde_json::Value {
+fn explore_checked(
+    cat: &Catalog,
+    exp: Option<&experiment::Experiment>,
+    checks: explore::Checks,
+) -> serde_json::Value {
     let cov = Coverage::new(cat, "explore", 2);
     let cands = Candidates::default();
     let (setup, controllers) = match exp {
         Some(exp) => {
-            let s = weft_sim::simulate::record_setup(cat, &cov, &cands, exp, checks.converge).unwrap();
+            let s =
+                weft_sim::simulate::record_setup(cat, &cov, &cands, exp, checks.converge).unwrap();
             assert!(s.refusals.is_empty(), "{:?}", s.refusals);
-            let controllers = explore::WalkControllers { exp: exp.clone(), vars: s.vars.clone(), share: 0.0 };
+            let controllers = explore::WalkControllers {
+                exp: exp.clone(),
+                vars: s.vars.clone(),
+                share: 0.0,
+            };
             (Some(s.steps), Some(controllers))
         }
         None => (None, None),
     };
-    let config = Config { seed: 5, walks: 32, steps: 16, threads: 2, max_seconds: 50, setup, controllers, checks };
+    let config = Config {
+        seed: 5,
+        walks: 32,
+        steps: 16,
+        threads: 2,
+        max_seconds: 50,
+        setup,
+        controllers,
+        checks,
+    };
     explore::run(cat, &cov, &cands, &config, None);
     cov.snapshot(cat, true)
 }
 
 fn violations<'v>(snap: &'v serde_json::Value, kind: &str) -> Vec<&'v serde_json::Value> {
-    snap["violations"].as_array().unwrap().iter().filter(|v| v["kind"] == kind).collect()
+    snap["violations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|v| v["kind"] == kind)
+        .collect()
 }
 
 /// Replays the walk of `v` from the run's trace: no answer differs, and the replay's own checks
 /// find a system invariant violation again.
 fn replay_finds_it(cat: &Catalog, snap: &serde_json::Value, v: &serde_json::Value) {
     let walk = v["walk"].as_u64().unwrap();
-    let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap_or_else(|| panic!("no trace of walk {walk}"));
+    let trace = snap["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["walk"] == walk)
+        .unwrap_or_else(|| panic!("no trace of walk {walk}"));
     let step = v["step"].as_u64().unwrap() as usize;
-    assert!(trace["steps"].as_array().unwrap().len() >= step, "the trace reaches step {step}");
+    assert!(
+        trace["steps"].as_array().unwrap().len() >= step,
+        "the trace reaches step {step}"
+    );
     let cov = Coverage::new(cat, "replay", 1);
     let (differ, broken) = weft_sim::simulate::replay(cat, &cov, walk, trace, &[]).unwrap();
     assert_eq!(differ, 0, "the replay answers as the walk did");
@@ -415,21 +572,38 @@ fn replay_finds_it(cat: &Catalog, snap: &serde_json::Value, v: &serde_json::Valu
 /// step, and its trace replays it. With the guard, none; with the checks off, none reported.
 #[test]
 fn no_double_placement_is_checked_inside_explore_walks_and_replays() {
-    let view_checks = ["no-double-placement", "quota-conservation", "tenant-isolation"];
-    let guarded = Catalog::new(weft_sim::spec::load(&fixture_invariants()).expect("the fixture compiles"));
+    let view_checks = [
+        "no-double-placement",
+        "quota-conservation",
+        "tenant-isolation",
+    ];
+    let guarded =
+        Catalog::new(weft_sim::spec::load(&fixture_invariants()).expect("the fixture compiles"));
     let snap = explore_checked(&guarded, None, checks(&view_checks, 1, 0));
     assert_eq!(snap["violation_count"], 0, "{}", snap["violations"]);
 
-    let cat = Catalog::new(weft_sim::spec::load(&unguarded()).expect("the unguarded fixture compiles"));
+    let cat =
+        Catalog::new(weft_sim::spec::load(&unguarded()).expect("the unguarded fixture compiles"));
     let snap = explore_checked(&cat, None, checks(&view_checks, 1, 0));
     let found = violations(&snap, "no-double-placement");
     assert!(!found.is_empty(), "{}", snap["violations"]);
-    assert_eq!(found.len(), snap["violation_count"].as_u64().unwrap() as usize, "only no-double-placement");
+    assert_eq!(
+        found.len(),
+        snap["violation_count"].as_u64().unwrap() as usize,
+        "only no-double-placement"
+    );
     let v = found[0];
-    assert!(v["detail"].as_str().unwrap().starts_with("instance "), "{v}");
-    assert!(v["step"].as_u64().unwrap() >= 1 && v["seed"].as_u64().is_some(), "{v}");
+    assert!(
+        v["detail"].as_str().unwrap().starts_with("instance "),
+        "{v}"
+    );
+    assert!(
+        v["step"].as_u64().unwrap() >= 1 && v["seed"].as_u64().is_some(),
+        "{v}"
+    );
     // Once per walk: the state stays broken, the walk reports its first step.
-    let walks: std::collections::BTreeSet<u64> = found.iter().map(|v| v["walk"].as_u64().unwrap()).collect();
+    let walks: std::collections::BTreeSet<u64> =
+        found.iter().map(|v| v["walk"].as_u64().unwrap()).collect();
     assert_eq!(walks.len(), found.len());
     replay_finds_it(&cat, &snap, v);
 
@@ -442,23 +616,50 @@ fn no_double_placement_is_checked_inside_explore_walks_and_replays() {
 /// Unguarded: a second assignment; the trace holds the duplicate (`by: duplicate`).
 #[test]
 fn a_redelivered_command_is_sent_again_and_must_change_no_view() {
-    let guarded = Catalog::new(weft_sim::spec::load(&fixture_invariants()).expect("the fixture compiles"));
-    let assign = guarded.commands.iter().position(|c| c.name.to_string() == "weft.nodes.Assign").unwrap();
-    assert_eq!(guarded.redelivered.iter().copied().collect::<Vec<_>>(), vec![assign]);
+    let guarded =
+        Catalog::new(weft_sim::spec::load(&fixture_invariants()).expect("the fixture compiles"));
+    let assign = guarded
+        .commands
+        .iter()
+        .position(|c| c.name.to_string() == "weft.nodes.Assign")
+        .unwrap();
+    assert_eq!(
+        guarded.redelivered.iter().copied().collect::<Vec<_>>(),
+        vec![assign]
+    );
     let snap = explore_checked(&guarded, None, checks(&["idempotency"], 1, 0));
     assert_eq!(snap["violation_count"], 0, "{}", snap["violations"]);
-    assert!(snap["info"]["checks"]["duplicates"].as_f64().unwrap() > 0.0, "{}", snap["info"]);
+    assert!(
+        snap["info"]["checks"]["duplicates"].as_f64().unwrap() > 0.0,
+        "{}",
+        snap["info"]
+    );
 
-    let cat = Catalog::new(weft_sim::spec::load(&unguarded()).expect("the unguarded fixture compiles"));
+    let cat =
+        Catalog::new(weft_sim::spec::load(&unguarded()).expect("the unguarded fixture compiles"));
     let snap = explore_checked(&cat, None, checks(&["idempotency"], 1, 0));
     let found = violations(&snap, "idempotency");
     assert!(!found.is_empty(), "{}", snap["violations"]);
-    assert_eq!(found.len(), snap["violation_count"].as_u64().unwrap() as usize);
+    assert_eq!(
+        found.len(),
+        snap["violation_count"].as_u64().unwrap() as usize
+    );
     let v = found[0];
     assert_eq!(v["command"], "weft.nodes.Assign");
-    assert!(v["detail"].as_str().unwrap().contains("weft.nodes.Assignments: "), "{v}");
+    assert!(
+        v["detail"]
+            .as_str()
+            .unwrap()
+            .contains("weft.nodes.Assignments: "),
+        "{v}"
+    );
     let walk = v["walk"].as_u64().unwrap();
-    let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap();
+    let trace = snap["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["walk"] == walk)
+        .unwrap();
     let step = &trace["steps"][v["step"].as_u64().unwrap() as usize - 1];
     assert_eq!(step["by"], "duplicate", "{step}");
     replay_finds_it(&cat, &snap, v);
@@ -483,20 +684,43 @@ fn a_walk_whose_controllers_never_settle_is_a_no_convergence_violation() {
 
     let loops = experiment::load(&dir.join("loops.yaml")).unwrap();
     let cov = Coverage::new(&cat, "explore", 1);
-    let setup = weft_sim::simulate::record_setup(&cat, &cov, &Candidates::default(), &loops, 4).unwrap();
+    let setup =
+        weft_sim::simulate::record_setup(&cat, &cov, &Candidates::default(), &loops, 4).unwrap();
     assert_eq!(setup.settled_at, None);
-    assert_eq!(setup.violations.len(), 1, "the setup itself does not settle");
+    assert_eq!(
+        setup.violations.len(),
+        1,
+        "the setup itself does not settle"
+    );
     assert_eq!(setup.violations[0].kind, "no-convergence");
     let snap = explore_checked(&cat, Some(&loops), checks(&none, 0, 4));
     let found = violations(&snap, "no-convergence");
     assert!(!found.is_empty());
-    assert_eq!(found.len(), snap["violation_count"].as_u64().unwrap() as usize);
+    assert_eq!(
+        found.len(),
+        snap["violation_count"].as_u64().unwrap() as usize
+    );
     let v = found[0];
-    assert!(v["detail"].as_str().unwrap().starts_with("the controllers still had work after 4 ticks with no new input: reassigner "), "{v}");
+    assert!(
+        v["detail"].as_str().unwrap().starts_with(
+            "the controllers still had work after 4 ticks with no new input: reassigner "
+        ),
+        "{v}"
+    );
     // The convergence ticks are in the walk's trace (`by: converge`), so a replay sends them.
     let walk = v["walk"].as_u64().unwrap();
-    let trace = snap["traces"].as_array().unwrap().iter().find(|t| t["walk"] == walk).unwrap();
-    let ticks = trace["steps"].as_array().unwrap().iter().filter(|s| s["by"] == "converge").count();
+    let trace = snap["traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["walk"] == walk)
+        .unwrap();
+    let ticks = trace["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["by"] == "converge")
+        .count();
     assert!(ticks >= 4, "at least one refused Assign a tick: {ticks}");
 }
 
@@ -522,7 +746,12 @@ fn closed_link_setup(dir: &std::path::Path) -> (Vec<String>, Vec<weft_sim::cover
 fn closed_link_passes_when_the_guard_refuses_the_crossing() {
     let (refusals, violations) = closed_link_setup(&fixture_closed_link());
     assert_eq!(refusals.len(), 1, "{refusals:?}");
-    assert!(refusals[0].starts_with("f-in-a-again (weft.scheduling.PlaceInstance) answered crosses-closed-link"), "{refusals:?}");
+    assert!(
+        refusals[0].starts_with(
+            "f-in-a-again (weft.scheduling.PlaceInstance) answered crosses-closed-link"
+        ),
+        "{refusals:?}"
+    );
     assert!(violations.is_empty(), "{violations:?}");
 }
 
@@ -530,15 +759,31 @@ fn closed_link_passes_when_the_guard_refuses_the_crossing() {
 /// live placement in b, which a closed link joins; one violation, at that step.
 #[test]
 fn closed_link_fires_on_a_formation_placed_across_a_closed_link() {
-    let dir = without_guard(&fixture_closed_link(), "scheduling.yaml", "crosses-closed-link");
+    let dir = without_guard(
+        &fixture_closed_link(),
+        "scheduling.yaml",
+        "crosses-closed-link",
+    );
     let (refusals, violations) = closed_link_setup(&dir);
     assert!(refusals.is_empty(), "{refusals:?}");
     assert_eq!(violations.len(), 1, "{violations:?}");
     let v = &violations[0];
     assert_eq!(v.kind, "closed-link");
     assert_eq!(v.step, 8, "{v:?}");
-    assert!(v.detail.starts_with("formation 00000000-0000-4000-8000-0000000000f1: placements "), "{}", v.detail);
-    assert!(v.detail.contains("in group 00000000-0000-4000-8000-00000000000a") && v.detail.contains("in group 00000000-0000-4000-8000-00000000000b"), "{}", v.detail);
+    assert!(
+        v.detail
+            .starts_with("formation 00000000-0000-4000-8000-0000000000f1: placements "),
+        "{}",
+        v.detail
+    );
+    assert!(
+        v.detail
+            .contains("in group 00000000-0000-4000-8000-00000000000a")
+            && v.detail
+                .contains("in group 00000000-0000-4000-8000-00000000000b"),
+        "{}",
+        v.detail
+    );
 }
 
 // ---- search output: the climb, row by row ---------------------------------------------------
@@ -564,10 +809,19 @@ fn search_experiment(name: &str, edits: &[(&str, &str)]) -> PathBuf {
 
 fn search_command(name: &str, edits: &[(&str, &str)]) -> (std::process::Command, PathBuf) {
     let exp = search_experiment(name, edits);
-    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("search").join(name);
+    let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("search")
+        .join(name);
     let _ = std::fs::remove_dir_all(&out);
     let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_weft-sim"));
-    cmd.arg("simulate").arg("--spec").arg(fixture_search()).arg("--experiment").arg(&exp).arg("--out").arg(&out).args(["--threads", "2"]);
+    cmd.arg("simulate")
+        .arg("--spec")
+        .arg(fixture_search())
+        .arg("--experiment")
+        .arg(&exp)
+        .arg("--out")
+        .arg(&out)
+        .args(["--threads", "2"]);
     (cmd, out)
 }
 
@@ -576,8 +830,13 @@ fn search_command(name: &str, edits: &[(&str, &str)]) -> (std::process::Command,
 fn search_rows(name: &str, edits: &[(&str, &str)]) -> (Vec<serde_json::Value>, serde_json::Value) {
     let (mut cmd, out) = search_command(name, edits);
     let run = cmd.output().unwrap();
-    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-    let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
     let rows = result["search"].as_array().expect("search rows").clone();
     assert!(!rows.is_empty());
     (rows, result)
@@ -589,22 +848,37 @@ fn fit_rows(test: &str) -> Vec<serde_json::Value> {
 }
 
 fn exhaustive_rows(test: &str) -> Vec<serde_json::Value> {
-    search_rows(&format!("{test}-exhaustive"), &[("mode: fit", "mode: exhaustive")]).0
+    search_rows(
+        &format!("{test}-exhaustive"),
+        &[("mode: fit", "mode: exhaustive")],
+    )
+    .0
 }
 
 fn index_of(row: &serde_json::Value) -> Vec<u64> {
-    row["index"].as_array().unwrap_or_else(|| panic!("index: {row}")).iter().map(|i| i.as_u64().unwrap()).collect()
+    row["index"]
+        .as_array()
+        .unwrap_or_else(|| panic!("index: {row}"))
+        .iter()
+        .map(|i| i.as_u64().unwrap())
+        .collect()
 }
 
 /// Rows grouped by `round`, in order.
 fn rounds(rows: &[serde_json::Value]) -> Vec<Vec<&serde_json::Value>> {
     let mut out: Vec<Vec<&serde_json::Value>> = Vec::new();
     for row in rows {
-        let round = row["round"].as_u64().unwrap_or_else(|| panic!("round: {row}"));
+        let round = row["round"]
+            .as_u64()
+            .unwrap_or_else(|| panic!("round: {row}"));
         match out.last_mut() {
             Some(last) if last[0]["round"].as_u64() == Some(round) => last.push(row),
             _ => {
-                assert_eq!(round as usize, out.len() + 1, "rounds count from 1 in order: {row}");
+                assert_eq!(
+                    round as usize,
+                    out.len() + 1,
+                    "rounds count from 1 in order: {row}"
+                );
                 out.push(vec![row]);
             }
         }
@@ -616,20 +890,38 @@ fn rounds(rows: &[serde_json::Value]) -> Vec<Vec<&serde_json::Value>> {
 /// old ones.
 #[test]
 fn every_search_row_carries_the_climb_fields() {
-    for (mode, rows) in [("fit", fit_rows("fields")), ("exhaustive", exhaustive_rows("fields"))] {
+    for (mode, rows) in [
+        ("fit", fit_rows("fields")),
+        ("exhaustive", exhaustive_rows("fields")),
+    ] {
         for (i, row) in rows.iter().enumerate() {
-            for key in ["point", "kpis", "fitness", "feasible", "seq", "round", "index", "parent", "decision", "best", "walk"] {
-                assert!(row.get(key).is_some(), "{mode} row {i} lacks `{key}`: {row}");
+            for key in [
+                "point", "kpis", "fitness", "feasible", "seq", "round", "index", "parent",
+                "decision", "best", "walk",
+            ] {
+                assert!(
+                    row.get(key).is_some(),
+                    "{mode} row {i} lacks `{key}`: {row}"
+                );
             }
             assert_eq!(row["seq"], i + 1, "{mode}: {row}");
             assert_eq!(index_of(row).len(), 2, "one index per mutation axis: {row}");
             let decision = row["decision"].as_str().unwrap();
-            assert!(["start", "accepted", "rejected", "restart"].contains(&decision), "{mode}: {row}");
+            assert!(
+                ["start", "accepted", "rejected", "restart"].contains(&decision),
+                "{mode}: {row}"
+            );
         }
-        assert_eq!(rows.len(), 16, "{mode}: the fixture has 16 points and the budget covers them");
+        assert_eq!(
+            rows.len(),
+            16,
+            "{mode}: the fixture has 16 points and the budget covers them"
+        );
     }
     let exhaustive = exhaustive_rows("fields-rounds");
-    assert!(exhaustive.iter().all(|r| r["round"] == 1 && r["parent"].is_null()));
+    assert!(exhaustive
+        .iter()
+        .all(|r| r["round"] == 1 && r["parent"].is_null()));
 }
 
 /// Acceptance 2: the climb starts once, accepts at most one neighbour a round, and every
@@ -649,10 +941,16 @@ fn a_fit_climb_names_its_parent_and_accepts_at_most_one_neighbour_a_round() {
             current = round[0]["seq"].as_u64().unwrap();
             continue;
         }
-        let taken: Vec<_> = round.iter().filter(|r| r["decision"] == "accepted").collect();
+        let taken: Vec<_> = round
+            .iter()
+            .filter(|r| r["decision"] == "accepted")
+            .collect();
         assert!(taken.len() <= 1, "{round:?}");
         for row in &round {
-            assert!(row["decision"] == "accepted" || row["decision"] == "rejected", "{row}");
+            assert!(
+                row["decision"] == "accepted" || row["decision"] == "rejected",
+                "{row}"
+            );
             assert_eq!(row["parent"], current, "{row}");
             let (a, b) = (index_of(row), index_of(by_seq(current)));
             let steps: Vec<u64> = a.iter().zip(&b).map(|(x, y)| x.abs_diff(*y)).collect();
@@ -676,9 +974,15 @@ fn a_round_without_improvement_is_followed_by_an_evaluated_restart() {
     for (i, row) in rows.iter().enumerate() {
         if row["decision"] == "restart" {
             assert!(row["parent"].is_null(), "{row}");
-            assert!(row["kpis"]["steps"].as_u64().is_some_and(|s| s > 0), "its own KPIs: {row}");
+            assert!(
+                row["kpis"]["steps"].as_u64().is_some_and(|s| s > 0),
+                "its own KPIs: {row}"
+            );
             assert!(row["fitness"].is_number(), "{row}");
-            assert!(rows[..i].iter().all(|r| index_of(r) != index_of(row)), "a point not visited: {row}");
+            assert!(
+                rows[..i].iter().all(|r| index_of(r) != index_of(row)),
+                "a point not visited: {row}"
+            );
         }
     }
     let rounds = rounds(&rows);
@@ -686,19 +990,31 @@ fn a_round_without_improvement_is_followed_by_an_evaluated_restart() {
     for (r, round) in rounds.iter().enumerate().skip(1) {
         if round.iter().all(|row| row["decision"] == "rejected") {
             if let Some(next) = rounds.get(r + 1) {
-                assert_eq!(next[0]["decision"], "restart", "after round {}: {}", r + 1, next[0]);
+                assert_eq!(
+                    next[0]["decision"],
+                    "restart",
+                    "after round {}: {}",
+                    r + 1,
+                    next[0]
+                );
                 checked += 1;
             }
         }
     }
-    assert!(checked >= 1, "the fixture's climb finds a round without improvement");
+    assert!(
+        checked >= 1,
+        "the fixture's climb finds a round without improvement"
+    );
 }
 
 /// Acceptance 4: a budget smaller than the points bounds the rows, restarts counted.
 #[test]
 fn a_fit_budget_counts_its_restarts() {
     let (rows, _) = search_rows("fit-budget", &[("budget: 24", "budget: 15")]);
-    assert!(rows.iter().any(|r| r["decision"] == "restart"), "the run restarts");
+    assert!(
+        rows.iter().any(|r| r["decision"] == "restart"),
+        "the run restarts"
+    );
     assert!(rows.len() <= 15, "{} rows", rows.len());
 }
 
@@ -706,8 +1022,14 @@ fn a_fit_budget_counts_its_restarts() {
 /// while no row is feasible.
 #[test]
 fn best_is_the_largest_feasible_fitness_so_far() {
-    for (mode, rows) in [("fit", fit_rows("best")), ("exhaustive", exhaustive_rows("best"))] {
-        assert_eq!(rows[0]["feasible"], false, "{mode}: the fixture starts infeasible");
+    for (mode, rows) in [
+        ("fit", fit_rows("best")),
+        ("exhaustive", exhaustive_rows("best")),
+    ] {
+        assert_eq!(
+            rows[0]["feasible"], false,
+            "{mode}: the fixture starts infeasible"
+        );
         let mut best: Option<f64> = None;
         for row in &rows {
             if row["feasible"] == true {
@@ -727,7 +1049,10 @@ fn best_is_the_largest_feasible_fitness_so_far() {
 #[test]
 fn fit_walk_numbers_are_distinct_and_never_zero() {
     let rows = fit_rows("walks");
-    let walks: Vec<u64> = rows.iter().map(|r| r["walk"].as_u64().unwrap_or_else(|| panic!("walk: {r}"))).collect();
+    let walks: Vec<u64> = rows
+        .iter()
+        .map(|r| r["walk"].as_u64().unwrap_or_else(|| panic!("walk: {r}")))
+        .collect();
     assert!(!walks.contains(&0));
     let distinct: std::collections::BTreeSet<_> = walks.iter().collect();
     assert_eq!(distinct.len(), walks.len(), "{walks:?}");
@@ -736,8 +1061,14 @@ fn fit_walk_numbers_are_distinct_and_never_zero() {
 fn http_get(port: u16, path: &str) -> Option<String> {
     use std::io::{Read, Write};
     let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).ok()?;
-    write!(stream, "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n").ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+        .ok()?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+    )
+    .ok()?;
     let mut text = String::new();
     stream.read_to_string(&mut text).ok()?;
     let (head, body) = text.split_once("\r\n\r\n")?;
@@ -753,7 +1084,11 @@ fn the_search_header_is_live_before_the_first_row_and_written_with_the_result() 
     std::fs::create_dir_all(&dir).unwrap();
     let hold = dir.join("serve.hold");
     let _ = std::fs::remove_file(&hold);
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let (mut cmd, out) = search_command("serve", &[]);
     let log = dir.join("serve.stderr");
     cmd.args(["--serve", &format!("127.0.0.1:{port}"), "--exit-when-done"])
@@ -771,12 +1106,19 @@ fn the_search_header_is_live_before_the_first_row_and_written_with_the_result() 
         }
         if started.elapsed().as_secs() > 20 {
             let _ = child.kill();
-            panic!("no snapshot with info.search: {}", std::fs::read_to_string(&log).unwrap_or_default());
+            panic!(
+                "no snapshot with info.search: {}",
+                std::fs::read_to_string(&log).unwrap_or_default()
+            );
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     };
     std::fs::write(&hold, "").unwrap();
-    assert_eq!(snap["search"], serde_json::json!([]), "read before the first row");
+    assert_eq!(
+        snap["search"],
+        serde_json::json!([]),
+        "read before the first row"
+    );
     let expected = serde_json::json!({
         "mode": "fit",
         "seed": 7,
@@ -791,8 +1133,13 @@ fn the_search_header_is_live_before_the_first_row_and_written_with_the_result() 
     });
     assert_eq!(snap["info"]["search"], expected);
     let status = child.wait().unwrap();
-    assert!(status.success(), "{}", std::fs::read_to_string(&log).unwrap_or_default());
-    let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+    assert!(
+        status.success(),
+        "{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
     assert_eq!(result["info"]["search"], snap["info"]["search"]);
     assert_eq!(result["search"].as_array().map(Vec::len), Some(16));
 }
@@ -807,10 +1154,14 @@ fn a_fit_budget_of_zero_records_no_row() {
     let run = cmd.output().unwrap();
     let stderr = String::from_utf8_lossy(&run.stderr);
     if !run.status.success() {
-        assert!(stderr.contains("budget"), "a refusal names the budget: {stderr}");
+        assert!(
+            stderr.contains("budget"),
+            "a refusal names the budget: {stderr}"
+        );
         return;
     }
-    let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
     let rows = result["search"].as_array().expect("search rows");
     assert_eq!(rows.len(), 0, "budget 0 recorded rows: {rows:?}");
 }
@@ -820,7 +1171,9 @@ fn a_fit_budget_of_zero_records_no_row() {
 #[test]
 fn an_empty_search_hold_variable_does_not_hold_the_search() {
     let (mut cmd, _out) = search_command("adv-hold-empty", &[]);
-    cmd.env("WEFT_SIM_SEARCH_HOLD", "").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.env("WEFT_SIM_SEARCH_HOLD", "")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
     let mut child = cmd.spawn().unwrap();
     let started = std::time::Instant::now();
     loop {
@@ -831,7 +1184,10 @@ fn an_empty_search_hold_variable_does_not_hold_the_search() {
         if started.elapsed().as_secs() >= 10 {
             let _ = child.kill();
             let _ = child.wait();
-            panic!("the search still runs after {:?} with an empty WEFT_SIM_SEARCH_HOLD", started.elapsed());
+            panic!(
+                "the search still runs after {:?} with an empty WEFT_SIM_SEARCH_HOLD",
+                started.elapsed()
+            );
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -842,15 +1198,26 @@ fn an_empty_search_hold_variable_does_not_hold_the_search() {
 #[test]
 fn every_row_index_names_its_point_through_the_axes() {
     for name in ["adv-index-fit", "adv-index-exhaustive"] {
-        let edits: &[(&str, &str)] = if name.ends_with("exhaustive") { &[("mode: fit", "mode: exhaustive")] } else { &[] };
+        let edits: &[(&str, &str)] = if name.ends_with("exhaustive") {
+            &[("mode: fit", "mode: exhaustive")]
+        } else {
+            &[]
+        };
         let (rows, result) = search_rows(name, edits);
-        let axes = result["info"]["search"]["axes"].as_array().expect("info.search.axes");
+        let axes = result["info"]["search"]["axes"]
+            .as_array()
+            .expect("info.search.axes");
         for row in &rows {
             let index = index_of(row);
             assert_eq!(index.len(), axes.len(), "{row}");
             for (axis, i) in axes.iter().zip(&index) {
                 let value = &axis["values"][*i as usize];
-                assert_eq!(&row["point"][axis["name"].as_str().unwrap()], value, "{name}: axis {} index {i}: {row}", axis["name"]);
+                assert_eq!(
+                    &row["point"][axis["name"].as_str().unwrap()],
+                    value,
+                    "{name}: axis {} index {i}: {row}",
+                    axis["name"]
+                );
             }
         }
     }
@@ -861,14 +1228,27 @@ fn every_row_index_names_its_point_through_the_axes() {
 #[test]
 fn the_round_after_an_accepted_neighbour_climbs_from_it() {
     let (rows, result) = search_rows("adv-accepted-next", &[]);
-    let lens: Vec<u64> = result["info"]["search"]["axes"].as_array().unwrap().iter().map(|a| a["values"].as_array().unwrap().len() as u64).collect();
+    let lens: Vec<u64> = result["info"]["search"]["axes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["values"].as_array().unwrap().len() as u64)
+        .collect();
     let rounds = rounds(&rows);
     let mut checked = 0;
     for (r, round) in rounds.iter().enumerate() {
-        let Some(accepted) = round.iter().find(|row| row["decision"] == "accepted") else { continue };
-        let Some(next) = rounds.get(r + 1) else { continue };
+        let Some(accepted) = round.iter().find(|row| row["decision"] == "accepted") else {
+            continue;
+        };
+        let Some(next) = rounds.get(r + 1) else {
+            continue;
+        };
         let at = index_of(accepted);
-        let visited: Vec<Vec<u64>> = rounds[..=r].iter().flatten().map(|row| index_of(row)).collect();
+        let visited: Vec<Vec<u64>> = rounds[..=r]
+            .iter()
+            .flatten()
+            .map(|row| index_of(row))
+            .collect();
         let mut open = 0;
         for axis in 0..at.len() {
             for up in [false, true] {
@@ -886,29 +1266,47 @@ fn the_round_after_an_accepted_neighbour_climbs_from_it() {
             }
         }
         if open > 0 {
-            assert_ne!(next[0]["decision"], "restart", "seq {} accepted with {open} unvisited neighbours: {}", accepted["seq"], next[0]);
-            assert!(next.iter().all(|row| row["parent"] == accepted["seq"]), "{next:?}");
+            assert_ne!(
+                next[0]["decision"], "restart",
+                "seq {} accepted with {open} unvisited neighbours: {}",
+                accepted["seq"], next[0]
+            );
+            assert!(
+                next.iter().all(|row| row["parent"] == accepted["seq"]),
+                "{next:?}"
+            );
             checked += 1;
         }
     }
-    assert!(checked >= 3, "the fixture's climb continues from accepted points: {checked}");
+    assert!(
+        checked >= 3,
+        "the fixture's climb continues from accepted points: {checked}"
+    );
 }
 
 /// Docs: in an `exhaustive` run a row after the first is `accepted` exactly when it raised the
 /// best feasible fitness.
 #[test]
 fn an_exhaustive_row_is_accepted_exactly_when_it_raises_the_best() {
-    let (rows, _) = search_rows("adv-exhaustive-decision", &[("mode: fit", "mode: exhaustive")]);
+    let (rows, _) = search_rows(
+        "adv-exhaustive-decision",
+        &[("mode: fit", "mode: exhaustive")],
+    );
     assert_eq!(rows[0]["decision"], "start");
     let mut accepted = 0;
     for pair in rows.windows(2) {
         let (before, row) = (&pair[0], &pair[1]);
-        let raised = row["best"].as_f64().is_some_and(|b| before["best"].as_f64().is_none_or(|p| b > p));
+        let raised = row["best"]
+            .as_f64()
+            .is_some_and(|b| before["best"].as_f64().is_none_or(|p| b > p));
         let expected = if raised { "accepted" } else { "rejected" };
         assert_eq!(row["decision"], expected, "{row}");
         accepted += usize::from(raised);
     }
-    assert!(accepted >= 2, "the fixture's exhaustive run raises the best: {accepted}");
+    assert!(
+        accepted >= 2,
+        "the fixture's exhaustive run raises the best: {accepted}"
+    );
 }
 
 /// The search rows, `info.search` and the best point depend on the seed, not on `--threads`.
@@ -917,7 +1315,9 @@ fn search_rows_do_not_depend_on_threads() {
     let exp = search_experiment("adv-threads", &[]);
     let mut seen = Vec::new();
     for threads in ["1", "8"] {
-        let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("search").join(format!("adv-threads-{threads}"));
+        let out = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+            .join("search")
+            .join(format!("adv-threads-{threads}"));
         let _ = std::fs::remove_dir_all(&out);
         let run = std::process::Command::new(env!("CARGO_BIN_EXE_weft-sim"))
             .arg("simulate")
@@ -930,9 +1330,19 @@ fn search_rows_do_not_depend_on_threads() {
             .args(["--threads", threads])
             .output()
             .unwrap();
-        assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stderr));
-        let result: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap()).unwrap();
-        seen.push((result["search"].clone(), result["info"]["search"].clone(), result["run"]["result"]["best"].clone()));
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        let result: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(out.join("result.json")).unwrap())
+                .unwrap();
+        seen.push((
+            result["search"].clone(),
+            result["info"]["search"].clone(),
+            result["run"]["result"]["best"].clone(),
+        ));
     }
     assert_eq!(seen[0], seen[1]);
 }
@@ -1101,10 +1511,22 @@ fn the_player_page_inlines_markup_in_recorded_values_as_data() {
 #[test]
 fn a_search_weight_that_is_not_finite_is_refused_at_load() {
     for (name, weight) in [("inf", ".inf"), ("minus-inf", "-.inf"), ("nan", ".nan")] {
-        let path = search_experiment(&format!("weight-{name}"), &[("weights: {steps: 1}", &format!("weights: {{steps: {weight}}}"))]);
+        let path = search_experiment(
+            &format!("weight-{name}"),
+            &[(
+                "weights: {steps: 1}",
+                &format!("weights: {{steps: {weight}}}"),
+            )],
+        );
         let err = experiment::load(&path).expect_err(weight);
-        assert!(err.contains("weight") && err.contains("`steps`"), "{weight}: {err}");
+        assert!(
+            err.contains("weight") && err.contains("`steps`"),
+            "{weight}: {err}"
+        );
     }
-    let path = search_experiment("weight-finite", &[("weights: {steps: 1}", "weights: {steps: -2.5}")]);
+    let path = search_experiment(
+        "weight-finite",
+        &[("weights: {steps: 1}", "weights: {steps: -2.5}")],
+    );
     assert!(experiment::load(&path).is_ok());
 }

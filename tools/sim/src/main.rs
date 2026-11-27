@@ -78,7 +78,11 @@ fn parse() -> Result<Args, String> {
 
 impl Args {
     fn get(&self, key: &str, default: &str) -> String {
-        self.flags.get(key).cloned().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_owned())
+        self.flags
+            .get(key)
+            .cloned()
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| default.to_owned())
     }
     fn num(&self, key: &str, default: u64) -> Result<u64, String> {
         match self.flags.get(key) {
@@ -91,7 +95,7 @@ impl Args {
     }
 }
 
-fn load(spec_dir: &PathBuf) -> Result<(Catalog, f64), String> {
+fn load(spec_dir: &std::path::Path) -> Result<(Catalog, f64), String> {
     load_without(spec_dir, &[])
 }
 
@@ -101,7 +105,11 @@ fn load_without(spec_dir: &std::path::Path, lost: &[String]) -> Result<(Catalog,
 
 /// As `load_without`, with every unbounded binding retry bounded at `retry_bound` attempts (0:
 /// the spec as written).
-fn load_bounded(spec_dir: &std::path::Path, lost: &[String], retry_bound: u32) -> Result<(Catalog, f64), String> {
+fn load_bounded(
+    spec_dir: &std::path::Path,
+    lost: &[String],
+    retry_bound: u32,
+) -> Result<(Catalog, f64), String> {
     let started = Instant::now();
     let (ir, bounded) = spec::load_with(spec_dir, lost, (retry_bound > 0).then_some(retry_bound))?;
     let mut cat = Catalog::new(ir);
@@ -114,7 +122,11 @@ fn load_bounded(spec_dir: &std::path::Path, lost: &[String], retry_bound: u32) -
 /// the spec retries without bound.
 const DEFAULT_RETRY_BOUND: u64 = 16;
 
-fn start_live(args: &Args, cat: &Arc<Catalog>, cov: &Arc<Coverage>) -> Result<Option<Arc<serve::Live>>, String> {
+fn start_live(
+    args: &Args,
+    cat: &Arc<Catalog>,
+    cov: &Arc<Coverage>,
+) -> Result<Option<Arc<serve::Live>>, String> {
     if !args.has("serve") {
         return Ok(None);
     }
@@ -145,7 +157,12 @@ fn start_live(args: &Args, cat: &Arc<Catalog>, cov: &Arc<Coverage>) -> Result<Op
     Ok(Some(live))
 }
 
-fn finish(args: &Args, live: Option<Arc<serve::Live>>, snap: serde_json::Value, violations: usize) -> ExitCode {
+fn finish(
+    args: &Args,
+    live: Option<Arc<serve::Live>>,
+    snap: serde_json::Value,
+    violations: usize,
+) -> ExitCode {
     if let Some(live) = live {
         *live.last.lock().expect("live") = Some(snap);
         if !args.has("exit-when-done") {
@@ -182,13 +199,30 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
     config.checks.every = args.num("check-every", 1)? as usize;
     config.checks.converge = settle;
     if let Some(list) = args.flags.get("invariants").filter(|v| !v.is_empty()) {
-        config.checks.invariants = list.split(',').map(str::trim).filter(|s| !s.is_empty() && *s != "none").map(ToOwned::to_owned).collect();
-        if let Some(bad) = config.checks.invariants.iter().find(|i| !simulate::ALL_INVARIANTS.contains(&i.as_str())) {
-            return Err(format!("--invariants: no invariant `{bad}` (known: {})", simulate::ALL_INVARIANTS.join(", ")));
+        config.checks.invariants = list
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && *s != "none")
+            .map(ToOwned::to_owned)
+            .collect();
+        if let Some(bad) = config
+            .checks
+            .invariants
+            .iter()
+            .find(|i| !simulate::ALL_INVARIANTS.contains(&i.as_str()))
+        {
+            return Err(format!(
+                "--invariants: no invariant `{bad}` (known: {})",
+                simulate::ALL_INVARIANTS.join(", ")
+            ));
         }
     }
     let share: f64 = match args.flags.get("controller-share") {
-        Some(v) if !v.is_empty() => v.parse().ok().filter(|p| (0.0..=1.0).contains(p)).ok_or(format!("--controller-share {v}: a number from 0 to 1"))?,
+        Some(v) if !v.is_empty() => v
+            .parse()
+            .ok()
+            .filter(|p| (0.0..=1.0).contains(p))
+            .ok_or(format!("--controller-share {v}: a number from 0 to 1"))?,
         _ => 0.0,
     };
     let patterns: Vec<experiment::Pattern> = match args.flags.get("patterns") {
@@ -200,13 +234,25 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
     };
     let from = args.flags.get("from").filter(|v| !v.is_empty()).cloned();
     if from.is_none() && (settle > 0 || share > 0.0) {
-        return Err("--settle and --controller-share run the controllers of the --from experiment".into());
+        return Err(
+            "--settle and --controller-share run the controllers of the --from experiment".into(),
+        );
     }
-    let exp = from.as_ref().map(|f| experiment::load(&PathBuf::from(f))).transpose()?;
-    let lost = exp.as_ref().map(|e| e.lost_bindings.clone()).unwrap_or_default();
-    let retry_bound = args.num("retry-bound", DEFAULT_RETRY_BOUND)?.min(u64::from(u32::MAX)) as u32;
+    let exp = from
+        .as_ref()
+        .map(|f| experiment::load(&PathBuf::from(f)))
+        .transpose()?;
+    let lost = exp
+        .as_ref()
+        .map(|e| e.lost_bindings.clone())
+        .unwrap_or_default();
+    let retry_bound = args
+        .num("retry-bound", DEFAULT_RETRY_BOUND)?
+        .min(u64::from(u32::MAX)) as u32;
     if retry_bound == 1 {
-        return Err("--retry-bound 1: a bound is at least 2 attempts (0: the spec as written)".into());
+        return Err(
+            "--retry-bound 1: a bound is at least 2 attempts (0: the spec as written)".into(),
+        );
     }
     let (cat, compile_s) = load_bounded(&spec_dir, &lost, retry_bound)?;
     let cat = Arc::new(cat);
@@ -250,17 +296,27 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
             }
         }
         if share > 0.0 || settle > 0 {
-            config.controllers = Some(explore::WalkControllers { exp: exp.clone(), vars: setup.vars.clone(), share });
+            config.controllers = Some(explore::WalkControllers {
+                exp: exp.clone(),
+                vars: setup.vars.clone(),
+                share,
+            });
         }
         config.setup = Some(setup.steps);
     }
     {
         let mut inner = cov.inner.lock().expect("coverage");
-        inner.info.insert("spec".into(), json!(spec_dir.display().to_string()));
+        inner
+            .info
+            .insert("spec".into(), json!(spec_dir.display().to_string()));
         inner.info.insert("compile_s".into(), json!(compile_s));
         inner.info.insert("seed".into(), json!(config.seed));
-        inner.info.insert("walks_requested".into(), json!(config.walks));
-        inner.info.insert("steps_per_walk".into(), json!(config.steps));
+        inner
+            .info
+            .insert("walks_requested".into(), json!(config.walks));
+        inner
+            .info
+            .insert("steps_per_walk".into(), json!(config.steps));
     }
     let live = start_live(args, &cat, &cov)?;
     let started = Instant::now();
@@ -321,7 +377,10 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
         );
     }
     if violations > 0 {
-        eprintln!("weft-sim: violations by kind: {}", snap["violations_by_kind"]);
+        eprintln!(
+            "weft-sim: violations by kind: {}",
+            snap["violations_by_kind"]
+        );
         // The first violation of each kind, with the command that replays its walk.
         let mut shown = std::collections::BTreeSet::new();
         for v in snap["violations"].as_array().into_iter().flatten() {
@@ -335,12 +394,19 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
             }
         }
     }
-    eprintln!("weft-sim: wrote {}/result.json and {}/index.html", out.display(), out.display());
+    eprintln!(
+        "weft-sim: wrote {}/result.json and {}/index.html",
+        out.display(),
+        out.display()
+    );
     let code = finish(args, live, snap, violations);
     if cut && violations == 0 {
         // Hardening pass 3, finding D1, decided A: a run that did not finish its walks must not
         // read as passed; its counts depend on the host's load.
-        eprintln!("weft-sim: explore failed: cut by --max-seconds before all {} walks ran", config.walks);
+        eprintln!(
+            "weft-sim: explore failed: cut by --max-seconds before all {} walks ran",
+            config.walks
+        );
         return Ok(ExitCode::from(4));
     }
     Ok(code)
@@ -348,7 +414,13 @@ fn explore_cmd(args: &Args) -> Result<ExitCode, String> {
 
 fn simulate_cmd(args: &Args) -> Result<ExitCode, String> {
     let spec_dir = PathBuf::from(args.get("spec", "ess"));
-    let file = PathBuf::from(args.flags.get("experiment").cloned().filter(|v| !v.is_empty()).ok_or("--experiment FILE is required")?);
+    let file = PathBuf::from(
+        args.flags
+            .get("experiment")
+            .cloned()
+            .filter(|v| !v.is_empty())
+            .ok_or("--experiment FILE is required")?,
+    );
     let out = PathBuf::from(args.get("out", "sim/out/simulate"));
     let threads = args.num("threads", 4)?.clamp(1, 8) as usize;
     let mut exp = experiment::load(&file)?;
@@ -384,17 +456,33 @@ fn simulate_cmd(args: &Args) -> Result<ExitCode, String> {
         "weft-sim simulate {}: {} steps in {:.1} s; checks {}; violations {}",
         exp.name, snap["steps"], run_s, snap["run"]["result"]["checks"], violations
     );
-    eprintln!("weft-sim: wrote {}/result.json and {}/index.html", out.display(), out.display());
+    eprintln!(
+        "weft-sim: wrote {}/result.json and {}/index.html",
+        out.display(),
+        out.display()
+    );
     // The run whose timeline is recorded (the only one, or the search's best point): a setup step
     // it did not accept as declared fails the run.
     let result = &snap["run"]["result"];
-    let kpis = if result["kpis"].is_object() { &result["kpis"] } else { &result["best"]["kpis"] };
+    let kpis = if result["kpis"].is_object() {
+        &result["kpis"]
+    } else {
+        &result["best"]["kpis"]
+    };
     let refused: Vec<String> = kpis["setup_refusals"]
         .as_array()
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(ToOwned::to_owned)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(ToOwned::to_owned))
+                .collect()
+        })
         .unwrap_or_default();
     if !refused.is_empty() {
-        eprintln!("weft-sim: {} setup steps not accepted as declared:\n  {}", refused.len(), refused.join("\n  "));
+        eprintln!(
+            "weft-sim: {} setup steps not accepted as declared:\n  {}",
+            refused.len(),
+            refused.join("\n  ")
+        );
         let _ = finish(args, live, snap, violations);
         return Ok(ExitCode::from(3));
     }
@@ -403,10 +491,16 @@ fn simulate_cmd(args: &Args) -> Result<ExitCode, String> {
 
 fn replay_cmd(args: &Args) -> Result<ExitCode, String> {
     let spec_dir = PathBuf::from(args.get("spec", "ess"));
-    let trace = args.flags.get("trace").cloned().filter(|v| !v.is_empty()).ok_or("--trace FILE is required")?;
+    let trace = args
+        .flags
+        .get("trace")
+        .cloned()
+        .filter(|v| !v.is_empty())
+        .ok_or("--trace FILE is required")?;
     let walk = args.num("walk", 0)?;
     let text = std::fs::read_to_string(&trace).map_err(|e| format!("{trace}: {e}"))?;
-    let result: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{trace}: {e}"))?;
+    let result: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("{trace}: {e}"))?;
     let steps = result["traces"]
         .as_array()
         .and_then(|t| t.iter().find(|w| w["walk"].as_u64() == Some(walk)))
@@ -417,7 +511,10 @@ fn replay_cmd(args: &Args) -> Result<ExitCode, String> {
         .as_str()
         .map(|f| experiment::load(&PathBuf::from(f)))
         .transpose()?;
-    let lost = exp.as_ref().map(|e| e.lost_bindings.clone()).unwrap_or_default();
+    let lost = exp
+        .as_ref()
+        .map(|e| e.lost_bindings.clone())
+        .unwrap_or_default();
     let retry_bound = result["run"]["retry_bound"].as_u64().unwrap_or(0) as u32;
     let (cat, _) = load_bounded(&spec_dir, &lost, retry_bound)?;
     let cov = Coverage::new(&cat, "replay", 1);
@@ -429,14 +526,28 @@ fn replay_cmd(args: &Args) -> Result<ExitCode, String> {
         None => Vec::new(),
     };
     let (differ, _) = simulate::replay(&cat, &cov, walk, &steps, &setup)?;
-    Ok(if differ == 0 { ExitCode::SUCCESS } else { ExitCode::from(2) })
+    Ok(if differ == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(2)
+    })
 }
 
 fn relate_cmd(args: &Args) -> Result<ExitCode, String> {
     let spec_dir = PathBuf::from(args.get("spec", "ess"));
-    let base_file = args.flags.get("base").filter(|v| !v.is_empty()).map(PathBuf::from).ok_or("--base EXPERIMENT is required")?;
+    let base_file = args
+        .flags
+        .get("base")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .ok_or("--base EXPERIMENT is required")?;
     let list = |key: &str| -> std::collections::BTreeSet<String> {
-        args.get(key, "").split(',').map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned).collect()
+        args.get(key, "")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
+            .collect()
     };
     let steps = |key: &str| -> Result<Vec<experiment::Step>, String> {
         match args.flags.get(key).filter(|v| !v.is_empty()) {
@@ -454,14 +565,22 @@ fn relate_cmd(args: &Args) -> Result<ExitCode, String> {
     let mut derived = base.clone();
     derived.name = format!("{} (derived)", base.name);
     let before = derived.setup.len();
-    derived.setup.retain(|s| !s.label.as_deref().is_some_and(|l| drop.iter().any(|d| l.contains(d.as_str()))));
+    derived.setup.retain(|s| {
+        !s.label
+            .as_deref()
+            .is_some_and(|l| drop.iter().any(|d| l.contains(d.as_str())))
+    });
     let dropped = before - derived.setup.len();
     derived.setup.extend(steps("derived-append")?);
     if !drop.is_empty() {
         eprintln!("weft-sim relate: --drop left out {dropped} setup steps of {before}");
     }
     let settle = args.num("settle", 0)? as usize;
-    let scope = weft_sim::relate::Scope { hide: list("hide"), observe: list("observe"), ignore: list("ignore") };
+    let scope = weft_sim::relate::Scope {
+        hide: list("hide"),
+        observe: list("observe"),
+        ignore: list("ignore"),
+    };
     let (cat, compile_s) = load_without(&spec_dir, &base.lost_bindings)?;
     let started = Instant::now();
     let mut named = Vec::new();
@@ -471,7 +590,11 @@ fn relate_cmd(args: &Args) -> Result<ExitCode, String> {
         let n = weft_sim::relate::name_rows(&run.rows, &run.vars, &scope);
         eprintln!(
             "weft-sim relate: {label} {}: {} requests, {} views, {} rows, {} out of scope",
-            exp.name, run.requests, n.views.len(), n.rows, n.dropped
+            exp.name,
+            run.requests,
+            n.views.len(),
+            n.rows,
+            n.dropped
         );
         for r in &run.refusals {
             eprintln!("  {label}: not accepted as declared: {r}");
@@ -490,7 +613,11 @@ fn relate_cmd(args: &Args) -> Result<ExitCode, String> {
     if diff.len() > 20 {
         println!("... {} more", diff.len() - 20);
     }
-    Ok(if diff.is_empty() { ExitCode::SUCCESS } else { ExitCode::from(1) })
+    Ok(if diff.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    })
 }
 
 fn describe_cmd(args: &Args) -> Result<ExitCode, String> {
@@ -502,8 +629,24 @@ fn describe_cmd(args: &Args) -> Result<ExitCode, String> {
         cat.ir.system(), cat.commands.len(), cat.outcomes_total, cat.entities.len(), cat.states_total,
         cat.transitions_total, cat.actors.len(), cat.ir.bindings().len()
     );
-    for c in cat.commands.iter().filter(|c| c.name.to_string().starts_with(&prefix)) {
-        let actors: Vec<String> = c.actors.iter().map(|a| cat.actors[*a].name.to_string().rsplit('.').next().unwrap_or("").to_owned()).collect();
+    for c in cat
+        .commands
+        .iter()
+        .filter(|c| c.name.to_string().starts_with(&prefix))
+    {
+        let actors: Vec<String> = c
+            .actors
+            .iter()
+            .map(|a| {
+                cat.actors[*a]
+                    .name
+                    .to_string()
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            })
+            .collect();
         println!("\n{}  [{}]", c.name, actors.join(", "));
         for f in &c.input {
             println!("    in  {}: {}", f.name, f.type_ref);
@@ -512,18 +655,60 @@ fn describe_cmd(args: &Args) -> Result<ExitCode, String> {
             println!("    out {}: {}", f.name, f.type_ref);
         }
         for t in &c.ties {
-            println!("    tie input.{} = {}.{} (the row input.{} names)", t.input_field, cat.entities[t.ent].name, t.row_field, t.via);
+            println!(
+                "    tie input.{} = {}.{} (the row input.{} names)",
+                t.input_field, cat.entities[t.ent].name, t.row_field, t.via
+            );
         }
         for t in &c.set_ties {
-            let pairs: Vec<String> = t.pairs.iter().map(|(r, i)| format!("input.{i} = {r}")).collect();
-            let states: Vec<&str> = t.states.iter().map(|s| cat.entities[t.ent].states[*s].as_str()).collect();
-            println!("    needs a {} row [{}]: {}", cat.entities[t.ent].name, states.join(", "), pairs.join(", "));
+            let pairs: Vec<String> = t
+                .pairs
+                .iter()
+                .map(|(r, i)| format!("input.{i} = {r}"))
+                .collect();
+            let states: Vec<&str> = t
+                .states
+                .iter()
+                .map(|s| cat.entities[t.ent].states[*s].as_str())
+                .collect();
+            println!(
+                "    needs a {} row [{}]: {}",
+                cat.entities[t.ent].name,
+                states.join(", "),
+                pairs.join(", ")
+            );
         }
         let command = &cat.ir.commands()[&c.name];
         for (o, out) in c.outcomes.iter().zip(&command.outcomes) {
-            let emits: Vec<String> = out.emits.iter().map(|e| e.name().to_string().rsplit('.').next().unwrap_or("").to_owned()).collect();
-            let subject = out.subject.as_ref().map(|s| format!("{} {}", s.effect.verb(), s.entity.name())).unwrap_or_default();
-            println!("    -> {} ({}{}) {} {}", o.name, o.kind, if o.error { ", error" } else { "" }, subject, if emits.is_empty() { String::new() } else { format!("emits {}", emits.join(" ")) });
+            let emits: Vec<String> = out
+                .emits
+                .iter()
+                .map(|e| {
+                    e.name()
+                        .to_string()
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("")
+                        .to_owned()
+                })
+                .collect();
+            let subject = out
+                .subject
+                .as_ref()
+                .map(|s| format!("{} {}", s.effect.verb(), s.entity.name()))
+                .unwrap_or_default();
+            println!(
+                "    -> {} ({}{}) {} {}",
+                o.name,
+                o.kind,
+                if o.error { ", error" } else { "" },
+                subject,
+                if emits.is_empty() {
+                    String::new()
+                } else {
+                    format!("emits {}", emits.join(" "))
+                }
+            );
         }
     }
     if prefix.is_empty() || prefix == "bindings" {

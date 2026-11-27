@@ -18,9 +18,12 @@ pub type Input = BTreeMap<String, Node>;
 /// identity names no row.
 pub const FRESH_BASE: u64 = 500_000_000_000;
 
+/// The cached candidate inputs, keyed by command and the outcome whose guard they are directed at.
+type CandidateMap = HashMap<(usize, Option<usize>), Arc<Vec<Input>>>;
+
 #[derive(Default)]
 pub struct Candidates {
-    map: RwLock<HashMap<(usize, Option<usize>), Arc<Vec<Input>>>>,
+    map: RwLock<CandidateMap>,
 }
 
 impl Candidates {
@@ -36,8 +39,8 @@ impl Candidates {
             .and_then(|o| info.outcomes[o].guard.as_ref())
             .into_iter()
             .collect();
-        let mut found = witness::candidates(&cat.ir, command, &guards, Distinction::PLAIN)
-            .unwrap_or_default();
+        let mut found =
+            witness::candidates(&cat.ir, command, &guards, Distinction::PLAIN).unwrap_or_default();
         found.truncate(12);
         let found = Arc::new(found);
         self.map
@@ -86,7 +89,10 @@ pub fn harvest(ir: &EssIr, t: &ResolvedTypeRef, node: &Node, out: &mut Vec<(Stri
                         }
                     }
                 }
-                (ess_compiler::ir::ResolvedBody::Newtype { .. }, Node::Text(_) | Node::Number(_)) => {
+                (
+                    ess_compiler::ir::ResolvedBody::Newtype { .. },
+                    Node::Text(_) | Node::Number(_),
+                ) => {
                     out.push((name.name().to_string(), node.clone()));
                 }
                 _ => {}

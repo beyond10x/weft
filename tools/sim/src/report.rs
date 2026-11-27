@@ -60,7 +60,9 @@ impl Locator {
 
     /// The line of `child` (an outcome or a state) inside the block of `parent`.
     pub fn within(&self, parent: &str, child: &str) -> String {
-        let Some((f, l)) = self.find(parent) else { return parent.to_owned() };
+        let Some((f, l)) = self.find(parent) else {
+            return parent.to_owned();
+        };
         let lines = &self.files[f].1;
         let indent = lines[l].len() - lines[l].trim_start().len();
         for (i, line) in lines.iter().enumerate().skip(l + 1) {
@@ -69,7 +71,12 @@ impl Locator {
             if !trimmed.is_empty() && this <= indent && trimmed.starts_with("- name:") {
                 break;
             }
-            if trimmed.contains(&format!("name: {child}")) || trimmed == format!("- {child}") || trimmed.starts_with(&format!("{child}:")) || trimmed.contains(&format!(" {child},")) || trimmed.contains(&format!("[{child}")) {
+            if trimmed.contains(&format!("name: {child}"))
+                || trimmed == format!("- {child}")
+                || trimmed.starts_with(&format!("{child}:"))
+                || trimmed.contains(&format!(" {child},"))
+                || trimmed.contains(&format!("[{child}"))
+            {
                 return format!("{}:{}", self.files[f].0, i + 1);
             }
         }
@@ -92,7 +99,13 @@ pub type Attempts = HashMap<(usize, String), [u64; 2]>;
 /// the guard holds on every reachable row, an inferred specification gap. `rare`: the refusals
 /// vary, too few requests named live rows, the command was never sent, or the one refusal is an
 /// input-only guard or an existence check (the drawing or an upstream command is the gap).
-pub fn classify(cat: &Catalog, ci: usize, attempts: &Attempts, loc: &Locator, errors: &[Value]) -> Vec<(&'static str, Value)> {
+pub fn classify(
+    cat: &Catalog,
+    ci: usize,
+    attempts: &Attempts,
+    loc: &Locator,
+    errors: &[Value],
+) -> Vec<(&'static str, Value)> {
     let c = &cat.commands[ci];
     let mut all: std::collections::BTreeMap<String, u64> = Default::default();
     let mut live: std::collections::BTreeMap<String, u64> = Default::default();
@@ -107,14 +120,30 @@ pub fn classify(cat: &Catalog, ci: usize, attempts: &Attempts, loc: &Locator, er
     let sent: u64 = all.values().sum();
     let live_total: u64 = live.values().sum();
     let (class, why, blocked) = if sent == 0 {
-        ("rare".to_owned(), "never sent in a walk".to_owned(), Value::Null)
+        (
+            "rare".to_owned(),
+            "never sent in a walk".to_owned(),
+            Value::Null,
+        )
     } else if live_total < BLOCKED_MIN_REQUESTS {
-        ("rare".to_owned(), format!("{live_total} of {sent} requests named a live row for every identity input"), Value::Null)
-    } else if live.len() == 1 && c.outcomes.iter().any(|o| o.name == *live.keys().next().expect("one") && !o.reads_rows) {
+        (
+            "rare".to_owned(),
+            format!("{live_total} of {sent} requests named a live row for every identity input"),
+            Value::Null,
+        )
+    } else if live.len() == 1
+        && c.outcomes
+            .iter()
+            .any(|o| o.name == *live.keys().next().expect("one") && !o.reads_rows)
+    {
         // An input-only guard (other inputs pass it) or an existence check (the row comes from an
         // upstream command): the gap is the drawing or the upstream command, not this guard.
         let (label, n) = live.iter().next().expect("one");
-        let o = c.outcomes.iter().find(|o| o.name == *label).expect("declared");
+        let o = c
+            .outcomes
+            .iter()
+            .find(|o| o.name == *label)
+            .expect("declared");
         ("rare".to_owned(), format!("all {n} requests naming live rows answered `{label}` ({}): a guard no stored row decides", o.kind), Value::Null)
     } else if live.len() == 1 {
         let (label, n) = live.iter().next().expect("one");
@@ -123,11 +152,14 @@ pub fn classify(cat: &Catalog, ci: usize, attempts: &Attempts, loc: &Locator, er
         // An interpreter answer names the guard it could not decide: "the guard of `<cmd>/<outcome>`".
         let guard = (!declared)
             .then(|| {
-                errors.iter().filter(|e| e["command"] == name.as_str() && e["kind"] == label.as_str()).find_map(|e| {
-                    let text = e["example"].as_str()?;
-                    let rest = text.split(&format!("`{name}/")).nth(1)?;
-                    rest.split('`').next().map(ToOwned::to_owned)
-                })
+                errors
+                    .iter()
+                    .filter(|e| e["command"] == name.as_str() && e["kind"] == label.as_str())
+                    .find_map(|e| {
+                        let text = e["example"].as_str()?;
+                        let rest = text.split(&format!("`{name}/")).nth(1)?;
+                        rest.split('`').next().map(ToOwned::to_owned)
+                    })
             })
             .flatten();
         let at = match (&guard, declared) {
@@ -135,14 +167,23 @@ pub fn classify(cat: &Catalog, ci: usize, attempts: &Attempts, loc: &Locator, er
             (Some(g), false) => loc.within(&name, g),
             (None, false) => loc.name(&name),
         };
-        let what = guard.as_ref().map_or_else(|| label.clone(), |g| format!("{label} at {g}"));
+        let what = guard
+            .as_ref()
+            .map_or_else(|| label.clone(), |g| format!("{label} at {g}"));
         (
             format!("blocked-by:{at}"),
             format!("all {n} requests naming live rows answered `{what}`"),
             json!({"outcome": what, "at": at, "requests": n, "declared": declared}),
         )
     } else {
-        ("rare".to_owned(), format!("{} different refusals over {live_total} requests naming live rows", live.len()), Value::Null)
+        (
+            "rare".to_owned(),
+            format!(
+                "{} different refusals over {live_total} requests naming live rows",
+                live.len()
+            ),
+            Value::Null,
+        )
     };
     vec![
         ("refusals", json!(all)),
@@ -159,7 +200,10 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
     let hits = snap["outcome_hits"].as_array().cloned().unwrap_or_default();
     let hit = |gid: usize| hits.get(gid).and_then(Value::as_u64).unwrap_or(0);
     let state_hits = snap["state_hits"].as_array().cloned().unwrap_or_default();
-    let tr_hits = snap["transition_hits"].as_array().cloned().unwrap_or_default();
+    let tr_hits = snap["transition_hits"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let mut top: Vec<Value> = Vec::new();
     for v in snap["violations"].as_array().into_iter().flatten().take(10) {
         top.push(json!({"kind": "violation", "what": v["detail"], "at": loc.name(v["command"].as_str().unwrap_or("")), "walk": v["walk"], "seed": v["seed"]}));
@@ -176,11 +220,22 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
         top.push(json!({"kind": "unsupported", "what": e["why"], "command": e["command"], "at": loc.name(e["command"].as_str().unwrap_or("")), "count": e["count"], "walk": e["walk"], "seed": e["seed"]}));
     }
     // Bindings that used the whole retry bound explore set: the spec would retry them without end.
-    for e in snap["errors"].as_array().into_iter().flatten().filter(|e| e["kind"] == "unbounded-retry").take(10) {
+    for e in snap["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["kind"] == "unbounded-retry")
+        .take(10)
+    {
         top.push(json!({"kind": "unbounded-retry", "what": e["why"], "command": e["command"], "at": loc.name(e["command"].as_str().unwrap_or("")), "count": e["count"], "walk": e["walk"], "seed": e["seed"]}));
     }
     // Requests no declared outcome covers: the command has no branch for them.
-    let mut undeclared: Vec<&Value> = snap["errors"].as_array().into_iter().flatten().filter(|e| e["kind"] == "undeclared").collect();
+    let mut undeclared: Vec<&Value> = snap["errors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|e| e["kind"] == "undeclared")
+        .collect();
     undeclared.sort_by(|a, b| b["count"].as_u64().cmp(&a["count"].as_u64()));
     for e in undeclared.iter().take(8) {
         top.push(json!({"kind": "undeclared-refusal", "what": format!("{}: a request no declared outcome covers", e["command"].as_str().unwrap_or("")), "command": e["command"], "at": loc.name(e["command"].as_str().unwrap_or("")), "count": e["count"], "walk": e["walk"], "seed": e["seed"]}));
@@ -203,7 +258,7 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
             }
         }
     }
-    never.sort_by(|a, b| b.1.cmp(&a.1));
+    never.sort_by_key(|n| std::cmp::Reverse(n.1));
     let never_list: Vec<Value> = never
         .iter()
         .map(|(ci, waiting)| {
@@ -218,7 +273,14 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
             row
         })
         .collect();
-    let blocked: Vec<&Value> = never_list.iter().filter(|n| n["class"].as_str().is_some_and(|c| c.starts_with("blocked-by:"))).collect();
+    let blocked: Vec<&Value> = never_list
+        .iter()
+        .filter(|n| {
+            n["class"]
+                .as_str()
+                .is_some_and(|c| c.starts_with("blocked-by:"))
+        })
+        .collect();
     for n in blocked.iter().take(10) {
         top.push(json!({"kind": "command-blocked-by", "what": format!("{} is always refused `{}` ({} requests naming live rows)", n["command"].as_str().unwrap_or(""), n["blocked_by"]["outcome"].as_str().unwrap_or(""), n["blocked_by"]["requests"]), "at": n["blocked_by"]["at"]}));
     }
@@ -230,9 +292,13 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
         let name = e.name.to_string();
         let mut any = false;
         for (si, s) in e.states.iter().enumerate() {
-            let n = state_hits.get(e.state_base + si).and_then(Value::as_u64).unwrap_or(0);
+            let n = state_hits
+                .get(e.state_base + si)
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             if n == 0 {
-                unreached_states.push(json!({"entity": name, "state": s, "at": loc.within(&name, s)}));
+                unreached_states
+                    .push(json!({"entity": name, "state": s, "at": loc.within(&name, s)}));
             } else {
                 any = true;
             }
@@ -241,9 +307,14 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
             never_created.push(json!({"entity": name, "at": loc.name(&name)}));
         }
         for (ti, t) in e.transitions.iter().enumerate() {
-            let n = tr_hits.get(e.tr_base + ti).and_then(Value::as_u64).unwrap_or(0);
+            let n = tr_hits
+                .get(e.tr_base + ti)
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             if n == 0 {
-                unreached_transitions.push(json!({"entity": name, "transition": t.name, "at": loc.within(&name, &t.name)}));
+                unreached_transitions.push(
+                    json!({"entity": name, "transition": t.name, "at": loc.within(&name, &t.name)}),
+                );
             }
         }
     }
@@ -284,13 +355,20 @@ pub fn write(
 ) -> Result<Value, String> {
     std::fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut snap = cov.snapshot(cat, true);
-    let attempts = cov.inner.lock().map(|i| i.attempts.clone()).unwrap_or_default();
+    let attempts = cov
+        .inner
+        .lock()
+        .map(|i| i.attempts.clone())
+        .unwrap_or_default();
     let gaps = gaps(cat, &snap, loc, &attempts);
     snap["gaps"] = gaps;
     snap["run"] = run;
     let mut per_entity: HashMap<String, Value> = HashMap::new();
     for e in &cat.entities {
-        per_entity.insert(e.name.to_string(), json!({"at": loc.name(&e.name.to_string())}));
+        per_entity.insert(
+            e.name.to_string(),
+            json!({"at": loc.name(&e.name.to_string())}),
+        );
     }
     snap["locations"] = json!(per_entity);
     // Per command its accepted (non-error) answers and the outcomes reached, by name.
@@ -308,7 +386,10 @@ pub fn write(
                 reached.insert(o.name.clone(), json!(h));
             }
         }
-        accepted.insert(c.name.to_string(), json!({"accepted": n, "outcomes": reached}));
+        accepted.insert(
+            c.name.to_string(),
+            json!({"accepted": n, "outcomes": reached}),
+        );
     }
     snap["commands"] = Value::Object(accepted);
     // `outcome_hits[gid]` is the outcome `outcome_names[gid]` (command/outcome).
@@ -322,6 +403,7 @@ pub fn write(
     let text = serde_json::to_string_pretty(&snap).map_err(|e| e.to_string())?;
     std::fs::write(out.join("result.json"), text).map_err(|e| e.to_string())?;
     let model = cat.model_json();
-    std::fs::write(out.join("index.html"), page(&model, &snap, false)).map_err(|e| e.to_string())?;
+    std::fs::write(out.join("index.html"), page(&model, &snap, false))
+        .map_err(|e| e.to_string())?;
     Ok(snap)
 }

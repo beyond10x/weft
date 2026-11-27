@@ -17,7 +17,9 @@ use crate::coverage::{Coverage, FeedLine, Violation};
 use crate::experiment::Experiment;
 use crate::gen::{self, Candidates, Input, FRESH_BASE};
 use crate::rng::Rng;
-use crate::simulate::{fingerprint, idempotency_check, replay_setup, system_checks, Recorded, Ticker, ALL_INVARIANTS};
+use crate::simulate::{
+    fingerprint, idempotency_check, replay_setup, system_checks, Recorded, Ticker, ALL_INVARIANTS,
+};
 use crate::walk::{bound_emits, Answer, Request, Session};
 
 pub const EPOCH: u64 = 32;
@@ -39,7 +41,16 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self { seed: 1, walks: 64, steps: 60, threads: 4, max_seconds: 280, setup: None, controllers: None, checks: Checks::default() }
+        Self {
+            seed: 1,
+            walks: 64,
+            steps: 60,
+            threads: 4,
+            max_seconds: 280,
+            setup: None,
+            controllers: None,
+            checks: Checks::default(),
+        }
     }
 }
 
@@ -59,7 +70,11 @@ pub struct Checks {
 
 impl Default for Checks {
     fn default() -> Self {
-        Self { invariants: ALL_INVARIANTS.iter().map(|s| (*s).to_owned()).collect(), every: 1, converge: 0 }
+        Self {
+            invariants: ALL_INVARIANTS.iter().map(|s| (*s).to_owned()).collect(),
+            every: 1,
+            converge: 0,
+        }
     }
 }
 
@@ -103,7 +118,12 @@ pub fn fresh(cat: &Catalog, t: &ess_compiler::ir::ResolvedTypeRef, rng: &mut Rng
 }
 
 /// Caller attributes for `actor`, drawn from what the walk holds.
-pub fn caller_for(sess: &Session, actor: usize, input: Option<&Input>, rng: &mut Rng) -> Option<BTreeMap<String, Node>> {
+pub fn caller_for(
+    sess: &Session,
+    actor: usize,
+    input: Option<&Input>,
+    rng: &mut Rng,
+) -> Option<BTreeMap<String, Node>> {
     let cat = sess.cat;
     let attributes = &cat.actors[actor].attributes;
     if attributes.is_empty() {
@@ -111,10 +131,16 @@ pub fn caller_for(sess: &Session, actor: usize, input: Option<&Input>, rng: &mut
     }
     let mut values = BTreeMap::new();
     for a in attributes {
-        let chosen: Vec<Node> = input.map(|i| i.values().cloned().collect()).unwrap_or_default();
+        let chosen: Vec<Node> = input
+            .map(|i| i.values().cloned().collect())
+            .unwrap_or_default();
         let value = input
             .and_then(|i| i.get(&a.name).cloned())
-            .or_else(|| a.type_ref.declared().and_then(|t| sess.pool_pick_linked(&t.name().to_string(), &chosen, rng)))
+            .or_else(|| {
+                a.type_ref
+                    .declared()
+                    .and_then(|t| sess.pool_pick_linked(&t.name().to_string(), &chosen, rng))
+            })
             .or_else(|| fresh(cat, &a.type_ref, rng))
             .or_else(|| gen::mint(&cat.ir, &a.type_ref, 1));
         if let Some(v) = value {
@@ -151,13 +177,20 @@ pub fn input_for(
         }
         minted
     } else {
-        let pick = if directed.is_some() { rng.below(list.len().min(3)) } else { rng.below(list.len()) };
+        let pick = if directed.is_some() {
+            rng.below(list.len().min(3))
+        } else {
+            rng.below(list.len())
+        };
         list[pick].clone()
     };
     let kind = target.map(|t| info.outcomes[t].kind).unwrap_or("");
     let mut chosen: Vec<Node> = Vec::new();
     for f in &info.input {
-        let list = matches!(f.type_ref.required(), ess_compiler::ir::ResolvedTypeRef::List { .. });
+        let list = matches!(
+            f.type_ref.required(),
+            ess_compiler::ir::ResolvedTypeRef::List { .. }
+        );
         let t = match f.type_ref.required() {
             ess_compiler::ir::ResolvedTypeRef::Declared { name } => name,
             ess_compiler::ir::ResolvedTypeRef::List { of } => match of.required() {
@@ -218,7 +251,9 @@ pub fn is_timestamp(cat: &Catalog, t: &ess_compiler::ir::ResolvedTypeRef) -> boo
     let mut current = t.required().clone();
     for _ in 0..40 {
         match current {
-            ResolvedTypeRef::Primitive { name } => return name == ess_domain::types::Primitive::Timestamp,
+            ResolvedTypeRef::Primitive { name } => {
+                return name == ess_domain::types::Primitive::Timestamp
+            }
             ResolvedTypeRef::Declared { ref name } => match &cat.ir.named_type(name).body {
                 ResolvedBody::Newtype { of, .. } => current = of.required().clone(),
                 _ => return false,
@@ -246,23 +281,44 @@ fn guide(sess: &Session, cmd: usize, input: &mut Input, rng: &mut Rng) {
     let cat = sess.cat;
     let info = &cat.commands[cmd];
     for f in &info.input {
-        if is_timestamp(cat, &f.type_ref) && rng.chance(0.6) && (input.contains_key(&f.name) || !f.type_ref.is_optional()) {
+        if is_timestamp(cat, &f.type_ref)
+            && rng.chance(0.6)
+            && (input.contains_key(&f.name) || !f.type_ref.is_optional())
+        {
             input.insert(f.name.clone(), near_now(sess, rng));
         }
     }
     let scalar = |name: &str| {
-        info.input.iter().any(|f| f.name == name && !matches!(f.type_ref.required(), ess_compiler::ir::ResolvedTypeRef::List { .. }))
+        info.input.iter().any(|f| {
+            f.name == name
+                && !matches!(
+                    f.type_ref.required(),
+                    ess_compiler::ir::ResolvedTypeRef::List { .. }
+                )
+        })
     };
     for st in &info.set_ties {
         if !rng.chance(0.5) {
             continue;
         }
-        let chosen: Vec<Node> = st.pairs.iter().filter_map(|(_, i)| input.get(i).cloned()).collect();
-        let Some(id) = sess.live_pick(st.ent, &chosen, &st.states, rng) else { continue };
-        let Some(row) = sess.rows.get(&(st.ent, id.clone())) else { continue };
+        let chosen: Vec<Node> = st
+            .pairs
+            .iter()
+            .filter_map(|(_, i)| input.get(i).cloned())
+            .collect();
+        let Some(id) = sess.live_pick(st.ent, &chosen, &st.states, rng) else {
+            continue;
+        };
+        let Some(row) = sess.rows.get(&(st.ent, id.clone())) else {
+            continue;
+        };
         let ident = &cat.entities[st.ent].identity_field;
         for (row_field, input_field) in &st.pairs {
-            let value = if row_field == ident { Some(id.clone()) } else { row.known(row_field).cloned() };
+            let value = if row_field == ident {
+                Some(id.clone())
+            } else {
+                row.known(row_field).cloned()
+            };
             if let Some(v) = value.filter(|_| scalar(input_field)) {
                 input.insert(input_field.clone(), v);
             }
@@ -272,8 +328,12 @@ fn guide(sess: &Session, cmd: usize, input: &mut Input, rng: &mut Rng) {
         if !rng.chance(0.85) {
             continue;
         }
-        let Some(id) = input.get(&tie.via) else { continue };
-        let Some(row) = sess.rows.get(&(tie.ent, id.clone())) else { continue };
+        let Some(id) = input.get(&tie.via) else {
+            continue;
+        };
+        let Some(row) = sess.rows.get(&(tie.ent, id.clone())) else {
+            continue;
+        };
         let value = if tie.row_field == cat.entities[tie.ent].identity_field {
             Some(id.clone())
         } else {
@@ -305,7 +365,11 @@ pub fn choose(
             }
             let unreached = info.outcomes.iter().filter(|o| prior[o.gid] == 0).count();
             let mut w = 1.0 + 6.0 * unreached as f64 / info.outcomes.len() as f64;
-            let missing = info.id_inputs.iter().filter(|(_, t)| !sess.pool.contains_key(t)).count();
+            let missing = info
+                .id_inputs
+                .iter()
+                .filter(|(_, t)| !sess.pool.contains_key(t))
+                .count();
             if missing > 0 {
                 w *= 0.03;
             } else if info.creates {
@@ -366,13 +430,29 @@ pub fn feed_line(sess: &Session, req: &Request, answer: &Answer) -> FeedLine {
         command: cat.commands[req.cmd].name.to_string(),
         actor: req
             .actor
-            .map(|a| cat.actors[a].name.to_string().rsplit('.').next().unwrap_or("").to_owned())
+            .map(|a| {
+                cat.actors[a]
+                    .name
+                    .to_string()
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            })
             .unwrap_or_default(),
         outcome: answer.label.clone(),
         events: answer
             .events
             .iter()
-            .map(|e| e.event.name().to_string().rsplit('.').next().unwrap_or("").to_owned())
+            .map(|e| {
+                e.event
+                    .name()
+                    .to_string()
+                    .rsplit('.')
+                    .next()
+                    .unwrap_or("")
+                    .to_owned()
+            })
             .collect(),
         note: if answer.bound.is_empty() {
             String::new()
@@ -383,7 +463,11 @@ pub fn feed_line(sess: &Session, req: &Request, answer: &Answer) -> FeedLine {
                 .map(|g| {
                     let (c, o) = cat.outcome_of[*g];
                     let command = cat.commands[c].name.to_string();
-                    format!("{}/{}", command.rsplit('.').next().unwrap_or(""), cat.commands[c].outcomes[o].name)
+                    format!(
+                        "{}/{}",
+                        command.rsplit('.').next().unwrap_or(""),
+                        cat.commands[c].outcomes[o].name
+                    )
                 })
                 .collect();
             format!("+{} by bindings: {}", answer.bound.len(), names.join(" "))
@@ -403,8 +487,21 @@ pub struct SetupStart<'a> {
 /// entry (with `at`, the clock before the send, and `by` for a controller's), the feed. `pre` is
 /// the abstract state before it; the state after is returned.
 #[allow(clippy::too_many_arguments)]
-fn record_step(sess: &mut Session, req: &Request, answer: &Answer, live: bool, at: u64, by: Option<&str>, pre: u64, feed: bool) -> u64 {
-    let tally = sess.findings.attempts.entry((req.cmd, answer.label.clone())).or_default();
+fn record_step(
+    sess: &mut Session,
+    req: &Request,
+    answer: &Answer,
+    live: bool,
+    at: u64,
+    by: Option<&str>,
+    pre: u64,
+    feed: bool,
+) -> u64 {
+    let tally = sess
+        .findings
+        .attempts
+        .entry((req.cmd, answer.label.clone()))
+        .or_default();
     tally[0] += 1;
     if live {
         tally[1] += 1;
@@ -439,7 +536,14 @@ fn check_views(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, comma
     let started = Instant::now();
     for (check, _) in system_checks(sess, &checks.invariants) {
         if !check.ok && seen.reported.insert(check.name.clone()) {
-            let v = Violation { kind: check.name, detail: check.detail.chars().take(600).collect(), command: command.to_owned(), walk: sess.walk, seed: sess.seed, step: sess.step };
+            let v = Violation {
+                kind: check.name,
+                detail: check.detail.chars().take(600).collect(),
+                command: command.to_owned(),
+                walk: sess.walk,
+                seed: sess.seed,
+                step: sess.step,
+            };
             sess.findings.violations.push(v);
         }
     }
@@ -450,14 +554,26 @@ fn check_views(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, comma
 /// a command an `at_least_once` binding invokes is sent again (it must change no view), then the
 /// view invariants. The duplicate goes in the trace with `by: duplicate`.
 #[allow(clippy::too_many_arguments)]
-fn check_step(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, req: &Request, answer: &Answer, live: bool, pre: &mut u64, feed: bool, sent: &mut [u32]) -> bool {
+fn check_step(
+    sess: &mut Session,
+    checks: &Checks,
+    seen: &mut WalkChecks,
+    req: &Request,
+    answer: &Answer,
+    live: bool,
+    pre: &mut u64,
+    feed: bool,
+    sent: &mut [u32],
+) -> bool {
     seen.steps += 1;
     if checks.every == 0 || !seen.steps.is_multiple_of(checks.every) {
         return false;
     }
     let cat = sess.cat;
     let name = cat.commands[req.cmd].name.to_string();
-    let duplicate = checks.invariants.contains("idempotency") && cat.redelivered.contains(&req.cmd) && crate::simulate::accepted(cat, answer);
+    let duplicate = checks.invariants.contains("idempotency")
+        && cat.redelivered.contains(&req.cmd)
+        && crate::simulate::accepted(cat, answer);
     if duplicate {
         let started = Instant::now();
         let before = fingerprint(sess);
@@ -471,7 +587,14 @@ fn check_step(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, req: &
         let check = idempotency_check(&before, &fingerprint(sess), &again);
         *pre = record_step(sess, req, &again, live, at, Some("duplicate"), *pre, feed);
         if !check.ok && seen.reported.insert(format!("idempotency {name}")) {
-            let v = Violation { kind: "idempotency".into(), detail: check.detail.chars().take(600).collect(), command: name.clone(), walk: sess.walk, seed: sess.seed, step: sess.step };
+            let v = Violation {
+                kind: "idempotency".into(),
+                detail: check.detail.chars().take(600).collect(),
+                command: name.clone(),
+                walk: sess.walk,
+                seed: sess.seed,
+                step: sess.step,
+            };
             sess.findings.violations.push(v);
         }
         seen.nanos += started.elapsed().as_nanos() as u64;
@@ -481,10 +604,20 @@ fn check_step(sess: &mut Session, checks: &Checks, seen: &mut WalkChecks, req: &
 }
 
 /// Adds a walk's check counts and seconds to the run's `info.checks`.
-fn count_checks(sess: &Session, seen: &WalkChecks, duplicates: u64, converge: Option<(u64, u64, u64)>) {
+fn count_checks(
+    sess: &Session,
+    seen: &WalkChecks,
+    duplicates: u64,
+    converge: Option<(u64, u64, u64)>,
+) {
     let mut inner = sess.cov.inner.lock().expect("coverage");
-    let entry = inner.info.entry("checks".into()).or_insert_with(|| serde_json::json!({}));
-    let add = |v: &mut serde_json::Value, k: &str, n: f64| v[k] = serde_json::json!(v[k].as_f64().unwrap_or(0.0) + n);
+    let entry = inner
+        .info
+        .entry("checks".into())
+        .or_insert_with(|| serde_json::json!({}));
+    let add = |v: &mut serde_json::Value, k: &str, n: f64| {
+        v[k] = serde_json::json!(v[k].as_f64().unwrap_or(0.0) + n)
+    };
     add(entry, "seconds", seen.nanos as f64 / 1e9);
     add(entry, "duplicates", duplicates as f64);
     if let Some((ticks, sends, nanos)) = converge {
@@ -518,7 +651,9 @@ pub fn run_walk<'a>(
     if let Err(e) = sess.begin(walk, seed) {
         let mut inner = sess.cov.inner.lock().expect("coverage");
         if inner.notes.len() < 20 {
-            inner.notes.push(format!("walk {walk}: begin_scenario refused: {e}"));
+            inner
+                .notes
+                .push(format!("walk {walk}: begin_scenario refused: {e}"));
         }
         return;
     }
@@ -532,7 +667,9 @@ pub fn run_walk<'a>(
         sess.step = 0;
         sess.findings = Default::default();
         from.replays.walks.fetch_add(1, Ordering::Relaxed);
-        from.replays.nanos.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        from.replays
+            .nanos
+            .fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
         if differ {
             from.replays.differ.fetch_add(1, Ordering::Relaxed);
         }
@@ -560,12 +697,15 @@ pub fn run_walk<'a>(
                 if let Some(e) = error {
                     let mut inner = sess.cov.inner.lock().expect("coverage");
                     if inner.notes.len() < 20 {
-                        inner.notes.push(format!("walk {walk}: controller tick: {e}"));
+                        inner
+                            .notes
+                            .push(format!("walk {walk}: controller tick: {e}"));
                     }
                 }
                 if let Some(r) = from.map(|f| f.replays) {
                     r.ticks.fetch_add(1, Ordering::Relaxed);
-                    r.tick_sends.fetch_add(sends.len() as u64, Ordering::Relaxed);
+                    r.tick_sends
+                        .fetch_add(sends.len() as u64, Ordering::Relaxed);
                 }
                 for (req, answer, at) in &sends {
                     sent[req.cmd] += 1;
@@ -581,14 +721,18 @@ pub fn run_walk<'a>(
                 continue;
             }
         }
-        let Some(req) = choose(sess, cands, prior, &sent, &mut rng) else { break };
+        let Some(req) = choose(sess, cands, prior, &sent, &mut rng) else {
+            break;
+        };
         let live = sess.names_live_rows(req.cmd, &req.input);
         let at = sess.clock.0.load(Ordering::Relaxed);
         let answer = sess.send(&req);
         sent[req.cmd] += 1;
         own_steps += 1;
         pre = record_step(sess, &req, &answer, live, at, None, pre, feed);
-        if check_step(sess, checks, &mut seen, &req, &answer, live, &mut pre, feed, &mut sent) {
+        if check_step(
+            sess, checks, &mut seen, &req, &answer, live, &mut pre, feed, &mut sent,
+        ) {
             duplicates += 1;
         }
         if let Some(p) = pattern {
@@ -607,7 +751,8 @@ pub fn run_walk<'a>(
         r.tick_nanos.fetch_add(tick_nanos, Ordering::Relaxed);
         r.walk_steps.fetch_add(own_steps, Ordering::Relaxed);
         let total = walk_started.elapsed().as_nanos() as u64;
-        r.walk_nanos.fetch_add(total.saturating_sub(tick_nanos), Ordering::Relaxed);
+        r.walk_nanos
+            .fetch_add(total.saturating_sub(tick_nanos), Ordering::Relaxed);
     }
     // Convergence: the controllers with no new input, until a tick without work.
     let mut converge = None;
@@ -622,17 +767,33 @@ pub fn run_walk<'a>(
             (Some(e), _) => {
                 let mut inner = sess.cov.inner.lock().expect("coverage");
                 if inner.notes.len() < 20 {
-                    inner.notes.push(format!("walk {walk}: convergence tick: {e}"));
+                    inner
+                        .notes
+                        .push(format!("walk {walk}: convergence tick: {e}"));
                 }
             }
             (None, None) => {
-                let detail = format!("the controllers still had work after {} ticks with no new input: {}", settle.ticks, settle.busy);
-                let v = Violation { kind: "no-convergence".into(), detail, command: String::new(), walk, seed, step: sess.step };
+                let detail = format!(
+                    "the controllers still had work after {} ticks with no new input: {}",
+                    settle.ticks, settle.busy
+                );
+                let v = Violation {
+                    kind: "no-convergence".into(),
+                    detail,
+                    command: String::new(),
+                    walk,
+                    seed,
+                    step: sess.step,
+                };
                 sess.findings.violations.push(v);
             }
             (None, Some(_)) => {}
         }
-        converge = Some((settle.ticks as u64, settle.sends.len() as u64, started.elapsed().as_nanos() as u64));
+        converge = Some((
+            settle.ticks as u64,
+            settle.sends.len() as u64,
+            started.elapsed().as_nanos() as u64,
+        ));
     }
     // The store the walk (and its convergence ticks) ends with.
     if checks.every > 0 {
@@ -659,7 +820,11 @@ pub fn run(
     let emits = bound_emits(cat);
     let scratch = Coverage::new(cat, "setup-replay", 1);
     let replays = Replays::default();
-    let from = config.setup.as_ref().map(|steps| SetupStart { steps, scratch: &scratch, replays: &replays });
+    let from = config.setup.as_ref().map(|steps| SetupStart {
+        steps,
+        scratch: &scratch,
+        replays: &replays,
+    });
     std::thread::scope(|scope| {
         for t in 0..threads {
             let barrier = &barrier;
@@ -671,18 +836,24 @@ pub fn run(
             scope.spawn(move || {
                 let mut sess = Session::new(cat, cov, emits);
                 sess.guided = true;
-                let mut ticker = config.controllers.as_ref().filter(|c| c.share > 0.0 || config.checks.converge > 0).and_then(|c| {
-                    match Ticker::new(cat, cov, cands, &c.exp, &c.vars) {
+                let mut ticker = config
+                    .controllers
+                    .as_ref()
+                    .filter(|c| c.share > 0.0 || config.checks.converge > 0)
+                    .and_then(|c| match Ticker::new(cat, cov, cands, &c.exp, &c.vars) {
                         Ok(mut t) => {
                             t.share = c.share;
                             Some(t)
                         }
                         Err(e) => {
-                            cov.inner.lock().expect("coverage").notes.push(format!("controllers in walks: {e}"));
+                            cov.inner
+                                .lock()
+                                .expect("coverage")
+                                .notes
+                                .push(format!("controllers in walks: {e}"));
                             None
                         }
-                    }
-                });
+                    });
                 let mut epoch_start = 0;
                 while epoch_start < config.walks {
                     let end = (epoch_start + EPOCH).min(config.walks);
@@ -705,7 +876,19 @@ pub fn run(
                             break;
                         }
                         let seed = Rng::walk_seed(config.seed, w);
-                        run_walk(&mut sess, cands, &p, w, seed, config.steps, t == 0, pattern, from, ticker.as_mut(), &config.checks);
+                        run_walk(
+                            &mut sess,
+                            cands,
+                            &p,
+                            w,
+                            seed,
+                            config.steps,
+                            t == 0,
+                            pattern,
+                            from,
+                            ticker.as_mut(),
+                            &config.checks,
+                        );
                     }
                     epoch_start = end;
                 }
@@ -716,7 +899,10 @@ pub fn run(
         let walks = replays.walks.load(Ordering::Relaxed);
         let seconds = replays.nanos.load(Ordering::Relaxed) as f64 / 1e9;
         let mut inner = cov.inner.lock().expect("coverage");
-        let entry = inner.info.entry("setup_replay".into()).or_insert_with(|| serde_json::json!({"walks": 0, "seconds": 0.0, "walks_differ": 0}));
+        let entry = inner
+            .info
+            .entry("setup_replay".into())
+            .or_insert_with(|| serde_json::json!({"walks": 0, "seconds": 0.0, "walks_differ": 0}));
         let add = |v: &serde_json::Value, n: f64| serde_json::json!(v.as_f64().unwrap_or(0.0) + n);
         let load = |a: &AtomicU64| a.load(Ordering::Relaxed) as f64;
         entry["walks"] = add(&entry["walks"], walks as f64);
@@ -727,7 +913,10 @@ pub fn run(
         entry["walk_steps"] = add(&entry["walk_steps"], load(&replays.walk_steps));
         entry["controller_ticks"] = add(&entry["controller_ticks"], load(&replays.ticks));
         entry["controller_sends"] = add(&entry["controller_sends"], load(&replays.tick_sends));
-        entry["controller_seconds"] = add(&entry["controller_seconds"], load(&replays.tick_nanos) / 1e9);
+        entry["controller_seconds"] = add(
+            &entry["controller_seconds"],
+            load(&replays.tick_nanos) / 1e9,
+        );
     }
     if stop.load(Ordering::SeqCst) {
         let mut inner = cov.inner.lock().expect("coverage");

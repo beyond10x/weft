@@ -8,8 +8,9 @@
 use weft_types::behaviour::{Context, EnvironmentStorage, FormationStorage};
 use weft_types::formations::obligations::CreateEnvironmentBehavior;
 use weft_types::formations::{
-    CreateEnvironment, CreateEnvironmentOutcome, EnvironmentCreated, EnvironmentData, EnvironmentNameTaken,
-    EnvironmentOrigin, EnvironmentSnapshot, EnvironmentState, FormationState, FormationStateConflict, NoSuchFormation,
+    CreateEnvironment, CreateEnvironmentOutcome, EnvironmentCreated, EnvironmentData,
+    EnvironmentNameTaken, EnvironmentOrigin, EnvironmentSnapshot, EnvironmentState, FormationState,
+    FormationStateConflict, NoSuchFormation,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -19,24 +20,37 @@ use crate::context::mint;
 use crate::Ports;
 
 impl CreateEnvironmentBehavior for Ports {
-    fn create_environment(&mut self, input: CreateEnvironment) -> Result<CreateEnvironmentOutcome, UnmetObligation> {
+    fn create_environment(
+        &mut self,
+        input: CreateEnvironment,
+    ) -> Result<CreateEnvironmentOutcome, UnmetObligation> {
         if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(CreateEnvironmentOutcome::NotCallersAccount { error: NoSuchFormation });
+            return Ok(CreateEnvironmentOutcome::NotCallersAccount {
+                error: NoSuchFormation,
+            });
         }
         let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
-            return Ok(CreateEnvironmentOutcome::NoSuchFormation { error: NoSuchFormation });
+            return Ok(CreateEnvironmentOutcome::NoSuchFormation {
+                error: NoSuchFormation,
+            });
         };
         if formation.data.account_id != input.account_id {
-            return Ok(CreateEnvironmentOutcome::FormationOfOtherAccount { error: NoSuchFormation });
+            return Ok(CreateEnvironmentOutcome::FormationOfOtherAccount {
+                error: NoSuchFormation,
+            });
         }
         if formation.state == FormationState::Retired {
-            return Ok(CreateEnvironmentOutcome::Retired { error: FormationStateConflict });
+            return Ok(CreateEnvironmentOutcome::Retired {
+                error: FormationStateConflict,
+            });
         }
         if EnvironmentStorage::list(self)
             .iter()
             .any(|row| row.data.formation_id == input.formation_id && row.data.name == input.name)
         {
-            return Ok(CreateEnvironmentOutcome::NameTaken { error: EnvironmentNameTaken });
+            return Ok(CreateEnvironmentOutcome::NameTaken {
+                error: EnvironmentNameTaken,
+            });
         }
         let environment_id = EnvironmentId(Uuid(mint()));
         EnvironmentStorage::put(

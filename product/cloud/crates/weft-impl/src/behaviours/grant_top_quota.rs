@@ -5,8 +5,9 @@
 
 use weft_types::accounts::obligations::GrantTopQuotaBehavior;
 use weft_types::accounts::{
-    AccountNotFound, AccountNotOpen, AccountState, GrantTopQuota, GrantTopQuotaOutcome, InvalidQuotaAmount,
-    NotTopLevelAccount, QuotaData, QuotaExists, QuotaGranted, QuotaSnapshot, QuotaState,
+    AccountNotFound, AccountNotOpen, AccountState, GrantTopQuota, GrantTopQuotaOutcome,
+    InvalidQuotaAmount, NotTopLevelAccount, QuotaData, QuotaExists, QuotaGranted, QuotaSnapshot,
+    QuotaState,
 };
 use weft_types::behaviour::{AccountStorage, QuotaStorage};
 use weft_types::obligation::UnmetObligation;
@@ -17,23 +18,34 @@ use crate::context::mint;
 use crate::Ports;
 
 impl GrantTopQuotaBehavior for Ports {
-    fn grant_top_quota(&mut self, input: GrantTopQuota) -> Result<GrantTopQuotaOutcome, UnmetObligation> {
+    fn grant_top_quota(
+        &mut self,
+        input: GrantTopQuota,
+    ) -> Result<GrantTopQuotaOutcome, UnmetObligation> {
         if input.limit < 0 {
-            return Ok(GrantTopQuotaOutcome::NegativeLimit { error: InvalidQuotaAmount });
+            return Ok(GrantTopQuotaOutcome::NegativeLimit {
+                error: InvalidQuotaAmount,
+            });
         }
         let Some(account) = AccountStorage::get(self, &input.account_id) else {
-            return Ok(GrantTopQuotaOutcome::NoSuchAccount { error: AccountNotFound });
+            return Ok(GrantTopQuotaOutcome::NoSuchAccount {
+                error: AccountNotFound,
+            });
         };
         if account.data.parent_account_id.is_some() {
-            return Ok(GrantTopQuotaOutcome::SubAccount { error: NotTopLevelAccount });
+            return Ok(GrantTopQuotaOutcome::SubAccount {
+                error: NotTopLevelAccount,
+            });
         }
         if account.state == AccountState::Closed {
-            return Ok(GrantTopQuotaOutcome::AccountClosed { error: AccountNotOpen });
+            return Ok(GrantTopQuotaOutcome::AccountClosed {
+                error: AccountNotOpen,
+            });
         }
-        if QuotaStorage::list(self)
-            .iter()
-            .any(|row| row.data.account_id == input.account_id && row.data.resource_class == input.resource_class)
-        {
+        if QuotaStorage::list(self).iter().any(|row| {
+            row.data.account_id == input.account_id
+                && row.data.resource_class == input.resource_class
+        }) {
             return Ok(GrantTopQuotaOutcome::QuotaExists { error: QuotaExists });
         }
         let quota_id = QuotaId(Uuid(mint()));

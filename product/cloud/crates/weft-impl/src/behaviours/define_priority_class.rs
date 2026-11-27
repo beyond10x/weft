@@ -5,8 +5,8 @@
 use weft_types::behaviour::PriorityClassStorage;
 use weft_types::infrastructure::obligations::DefinePriorityClassBehavior;
 use weft_types::infrastructure::{
-    DefinePriorityClass, DefinePriorityClassOutcome, InvalidGracePeriod, PriorityClassData, PriorityClassDefined,
-    PriorityClassExists, PriorityClassSnapshot, PriorityClassState,
+    DefinePriorityClass, DefinePriorityClassOutcome, InvalidGracePeriod, PriorityClassData,
+    PriorityClassDefined, PriorityClassExists, PriorityClassSnapshot, PriorityClassState,
 };
 use weft_types::obligation::UnmetObligation;
 
@@ -18,13 +18,17 @@ impl DefinePriorityClassBehavior for Ports {
         input: DefinePriorityClass,
     ) -> Result<DefinePriorityClassOutcome, UnmetObligation> {
         if input.grace_seconds < 0 {
-            return Ok(DefinePriorityClassOutcome::NegativeGrace { error: InvalidGracePeriod });
+            return Ok(DefinePriorityClassOutcome::NegativeGrace {
+                error: InvalidGracePeriod,
+            });
         }
         if PriorityClassStorage::list(self)
             .iter()
             .any(|row| row.data.name == input.name)
         {
-            return Ok(DefinePriorityClassOutcome::Exists { error: PriorityClassExists });
+            return Ok(DefinePriorityClassOutcome::Exists {
+                error: PriorityClassExists,
+            });
         }
         PriorityClassStorage::put(
             self,

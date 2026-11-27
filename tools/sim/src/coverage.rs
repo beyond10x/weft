@@ -192,12 +192,15 @@ impl Coverage {
         let mut inner = self.inner.lock().expect("coverage");
         inner.abstract_states.extend(found.abstract_states);
         for ((cmd, state), (outcomes, desc)) in found.branch {
-            let entry = inner.branch.entry((cmd, state)).or_insert_with(|| BranchEntry {
-                outcomes: BTreeSet::new(),
-                state: desc.clone(),
-                seed,
-                walk,
-            });
+            let entry = inner
+                .branch
+                .entry((cmd, state))
+                .or_insert_with(|| BranchEntry {
+                    outcomes: BTreeSet::new(),
+                    state: desc.clone(),
+                    seed,
+                    walk,
+                });
             let before = entry.outcomes.len();
             entry.outcomes.extend(outcomes);
             let after = entry.outcomes.len();
@@ -242,17 +245,19 @@ impl Coverage {
             entry[0] += all;
             entry[1] += live;
         }
-        if (keep_violation || interesting && inner.traces.len() < MAX_TRACES) && !found.trace.is_empty() {
-            inner
-                .traces
-                .insert(walk, json!({"walk": walk, "seed": seed, "steps": found.trace}));
+        if (keep_violation || interesting && inner.traces.len() < MAX_TRACES)
+            && !found.trace.is_empty()
+        {
+            inner.traces.insert(
+                walk,
+                json!({"walk": walk, "seed": seed, "steps": found.trace}),
+            );
         }
         let reached = self.outcomes_reached.load(Ordering::Relaxed);
         let abstract_count = inner.abstract_states.len() as u64;
-        let push = inner
-            .growth
-            .last()
-            .is_none_or(|last| steps >= last[0] + 50 || last[1] != abstract_count && steps > last[0]);
+        let push = inner.growth.last().is_none_or(|last| {
+            steps >= last[0] + 50 || last[1] != abstract_count && steps > last[0]
+        });
         if push {
             inner.growth.push([steps, abstract_count, reached]);
             if inner.growth.len() > 4000 {
@@ -279,7 +284,11 @@ impl Coverage {
         if outcome_hits.is_empty() {
             outcome_hits = vec![];
         }
-        let state_hits: Vec<u64> = self.state_hits.iter().map(|a| a.load(Ordering::Relaxed)).collect();
+        let state_hits: Vec<u64> = self
+            .state_hits
+            .iter()
+            .map(|a| a.load(Ordering::Relaxed))
+            .collect();
         let transition_hits: Vec<u64> = self
             .transition_hits
             .iter()
@@ -295,7 +304,12 @@ impl Coverage {
             .values()
             .filter(|b| b.outcomes.len() > 1)
             .collect();
-        branch.sort_by(|a, b| b.outcomes.len().cmp(&a.outcomes.len()).then(a.walk.cmp(&b.walk)));
+        branch.sort_by(|a, b| {
+            b.outcomes
+                .len()
+                .cmp(&a.outcomes.len())
+                .then(a.walk.cmp(&b.walk))
+        });
         let branch_cmds: Vec<Value> = {
             // per command: how many abstract states branch, the largest fan-out
             let mut per: BTreeMap<u32, (usize, usize)> = BTreeMap::new();
@@ -307,7 +321,7 @@ impl Coverage {
                 }
             }
             let mut rows: Vec<_> = per.into_iter().collect();
-            rows.sort_by(|a, b| b.1 .0.cmp(&a.1 .0));
+            rows.sort_by_key(|r| std::cmp::Reverse(r.1 .0));
             rows.into_iter()
                 .take(if full { 200 } else { 40 })
                 .map(|(cmd, (states, fan))| {
@@ -332,8 +346,9 @@ impl Coverage {
                 json!({"command": cat.commands[cmd].name.to_string(), "outcomes": names, "state": b.state, "walk": b.walk, "seed": b.seed})
             })
             .collect();
-        let mut errors: Vec<(&(usize, String, String), &ErrorEntry)> = inner.errors.iter().collect();
-        errors.sort_by(|a, b| b.1.count.cmp(&a.1.count));
+        let mut errors: Vec<(&(usize, String, String), &ErrorEntry)> =
+            inner.errors.iter().collect();
+        errors.sort_by_key(|e| std::cmp::Reverse(e.1.count));
         let errors: Vec<Value> = errors
             .iter()
             .take(if full { 500 } else { 40 })
@@ -343,7 +358,13 @@ impl Coverage {
             .collect();
         // The commands that took the most time, summed: where a run's seconds go.
         let mut slow: Vec<(usize, u64, u64)> = (0..cat.commands.len())
-            .map(|c| (c, self.command_sends[c].load(Ordering::Relaxed), self.command_nanos[c].load(Ordering::Relaxed)))
+            .map(|c| {
+                (
+                    c,
+                    self.command_sends[c].load(Ordering::Relaxed),
+                    self.command_nanos[c].load(Ordering::Relaxed),
+                )
+            })
             .filter(|(_, n, _)| *n > 0)
             .collect();
         slow.sort_by_key(|s| std::cmp::Reverse(s.2));
@@ -352,7 +373,11 @@ impl Coverage {
             .take(10)
             .map(|(c, n, ns)| json!({"command": cat.commands[*c].name.to_string(), "sends": n, "seconds": *ns as f64 / 1e9, "ms_per_send": *ns as f64 / 1e6 / *n as f64}))
             .collect();
-        let feed: Vec<FeedLine> = self.feed.lock().map(|f| f.iter().cloned().collect()).unwrap_or_default();
+        let feed: Vec<FeedLine> = self
+            .feed
+            .lock()
+            .map(|f| f.iter().cloned().collect())
+            .unwrap_or_default();
         let first: BTreeMap<String, Value> = if full {
             inner
                 .first
@@ -360,7 +385,10 @@ impl Coverage {
                 .map(|(gid, (walk, seed, step))| {
                     let (c, o) = cat.outcome_of[*gid];
                     (
-                        format!("{}/{}", cat.commands[c].name, cat.commands[c].outcomes[o].name),
+                        format!(
+                            "{}/{}",
+                            cat.commands[c].name, cat.commands[c].outcomes[o].name
+                        ),
                         json!({"walk": walk, "seed": seed, "step": step}),
                     )
                 })

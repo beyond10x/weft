@@ -329,16 +329,23 @@ impl Condition {
     fn holds(&self, chosen: &[Option<&Fields>]) -> bool {
         let read = |o: &Operand| -> Option<Value> {
             match o {
-                Operand::Field(r, f) => chosen[*r].and_then(|row| row.get(f)).filter(|v| !v.is_null()).cloned(),
+                Operand::Field(r, f) => chosen[*r]
+                    .and_then(|row| row.get(f))
+                    .filter(|v| !v.is_null())
+                    .cloned(),
                 Operand::Literal(v) => Some(v.clone()),
             }
         };
-        let (Some(a), Some(b)) = (read(&self.left), read(&self.right)) else { return false };
+        let (Some(a), Some(b)) = (read(&self.left), read(&self.right)) else {
+            return false;
+        };
         match self.op {
             "==" => same_value(&a, &b),
             "!=" => !same_value(&a, &b),
             op => {
-                let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else { return false };
+                let (Some(x), Some(y)) = (a.as_f64(), b.as_f64()) else {
+                    return false;
+                };
                 match op {
                     "<" => x < y,
                     "<=" => x <= y,
@@ -358,7 +365,10 @@ fn same_value(a: &Value, b: &Value) -> bool {
     }
     match (a, b) {
         (Value::String(s), other) | (other, Value::String(s)) if !other.is_string() => {
-            other.as_f64().is_some_and(|n| s.parse::<f64>().ok() == Some(n)) || s == &other.to_string()
+            other
+                .as_f64()
+                .is_some_and(|n| s.parse::<f64>().ok() == Some(n))
+                || s == &other.to_string()
         }
         _ => false,
     }
@@ -408,7 +418,11 @@ impl Pattern {
                 .find(|op| c.contains(op))
                 .ok_or_else(|| format!("pattern {}: `{c}` has no comparison", self.name))?;
             let (l, r) = c.split_once(op).expect("found above");
-            out.push(Condition { left: operand(l), op, right: operand(r) });
+            out.push(Condition {
+                left: operand(l),
+                op,
+                right: operand(r),
+            });
         }
         Ok(out)
     }
@@ -425,7 +439,11 @@ impl Pattern {
     }
 
     /// As `matches`, with `${var}` in view parameters read from `vars`.
-    pub fn matches_with(&self, sess: &Session, vars: &BTreeMap<String, Value>) -> Option<Vec<String>> {
+    pub fn matches_with(
+        &self,
+        sess: &Session,
+        vars: &BTreeMap<String, Value>,
+    ) -> Option<Vec<String>> {
         let conditions = self.conditions().ok()?;
         let mut candidates: Vec<Vec<(String, Fields)>> = Vec::new();
         for rp in &self.rows {
@@ -434,8 +452,14 @@ impl Pattern {
                 .filter(|(_, row)| {
                     let state = row.get("state").and_then(Value::as_str);
                     rp.state.as_ref().is_none_or(|s| state == Some(s.as_str()))
-                        && rp.state_not.as_ref().is_none_or(|s| state != Some(s.as_str()))
-                        && rp.fields.iter().all(|(k, v)| row.get(k).is_some_and(|have| same_value(have, v)))
+                        && rp
+                            .state_not
+                            .as_ref()
+                            .is_none_or(|s| state != Some(s.as_str()))
+                        && rp
+                            .fields
+                            .iter()
+                            .all(|(k, v)| row.get(k).is_some_and(|have| same_value(have, v)))
                 })
                 .collect();
             if list.is_empty() && !rp.absent {
@@ -457,7 +481,10 @@ impl Pattern {
         None
     }
 
-    fn view_of<'r>(candidates: &'r [Vec<(String, Fields)>], chosen: &[Option<usize>]) -> Vec<Option<&'r Fields>> {
+    fn view_of<'r>(
+        candidates: &'r [Vec<(String, Fields)>],
+        chosen: &[Option<usize>],
+    ) -> Vec<Option<&'r Fields>> {
         chosen
             .iter()
             .enumerate()
@@ -480,7 +507,8 @@ impl Pattern {
         if depth == self.rows.len() {
             let rows = Self::view_of(candidates, chosen);
             let same = self.same.iter().all(|field| {
-                let values: Vec<Option<&Value>> = rows.iter().flatten().map(|r| r.get(field)).collect();
+                let values: Vec<Option<&Value>> =
+                    rows.iter().flatten().map(|r| r.get(field)).collect();
                 values.iter().all(|v| v.is_some() && *v == values[0])
             });
             if !same {
@@ -491,7 +519,10 @@ impl Pattern {
                 if !rp.absent {
                     continue;
                 }
-                let named: Vec<&Condition> = conditions.iter().filter(|c| c.rows().contains(&i)).collect();
+                let named: Vec<&Condition> = conditions
+                    .iter()
+                    .filter(|c| c.rows().contains(&i))
+                    .collect();
                 for k in 0..candidates[i].len() {
                     chosen[i] = Some(k);
                     let rows = Self::view_of(candidates, chosen);
@@ -509,7 +540,11 @@ impl Pattern {
         }
         for k in 0..candidates[depth].len() {
             let key = &candidates[depth][k].0;
-            if chosen.iter().enumerate().any(|(i, c)| c.is_some_and(|c| candidates[i][c].0 == *key)) {
+            if chosen
+                .iter()
+                .enumerate()
+                .any(|(i, c)| c.is_some_and(|c| candidates[i][c].0 == *key))
+            {
                 continue;
             }
             chosen[depth] = Some(k);
@@ -517,7 +552,10 @@ impl Pattern {
             // Conditions over chosen positive rows only.
             let ok = conditions.iter().all(|c| {
                 let named = c.rows();
-                if named.iter().any(|r| self.rows[*r].absent || rows[*r].is_none()) {
+                if named
+                    .iter()
+                    .any(|r| self.rows[*r].absent || rows[*r].is_none())
+                {
                     return true;
                 }
                 c.holds(&rows)
@@ -532,7 +570,11 @@ impl Pattern {
 }
 
 /// The rows a row pattern reads, each with a key that tells rows apart.
-fn rows_of(sess: &Session, rp: &RowPattern, vars: &BTreeMap<String, Value>) -> Option<Vec<(String, Fields)>> {
+fn rows_of(
+    sess: &Session,
+    rp: &RowPattern,
+    vars: &BTreeMap<String, Value>,
+) -> Option<Vec<(String, Fields)>> {
     let cat = sess.cat;
     if let Some(view) = &rp.view {
         // Every combination of the parameter values.
@@ -546,7 +588,11 @@ fn rows_of(sess: &Session, rp: &RowPattern, vars: &BTreeMap<String, Value>) -> O
             let mut next = Vec::new();
             for combo in &combos {
                 for value in &values {
-                    let Ok(node) = serde_json::from_value::<ess_primitives::node::Node>(value.clone()) else { continue };
+                    let Ok(node) =
+                        serde_json::from_value::<ess_primitives::node::Node>(value.clone())
+                    else {
+                        continue;
+                    };
                     let mut c = combo.clone();
                     c.insert(k.clone(), node);
                     next.push(c);
@@ -562,14 +608,19 @@ fn rows_of(sess: &Session, rp: &RowPattern, vars: &BTreeMap<String, Value>) -> O
                     .iter()
                     .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(Value::Null)))
                     .collect();
-                let key = format!("{view} {}", serde_json::to_string(&fields).unwrap_or_default());
+                let key = format!(
+                    "{view} {}",
+                    serde_json::to_string(&fields).unwrap_or_default()
+                );
                 out.push((key, fields));
             }
         }
         return Some(out);
     }
     let entity = rp.entity.as_ref()?;
-    let &ent = cat.ent_index.get(&ess_domain::name::QualifiedName::new(entity).ok()?)?;
+    let &ent = cat
+        .ent_index
+        .get(&ess_domain::name::QualifiedName::new(entity).ok()?)?;
     let e = &cat.entities[ent];
     Some(
         sess.rows
@@ -584,14 +635,18 @@ fn rows_of(sess: &Session, rp: &RowPattern, vars: &BTreeMap<String, Value>) -> O
                 let id_value = serde_json::to_value(id).unwrap_or(Value::Null);
                 fields.insert(e.identity_field.clone(), id_value.clone());
                 fields.insert("state".into(), Value::String(e.states[row.state].clone()));
-                (format!("{} {} {}", e.name, id_value, e.states[row.state]), fields)
+                (
+                    format!("{} {} {}", e.name, id_value, e.states[row.state]),
+                    fields,
+                )
             })
             .collect(),
     )
 }
 
 pub fn load(path: &Path) -> Result<Experiment, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("reading {}: {e}", path.display()))?;
     let experiment: Experiment =
         ess_yaml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
     if experiment.format != "weft-sim-experiment/1" {
@@ -603,10 +658,16 @@ pub fn load(path: &Path) -> Result<Experiment, String> {
     }
     if let Some(search) = &experiment.search {
         if search.mode == "fit" && search.budget == 0 {
-            return Err(format!("{}: search: a fit `budget` of 0 evaluates no point; give at least 1", path.display()));
+            return Err(format!(
+                "{}: search: a fit `budget` of 0 evaluates no point; give at least 1",
+                path.display()
+            ));
         }
         if let Some((name, w)) = search.weights.iter().find(|(_, w)| !w.is_finite()) {
-            return Err(format!("{}: search: the weight of `{name}` is {w}, not a finite number", path.display()));
+            return Err(format!(
+                "{}: search: the weight of `{name}` is {w}, not a finite number",
+                path.display()
+            ));
         }
     }
     Ok(experiment)

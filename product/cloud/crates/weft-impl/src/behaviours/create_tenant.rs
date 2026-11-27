@@ -3,7 +3,8 @@
 
 use weft_types::accounts::obligations::CreateTenantBehavior;
 use weft_types::accounts::{
-    CreateTenant, CreateTenantOutcome, TenantCreated, TenantData, TenantNameTaken, TenantSnapshot, TenantState,
+    CreateTenant, CreateTenantOutcome, TenantCreated, TenantData, TenantNameTaken, TenantSnapshot,
+    TenantState,
 };
 use weft_types::behaviour::TenantStorage;
 use weft_types::obligation::UnmetObligation;
@@ -14,7 +15,10 @@ use crate::context::mint;
 use crate::Ports;
 
 impl CreateTenantBehavior for Ports {
-    fn create_tenant(&mut self, input: CreateTenant) -> Result<CreateTenantOutcome, UnmetObligation> {
+    fn create_tenant(
+        &mut self,
+        input: CreateTenant,
+    ) -> Result<CreateTenantOutcome, UnmetObligation> {
         if TenantStorage::list(self)
             .iter()
             .any(|row| row.data.name == input.name)
