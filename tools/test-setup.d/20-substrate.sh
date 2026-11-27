@@ -16,8 +16,12 @@
 #      daemon/, so the delegation root stays free of processes, enables cpu, memory and pids for
 #      the children and records its PID in target/substrate/daemon.pid; then it becomes the
 #      daemon, with --cgroup-root on that root. RuntimeMaxSec bounds a daemon whose teardown never
-#      ran. The hook waits for the socket file (at most $wait_limit s) and fails with the daemon's
-#      log when the socket does not appear or the daemon ends.
+#      ran. The hook waits for the socket file (at most $wait_limit s), then asks the daemon
+#      (GET /v1/machine) for the exec floor its startup probe proved: the namespaces, no egress
+#      and read-only host files. It fails when the socket does not appear, the daemon ends or the
+#      floor is withheld, and then prints the daemon's log, the host's confinement facts
+#      (bubblewrap, socat, the user-namespace sysctls, AppArmor profiles, the unit's cgroup), one
+#      bubblewrap run as the daemon starts it, and the machine facts.
 #
 # The socket is $WEFT_SUBSTRATE_SOCKET when it is set, else target/substrate/sock: the value the
 # root .cargo/config.toml ([env]) gives the tests in the same variable. State, workspaces and the
@@ -113,7 +117,7 @@ if [ "${GITHUB_ACTIONS:-}" = true ]; then
   done
 fi
 
-for tool in /usr/bin/bwrap /usr/bin/socat systemd-run; do
+for tool in /usr/bin/bwrap /usr/bin/socat systemd-run curl; do
   command -v "$tool" >/dev/null 2>&1 || fail "$tool is missing; the daemon cannot confine without it"
 done
 XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
@@ -152,17 +156,68 @@ systemd-run --user --quiet --collect --unit "$unit" -p Delegate=yes -p RuntimeMa
   --deployment personal --allow-uid "$uid" ||
   fail "systemd-run could not start the daemon as a delegated user unit"
 
+# What the host offers for confinement, printed when the daemon cannot run an exec.
+diagnose() {
+  {
+    echo "--- daemon log ($log)"
+    tail -n 60 "$log" || true
+    echo "--- host"
+    uname -r
+    /usr/bin/bwrap --version 2>&1 || true
+    /usr/bin/socat -V 2>/dev/null | sed -n 2p || true
+    for key in kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone \
+      user.max_user_namespaces; do
+      echo "$key=$(sysctl -n "$key" 2>/dev/null || echo absent)"
+    done
+    echo "apparmor profiles naming bwrap or userns: $(ls /etc/apparmor.d 2>/dev/null | grep -i -E 'bwrap|userns' | tr '\n' ' ')"
+    cg=$(systemctl --user show -p ControlGroup --value "$unit.service" 2>/dev/null || true)
+    echo "unit cgroup: ${cg:-none}"
+    if [ -n "$cg" ]; then
+      echo "  controllers: $(cat "/sys/fs/cgroup$cg/cgroup.controllers" 2>&1)"
+      echo "  subtree_control: $(cat "/sys/fs/cgroup$cg/cgroup.subtree_control" 2>&1)"
+      echo "  root procs: $(tr '\n' ' ' < "/sys/fs/cgroup$cg/cgroup.procs" 2>&1)"
+    fi
+    echo "--- bubblewrap as the daemon starts it (user namespace, nested ones disabled), in a user unit"
+    systemd-run --user --quiet --collect --wait --pipe -- /usr/bin/bwrap --unshare-user \
+      --disable-userns --assert-userns-disabled --unshare-ipc --unshare-pid --unshare-net \
+      --unshare-uts --new-session --die-with-parent --ro-bind /usr /usr --ro-bind-try /bin /bin \
+      --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 --proc /proc --dev /dev --tmpfs /tmp \
+      /usr/bin/true </dev/null 2>&1
+    echo "exit $?"
+    echo "--- socat's report of a vsock connect (the daemon's probe reads it under its seccomp)"
+    /usr/bin/socat -u OPEN:/dev/null VSOCK-CONNECT:2:1234 </dev/null 2>&1 | tail -n 2
+    echo "--- machine facts"
+    printf '%s\n' "$1"
+  } >&2
+}
+
 i=0
 while [ ! -S "$socket" ]; do
   i=$((i + 1))
   if [ "$i" -gt $((wait_limit * 10)) ]; then
-    tail -n 40 "$log" >&2 || true
+    diagnose ""
     fail "no socket at $socket after ${wait_limit}s"
   fi
   if [ -f "$pidfile" ] && ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-    tail -n 40 "$log" >&2 || true
+    diagnose ""
     fail "substrate-daemon ended before it served $socket"
   fi
   sleep 0.1
 done
-say "substrate-daemon $(cat "$pidfile") serves $socket (unit $unit, log $log)"
+
+# Ready means the daemon publishes the exec floor its probe proved: the namespaces, no egress
+# and read-only host files. Without them every exec is refused (exec.sandbox-unavailable).
+machine=$(curl -fsS --max-time 10 --unix-socket "$socket" http://localhost/v1/machine 2>&1) || {
+  diagnose "$machine"
+  fail "the daemon does not answer GET /v1/machine on $socket"
+}
+for fact in '"exec.namespaces":{' '"exec.no-egress":true' '"exec.read-only-files":{'; do
+  case $machine in
+    *"$fact"*) ;;
+    *)
+      diagnose "$machine"
+      fail "the daemon cannot run a confined exec: its probe withheld $fact"
+      ;;
+  esac
+done
+say "substrate-daemon $(cat "$pidfile") serves $socket with the exec floor (unit $unit, log $log)"

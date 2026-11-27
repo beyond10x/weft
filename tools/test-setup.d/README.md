@@ -20,3 +20,6 @@ Contract of a hook:
   (`[env]`, a path with `relative = true`): a hook runs in a process of its own and cannot export
   a variable to the test processes. The hook reads the same variable, with that value as its
   default. `20-substrate.sh`: `WEFT_SUBSTRATE_SOCKET`, default `target/substrate/sock`.
+- What a hook starts lives only inside the test step: `slot task test` (or `slot task check`)
+  runs the hooks around the tests. A bare `cargo nextest run -p weft-agent` gets the variable
+  but no daemon behind it, and its tests fail on the missing socket.

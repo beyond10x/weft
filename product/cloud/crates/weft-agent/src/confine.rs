@@ -3,7 +3,7 @@
 //!
 //! [`Confine::run`] creates an empty workspace, starts the process there with its command, its
 //! environment and the host files it is given read-only, reports each state the exec enters
-//! (`accepted`, `running`, ...) from the daemon's event stream, and on `exec.exited` returns the
+//! (`accepted`, `running`, ...) from the daemon's event history, and on `exec.exited` returns the
 //! exit code and the captured output. The exec has no network: substrate runs every exec under
 //! `--unshare-net` unless an egress aperture is named, and none is. The exec is retired and the
 //! workspace destroyed when the run ends, also when it fails.
@@ -11,11 +11,12 @@
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use b10x_substrate_sdk::{
-    Client, Event, Exec, ExecutionPolicy, OutputStream, ReadOnlyFile, SdkError, Signal, Workspace,
-    MAX_EVENT_PAGE_ITEMS, MAX_IO_BYTES,
+    Client, Event, EventPage, Exec, ExecutionPolicy, OutputStream, ReadOnlyFile, SdkError, Signal,
+    Workspace, MAX_EVENT_PAGE_ITEMS, MAX_IO_BYTES,
 };
 use serde_json::Value;
 
@@ -122,8 +123,6 @@ pub enum Error {
         state: ExecState,
         refusal: Option<String>,
     },
-    /// The event stream closed before `exec.exited`.
-    StreamClosed,
     /// No `exec.exited` within the exec's timeout and a grace.
     NoExit(Duration),
 }
@@ -141,7 +140,6 @@ impl fmt::Display for Error {
                     None => Ok(()),
                 }
             }
-            Self::StreamClosed => write!(f, "the event stream closed before exec.exited"),
             Self::NoExit(after) => write!(f, "no exec.exited after {after:?}"),
         }
     }
@@ -161,15 +159,56 @@ const EXIT_GRACE: Duration = Duration::from_secs(10);
 /// How long an exec that did not end gets after `SIGKILL` before it is retired.
 const KILL_GRACE: Duration = Duration::from_secs(2);
 
+/// How long `run` waits before it asks the daemon for its next events.
+const POLL: Duration = Duration::from_millis(50);
+
+/// The most events one page of `GET /v1/events` holds.
+const PAGE_ITEMS: usize = MAX_EVENT_PAGE_ITEMS as usize;
+
 /// A connection to one `substrate-daemon`.
+///
+/// A run follows its exec through the daemon's pulled event pages (`GET /v1/events` from a
+/// cursor), never through an event stream: substrate grants each subject only four streams, and
+/// a stream opened at the start of the history ends after sixteen pages of catch-up. The pull
+/// starts at a position taken before the exec starts, so the exec's first event is on a page the
+/// run reads, and each page holds every subject's events; the run keeps those of its own exec.
 pub struct Confine {
     client: Client,
+    /// A cursor of the daemon's event history at or before now: where the last run stopped, or
+    /// the end of the history at `connect`.
+    position: Mutex<Option<String>>,
 }
 
 impl Confine {
     pub async fn connect(socket: &Path) -> Result<Self, Error> {
         let client = Client::builder().unix_socket(socket).connect().await?;
-        Ok(Self { client })
+        let mut cursor = None;
+        loop {
+            let page = events_after(&client, cursor.as_deref()).await?;
+            let full = page.events.len() >= PAGE_ITEMS;
+            cursor = Some(page.next_cursor);
+            if !full {
+                break;
+            }
+        }
+        Ok(Self {
+            client,
+            position: Mutex::new(cursor),
+        })
+    }
+
+    fn position(&self) -> Option<String> {
+        self.position
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn remember(&self, cursor: Option<String>) {
+        *self
+            .position
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = cursor;
     }
 
     /// Runs `process` as one exec and returns its end once the daemon reports `exec.exited`.
@@ -201,8 +240,8 @@ impl Confine {
             .output_bytes(limits.output_bytes)
             .build()?;
 
-        // The stream is opened before the start, so no event of this exec can precede it.
-        let mut events = self.client.event_stream(None, MAX_EVENT_PAGE_ITEMS).await?;
+        // A position taken before the start, so no event of this exec can precede it.
+        let mut cursor = self.position();
         let workspace = self.client.workspace().empty().create().await?;
         let mut command = workspace
             .command(program.clone())
@@ -228,9 +267,9 @@ impl Confine {
         let followed = tokio::time::timeout(wait, async {
             let mut state = None;
             loop {
-                let Some(page) = events.next_page().await? else {
-                    return Err(Error::StreamClosed);
-                };
+                let page = events_after(&self.client, cursor.as_deref()).await?;
+                let full = page.events.len() >= PAGE_ITEMS;
+                cursor = Some(page.next_cursor);
                 for event in &page.events {
                     let Some(next) = state_of(event, &id) else {
                         continue;
@@ -249,10 +288,14 @@ impl Confine {
                         });
                     }
                 }
+                if !full {
+                    tokio::time::sleep(POLL).await;
+                }
             }
         })
         .await
         .unwrap_or(Err(Error::NoExit(wait)));
+        self.remember(cursor);
 
         let ended = match followed {
             Ok(()) => collect(&mut exec).await,
@@ -268,6 +311,25 @@ impl Confine {
         };
         finish(exec, workspace).await;
         ended
+    }
+}
+
+/// One page of the daemon's events after `cursor`, or from the oldest it keeps when `cursor` is
+/// none. A cursor the daemon no longer serves (`event.retention-gap`: more events since than it
+/// keeps; `event.source-mismatch`: a new event history) is read again from the oldest kept event:
+/// the events of an exec started after the cursor are the newest and are kept.
+async fn events_after(client: &Client, cursor: Option<&str>) -> Result<EventPage, Error> {
+    match client.events(cursor, MAX_EVENT_PAGE_ITEMS).await {
+        Err(SdkError::Refusal(refusal))
+            if cursor.is_some()
+                && matches!(
+                    refusal.code.as_str(),
+                    "event.retention-gap" | "event.source-mismatch"
+                ) =>
+        {
+            Ok(client.events(None, MAX_EVENT_PAGE_ITEMS).await?)
+        }
+        page => Ok(page?),
     }
 }
 
