@@ -1593,18 +1593,97 @@ fn evaluate(
     results.into_inner().expect("results").into_iter().map(|r| r.unwrap_or_else(|| Err("not run".into()))).collect()
 }
 
-fn record_point(cov: &Coverage, point: &BTreeMap<String, Value>, result: &Result<Kpis, String>, search: &crate::experiment::Search) -> Option<(f64, bool)> {
-    let mut inner = cov.inner.lock().expect("coverage");
-    match result {
-        Ok(k) => {
-            let (f, feasible) = fitness(search, k);
-            inner.search.push(json!({"point": point, "kpis": k, "fitness": f, "feasible": feasible}));
-            Some((f, feasible))
+/// `info.search`: the search's settings and its mutation axes, each with its values in order (a
+/// row's `index` points into them).
+fn search_info(exp: &Experiment, search: &crate::experiment::Search) -> Value {
+    let axes: Vec<Value> = exp.mutations.iter().map(|m| json!({"name": m.name, "kind": m.kind, "point": m.point, "values": m.values})).collect();
+    json!({
+        "mode": search.mode,
+        "seed": exp.seed,
+        "budget": search.budget,
+        "limit": search.limit,
+        "weights": search.weights,
+        "gates": search.gates,
+        "axes": axes,
+    })
+}
+
+/// A test hook: with `WEFT_SIM_SEARCH_HOLD` naming a file, the search waits after writing
+/// `info.search` until that file exists (at most 30 s), so a test reads the live snapshot before
+/// the first row.
+fn hold_search() {
+    let Some(path) = std::env::var_os("WEFT_SIM_SEARCH_HOLD") else { return };
+    let path = std::path::PathBuf::from(path);
+    let started = std::time::Instant::now();
+    while !path.exists() && started.elapsed() < std::time::Duration::from_secs(30) {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// (fitness, feasible) of an evaluated point; `None` when its run failed.
+fn score(search: &crate::experiment::Search, result: &Result<Kpis, String>) -> Option<(f64, bool)> {
+    result.as_ref().ok().map(|k| fitness(search, k))
+}
+
+/// The score a climb compares: the fitness of a feasible point, else the lowest there is.
+fn climb_score(scored: Option<(f64, bool)>) -> f64 {
+    match scored {
+        Some((f, true)) => f,
+        _ => f64::MIN,
+    }
+}
+
+/// Where a row stands in the search: its round, its parent's `seq`, the decision and its walk.
+struct At {
+    round: usize,
+    parent: Option<usize>,
+    decision: &'static str,
+    walk: u64,
+}
+
+/// The rows of `search`, in evaluation order, and the best feasible point so far.
+struct Rows<'a> {
+    cov: &'a Coverage,
+    exp: &'a Experiment,
+    search: &'a crate::experiment::Search,
+    seq: usize,
+    best: Option<(f64, BTreeMap<String, Value>)>,
+}
+
+impl Rows<'_> {
+    fn point(&self, index: &[usize]) -> BTreeMap<String, Value> {
+        self.exp.mutations.iter().zip(index).map(|(m, i)| (m.name.clone(), m.values.get(*i).cloned().unwrap_or(Value::Null))).collect()
+    }
+
+    /// True when a point scored so would raise the best feasible fitness.
+    fn raises(&self, scored: Option<(f64, bool)>) -> bool {
+        matches!(scored, Some((f, true)) if self.best.as_ref().is_none_or(|(b, _)| f > *b))
+    }
+
+    /// Records one evaluated point as the next row; its `seq`.
+    fn record(&mut self, index: &[usize], result: &Result<Kpis, String>, at: At) -> usize {
+        let point = self.point(index);
+        let scored = score(self.search, result);
+        if self.raises(scored) {
+            self.best = scored.map(|(f, _)| (f, point.clone()));
         }
-        Err(e) => {
-            inner.search.push(json!({"point": point, "kpis": {}, "fitness": 0, "feasible": false, "error": e}));
-            None
-        }
+        self.seq += 1;
+        let mut row = match result {
+            Ok(k) => {
+                let (f, feasible) = fitness(self.search, k);
+                json!({"point": point, "kpis": k, "fitness": f, "feasible": feasible})
+            }
+            Err(e) => json!({"point": point, "kpis": {}, "fitness": 0, "feasible": false, "error": e}),
+        };
+        row["seq"] = json!(self.seq);
+        row["round"] = json!(at.round);
+        row["index"] = json!(index);
+        row["parent"] = json!(at.parent);
+        row["decision"] = json!(at.decision);
+        row["best"] = json!(self.best.as_ref().map(|(f, _)| *f));
+        row["walk"] = json!(at.walk);
+        self.cov.inner.lock().expect("coverage").search.push(row);
+        self.seq
     }
 }
 
@@ -1617,114 +1696,130 @@ pub fn run(cat: &Catalog, cov: &Coverage, exp: &Experiment, threads: usize) -> R
     if exp.mutations.is_empty() {
         return Err("search: the experiment names no mutations".into());
     }
-    let mut best: Option<(f64, BTreeMap<String, Value>)> = None;
-    let consider = |point: &BTreeMap<String, Value>, scored: Option<(f64, bool)>, best: &mut Option<(f64, BTreeMap<String, Value>)>| {
-        if let Some((f, true)) = scored {
-            if best.as_ref().is_none_or(|(b, _)| f > *b) {
-                *best = Some((f, point.clone()));
-            }
-        }
-    };
+    cov.inner.lock().expect("coverage").info.insert("search".into(), search_info(exp, &search));
+    hold_search();
+    let mut rows = Rows { cov, exp, search: &search, seq: 0, best: None };
+    let size: usize = exp.mutations.iter().fold(1usize, |n, m| n.saturating_mul(m.values.len().max(1)));
     match search.mode.as_str() {
         "exhaustive" => {
-            let size: usize = exp.mutations.iter().map(|m| m.values.len().max(1)).product();
             eprintln!("weft-sim: exhaustive search over {} mutation points: {size} combinations (limit {})", exp.mutations.len(), search.limit);
             if size > search.limit {
                 return Err(format!("exhaustive search refused: {size} combinations exceed the limit {}", search.limit));
             }
-            let mut points = Vec::new();
-            for mut index in 0..size {
-                let mut point = BTreeMap::new();
+            let mut indices = Vec::new();
+            for mut n in 0..size {
+                let mut index = Vec::new();
                 for m in &exp.mutations {
-                    let n = m.values.len().max(1);
-                    point.insert(m.name.clone(), m.values.get(index % n).cloned().unwrap_or(Value::Null));
-                    index /= n;
+                    let len = m.values.len().max(1);
+                    index.push(n % len);
+                    n /= len;
                 }
-                points.push(point);
+                indices.push(index);
             }
+            let points: Vec<_> = indices.iter().map(|i| rows.point(i)).collect();
             let results = evaluate(cat, cov, &cands, exp, &points, threads, 1);
-            for (p, r) in points.iter().zip(&results) {
-                let scored = record_point(cov, p, r, &search);
-                consider(p, scored, &mut best);
+            for (i, (index, r)) in indices.iter().zip(&results).enumerate() {
+                let decision = if i == 0 {
+                    "start"
+                } else if rows.raises(score(&search, r)) {
+                    "accepted"
+                } else {
+                    "rejected"
+                };
+                rows.record(index, r, At { round: 1, parent: None, decision, walk: 1 + i as u64 });
             }
         }
         "fit" => {
             let mut rng = Rng::new(exp.seed);
             let mut current: Vec<usize> = exp.mutations.iter().map(|_| 0).collect();
-            let to_point = |idx: &[usize]| -> BTreeMap<String, Value> {
-                exp.mutations.iter().zip(idx).map(|(m, i)| (m.name.clone(), m.values.get(*i).cloned().unwrap_or(Value::Null))).collect()
-            };
             let mut seen: BTreeSet<Vec<usize>> = BTreeSet::new();
             let mut walk = 1u64;
-            let first = evaluate(cat, cov, &cands, exp, &[to_point(&current)], threads, walk);
-            walk += 1;
+            let mut round = 1;
+            let first = evaluate(cat, cov, &cands, exp, &[rows.point(&current)], threads, walk);
             seen.insert(current.clone());
-            let mut current_score = record_point(cov, &to_point(&current), &first[0], &search).map(|(f, ok)| if ok { f } else { f64::MIN }).unwrap_or(f64::MIN);
-            consider(&to_point(&current), record_point_noop(&first[0], &search), &mut best);
+            let mut current_score = climb_score(score(&search, &first[0]));
+            let mut current_seq = rows.record(&current, &first[0], At { round, parent: None, decision: "start", walk });
+            walk += 1;
             let mut evaluated = 1;
+            // The last round found no improvement: the next round is a restart.
+            let mut stuck = false;
             while evaluated < search.budget {
                 let mut neighbours = Vec::new();
-                for (mi, m) in exp.mutations.iter().enumerate() {
-                    for delta in [-1i64, 1] {
-                        let v = current[mi] as i64 + delta;
-                        if v >= 0 && (v as usize) < m.values.len() {
-                            let mut n = current.clone();
-                            n[mi] = v as usize;
-                            if !seen.contains(&n) {
-                                neighbours.push(n);
+                if !stuck {
+                    for (mi, m) in exp.mutations.iter().enumerate() {
+                        for delta in [-1i64, 1] {
+                            let v = current[mi] as i64 + delta;
+                            if v >= 0 && (v as usize) < m.values.len() {
+                                let mut n = current.clone();
+                                n[mi] = v as usize;
+                                if !seen.contains(&n) {
+                                    neighbours.push(n);
+                                }
                             }
                         }
                     }
                 }
+                round += 1;
                 if neighbours.is_empty() {
-                    // A local optimum: restart from a random point not visited.
-                    let n: Vec<usize> = exp.mutations.iter().map(|m| rng.below(m.values.len().max(1))).collect();
-                    if seen.contains(&n) {
-                        if seen.len() >= exp.mutations.iter().map(|m| m.values.len().max(1)).product::<usize>() {
-                            break;
-                        }
-                        continue;
+                    // A round without improvement, or a point with no unvisited neighbour: restart
+                    // at a random point not visited, evaluated in a round of its own.
+                    if seen.len() >= size {
+                        break;
                     }
-                    neighbours.push(n);
+                    let n = loop {
+                        let n: Vec<usize> = exp.mutations.iter().map(|m| rng.below(m.values.len().max(1))).collect();
+                        if !seen.contains(&n) {
+                            break n;
+                        }
+                    };
+                    let result = evaluate(cat, cov, &cands, exp, &[rows.point(&n)], threads, walk);
+                    seen.insert(n.clone());
+                    current_score = climb_score(score(&search, &result[0]));
+                    current_seq = rows.record(&n, &result[0], At { round, parent: None, decision: "restart", walk });
+                    current = n;
+                    walk += 1;
+                    evaluated += 1;
+                    stuck = false;
+                    continue;
                 }
                 neighbours.truncate(search.budget - evaluated);
-                let points: Vec<_> = neighbours.iter().map(|n| to_point(n)).collect();
+                let points: Vec<_> = neighbours.iter().map(|n| rows.point(n)).collect();
                 let results = evaluate(cat, cov, &cands, exp, &points, threads, walk);
-                walk += points.len() as u64;
-                evaluated += points.len();
-                let mut improved: Option<(f64, Vec<usize>)> = None;
-                for ((n, p), r) in neighbours.iter().zip(&points).zip(&results) {
-                    seen.insert(n.clone());
-                    let scored = record_point(cov, p, r, &search);
-                    consider(p, scored, &mut best);
-                    if let Some((f, true)) = scored {
-                        if f > current_score && improved.as_ref().is_none_or(|(b, _)| f > *b) {
-                            improved = Some((f, n.clone()));
+                let mut improved: Option<(f64, usize)> = None;
+                for (i, r) in results.iter().enumerate() {
+                    if let Some((f, true)) = score(&search, r) {
+                        if f > current_score && improved.is_none_or(|(b, _)| f > b) {
+                            improved = Some((f, i));
                         }
                     }
                 }
-                match improved {
-                    Some((f, n)) => {
-                        current = n;
+                let mut accepted_seq = None;
+                for (i, (n, r)) in neighbours.iter().zip(&results).enumerate() {
+                    seen.insert(n.clone());
+                    let decision = if improved.is_some_and(|(_, at)| at == i) { "accepted" } else { "rejected" };
+                    let seq = rows.record(n, r, At { round, parent: Some(current_seq), decision, walk: walk + i as u64 });
+                    if decision == "accepted" {
+                        accepted_seq = Some(seq);
+                    }
+                }
+                walk += points.len() as u64;
+                evaluated += points.len();
+                match (improved, accepted_seq) {
+                    (Some((f, i)), Some(seq)) => {
+                        current = neighbours[i].clone();
                         current_score = f;
+                        current_seq = seq;
                     }
-                    None => {
-                        current = exp.mutations.iter().map(|m| rng.below(m.values.len().max(1))).collect();
-                        current_score = f64::MIN;
-                    }
+                    _ => stuck = true,
                 }
             }
         }
         other => return Err(format!("search mode `{other}`: expected fit or exhaustive")),
     }
     // The best point runs once more with its timeline recorded.
-    let (best_fitness, best_point) = best.clone().unwrap_or((0.0, BTreeMap::new()));
+    let (best_fitness, best_point) = rows.best.clone().unwrap_or((0.0, BTreeMap::new()));
     let best_exp = apply_point(exp, &best_point)?;
     let k = simulate_one(cat, cov, &cands, &best_exp, 0, true)?;
     let points = cov.inner.lock().map(|i| i.search.len()).unwrap_or(0);
     Ok(json!({"mode": search.mode, "points": points, "best": {"point": best_point, "fitness": best_fitness, "kpis": k}, "checks": cov.inner.lock().map(|i| i.timeline.iter().map(|t| t.checks.len()).sum::<usize>()).unwrap_or(0)}))
-}
-
-fn record_point_noop(result: &Result<Kpis, String>, search: &crate::experiment::Search) -> Option<(f64, bool)> {
-    result.as_ref().ok().map(|k| fitness(search, k))
 }

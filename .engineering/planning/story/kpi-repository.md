@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:kpi-repository
 kind: story
-status: active
+status: implemented
 title: task kpis prints every repository KPI with its command, and quality/ratchet.yaml holds them with accepted references and a fast consistency test
 relations:
 - decomposes: epic:kpi-ratchet
@@ -28,10 +28,11 @@ scope:
   path: tools/sim/tests/main.rs
 - confidence: cited
   path: tools/sim/tests/ratchet/mod.rs
-revision: 12
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T13:14:20Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-11-27T13:14:20Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-11-27T15:01:08Z", actor: "human:operator", revision: 13, decided_on: {"recorded":{"test_result":1,"approval":1,"review_outcome":2}}}
 ---
 ## Epic
 

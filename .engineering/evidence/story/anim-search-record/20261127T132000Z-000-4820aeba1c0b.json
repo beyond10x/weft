@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T13:20:00Z",
+  "actor": "human:operator",
+  "artifact": "story:anim-search-record",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the host operator: start waves with no shared file on the session's default"
+  }
+}
