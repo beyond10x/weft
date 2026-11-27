@@ -16,10 +16,13 @@
 # `ess generate synthesize --target rust` writes it, the state file .ess-output/ is dropped (a
 # random anchor id, read by nothing), and the two digest files are written. All of it happens in
 # <out>.tmp.<pid>, renamed into place only after a successful synthesis, so a failed or killed run
-# leaves no partial <out>. A lock directory, <out>.lock with the holder's pid, keeps two runs from
+# leaves no partial <out>. A lock file, <out>.lock holding the holder's pid, keeps two runs from
 # writing the same cache: the second waits (at most WEFT_SYNTH_LOCK_WAIT seconds, default 300) and
-# then finds the cache the first wrote. A lock whose holder is gone is removed (stale() below),
-# and so are the <out>.tmp.* and <out>.old.* a killed run left.
+# then finds the cache the first wrote. The lock is taken by the shell's noclobber redirection
+# (take() below), never by mkdir: uutils mkdir, the mkdir of the Ubuntu 26.04 runner, lets two
+# `mkdir d` started together both succeed. A lock is removed only by its holder (cleanup(), which
+# checks the pid) or, when its holder is gone, by stale() below; the <out>.tmp.* and <out>.old.* a
+# killed run left are removed by the next holder.
 #
 # ess compiles nothing, so it runs without slot (~/beyond10x/AGENTS.md "Scripts that do not build
 # stay off slot"); it takes 9 to 30 s on ess/. It is ended after 600 s, and with this run however
@@ -77,10 +80,10 @@ payload() {
 # Why the cache <out> may not be used, or nothing when it may.
 unusable() {
   [ -d "$out" ] || { echo "no cache at $out"; return; }
-  cmp -s "$out/SOURCES.sha256" "$lock/want" || { echo "the cache at $out is stale: its SOURCES.sha256 differs from the sources"; return; }
+  cmp -s "$out/SOURCES.sha256" "$tmp/want" || { echo "the cache at $out is stale: its SOURCES.sha256 differs from the sources"; return; }
   [ -f "$out/OUTPUT.sha256" ] || { echo "the cache at $out is damaged: no OUTPUT.sha256"; return; }
-  payload "$out" > "$lock/files"
-  sed 's/^[0-9a-f]\{64\}  //' "$out/OUTPUT.sha256" | cmp -s - "$lock/files" ||
+  payload "$out" > "$tmp/files"
+  sed 's/^[0-9a-f]\{64\}  //' "$out/OUTPUT.sha256" | cmp -s - "$tmp/files" ||
     { echo "the cache at $out is damaged: its files differ from OUTPUT.sha256"; return; }
   (cd "$out" && sha256sum --quiet --strict -c OUTPUT.sha256 >/dev/null 2>&1) ||
     { echo "the cache at $out is damaged: a file differs from OUTPUT.sha256"; return; }
@@ -94,10 +97,23 @@ fi
 lock=$out.lock
 tmp=
 ess_pid=
+
+# take <file>: create <file> holding this run's pid, and fail when <file> exists. The shell opens
+# it with O_EXCL under noclobber (dash and bash do), so of two runs only one succeeds; mkdir gives
+# no such guarantee (uutils mkdir, see above).
+take() { (set -C; echo $$ > "$1") 2>/dev/null; }
+
+# pid_of <lock>: the pid in a lock, or nothing. A directory is a lock of an older tools/synth.sh,
+# with its pid in <lock>/pid.
+pid_of() {
+  if [ -d "$1" ]; then cat "$1/pid"; else cat "$1"; fi 2>/dev/null || true
+}
+
+# The holder's exit: the lock is removed only while it still holds this run's pid.
 cleanup() {
   [ -z "$ess_pid" ] || kill -TERM "$ess_pid" 2>/dev/null || true
   [ -z "$tmp" ] || rm -rf "$tmp"
-  rm -rf "$lock"
+  [ "$(pid_of "$lock")" != "$$" ] || rm -f "$lock"
 }
 
 # stale <pid>: remove the lock when it still is the one of <pid>, a holder that is gone (or, for
@@ -106,26 +122,26 @@ cleanup() {
 # can change a lock whose holder is gone, so the lock it removes is the one it read. A <lock>.steal
 # a minute old or more was left by a run killed inside these lines and is removed.
 stale() {
-  if ! mkdir "$lock.steal" 2>/dev/null; then
+  if ! take "$lock.steal"; then
     if [ -n "$(find "$lock.steal" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then rm -rf "$lock.steal"; fi
     sleep 1
     return 0
   fi
-  again=$(cat "$lock/pid" 2>/dev/null || true)
-  if [ -d "$lock" ] && [ "$again" = "$1" ]; then
+  again=$(pid_of "$lock")
+  if [ -e "$lock" ] && [ "$again" = "$1" ]; then
     if [ -n "$1" ] && ! kill -0 "$1" 2>/dev/null; then
       mv "$lock" "$lock.stale.$$" && rm -rf "$lock.stale.$$" && echo "synth: removed the lock of $1, which is gone"
     elif [ -z "$1" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
       mv "$lock" "$lock.stale.$$" && rm -rf "$lock.stale.$$" && echo "synth: removed a lock without a pid, a minute old"
     fi
   fi
-  rmdir "$lock.steal"
+  rm -f "$lock.steal"
 }
 
 mkdir -p "$(dirname "$out")"
 waited=0
-while ! mkdir "$lock" 2>/dev/null; do
-  holder=$(cat "$lock/pid" 2>/dev/null || true)
+while ! take "$lock"; do
+  holder=$(pid_of "$lock")
   if { [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; } ||
     { [ -z "$holder" ] && [ -n "$(find "$lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; }; then
     stale "$holder"
@@ -139,14 +155,15 @@ while ! mkdir "$lock" 2>/dev/null; do
   sleep 1
   waited=$((waited + 1))
 done
-echo $$ > "$lock/pid"
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 rm -rf "$out".tmp.* "$out".old.*
+tmp=$out.tmp.$$
+mkdir -p "$tmp"
 
-digest > "$lock/want"
+digest > "$tmp/want"
 why=$(unusable)
 if [ -z "$why" ]; then
   echo "synth: cache hit at $out"
@@ -158,8 +175,6 @@ want=$(release)
 have=$("$ess" --version | cut -d' ' -f2)
 [ "$have" = "$want" ] || { echo "synth: ess is $have, $spec/ess-inputs.yaml requires $want" >&2; exit 1; }
 
-tmp=$out.tmp.$$
-mkdir -p "$tmp"
 "$synth_input" "$spec" "$tmp/input"
 start=$(date +%s)
 # ess runs in this run's process group, so a signal to the group (a `timeout` around this script)
@@ -189,9 +204,9 @@ kill "$watcher" 2>/dev/null || true
 [ "$ess_rc" = 0 ] || { echo "synth: ess generate synthesize failed with exit $ess_rc" >&2; exit "$ess_rc"; }
 echo "synth: ess generate synthesize took $(($(date +%s) - start)) s"
 rm -rf "$tmp/output/.ess-output"
-cp "$lock/want" "$tmp/output/SOURCES.sha256"
-payload "$tmp/output" > "$lock/files"
-tr '\n' '\0' < "$lock/files" | (cd "$tmp/output" && xargs -0 sha256sum) > "$tmp/OUTPUT.sha256"
+cp "$tmp/want" "$tmp/output/SOURCES.sha256"
+payload "$tmp/output" > "$tmp/files"
+tr '\n' '\0' < "$tmp/files" | (cd "$tmp/output" && xargs -0 sha256sum) > "$tmp/OUTPUT.sha256"
 mv "$tmp/OUTPUT.sha256" "$tmp/output/OUTPUT.sha256"
 
 if [ -d "$out" ]; then mv "$out" "$out.old.$$"; fi
