@@ -465,3 +465,72 @@ test('a replay command of odd paths stays one quoted text inside the screen at 3
   await expect(replayCommand(page)).toContainText('--spec specs/a --trace sim/out/b/result.json');
   expect(errors).toEqual([]);
 });
+
+// Adversary: the clickable marks from the keyboard, and a word a shell expands.
+
+test('adversary: a landscape mark is focusable, named, and selected with Enter', async ({ page }) => {
+  const errors = await open(page);
+  const row = ROWS.find((r) => r.decision === 'rejected' && r.seq !== LAST.seq)!;
+  const mark = page.locator(`[data-path-step="${row.seq}"]`);
+  const focusable = await page
+    .locator('#p-land [data-path-step], #p-land [data-cell][data-seq]')
+    .evaluateAll((all) => all.filter((e) => (e as SVGElement).tabIndex >= 0).length);
+  expect(focusable, 'marks and cells with a row are in the Tab order').toBeGreaterThan(0);
+  await mark.focus();
+  await expect(mark).toBeFocused();
+  await expect(mark).toHaveAccessibleName(/\S/);
+  await page.keyboard.press('Enter');
+  await expect(selectedWalk(page)).toHaveText(String(row.walk));
+  expect(errors).toEqual([]);
+});
+
+test('adversary: a path word starting with = is quoted (zsh EQUALS expands an unquoted =word)', async ({ page }) => {
+  const errors = await open(page);
+  await receive(page, { ...SNAP, run: { spec: '=specs', out: 'sim/out/x' } });
+  await expect(replayCommand(page)).toContainText("--spec '=specs' ");
+  expect(errors).toEqual([]);
+});
+
+test('every landscape mark and cell with a row is a named button; Space selects a cell and its focus stays shown', async ({ page }) => {
+  const errors = await open(page);
+  // An early frame, so that some cells have no row yet.
+  await goTo(page, 3);
+  const drawn = await page.locator('#p-land [data-path-step], #p-land [data-cell]').evaluateAll((all) =>
+    all.map((e) => ({
+      what: e.getAttribute('data-path-step') ?? e.getAttribute('data-cell'),
+      row: e.hasAttribute('data-path-step') || e.hasAttribute('data-seq'),
+      tab: (e as SVGElement).tabIndex,
+      role: e.getAttribute('role'),
+      label: e.getAttribute('aria-label') ?? '',
+    })),
+  );
+  expect(drawn.some((d) => !d.row), 'the fixture draws empty cells').toBe(true);
+  for (const d of drawn) {
+    if (d.row) expect([d.tab, d.role, d.label !== ''], `${d.what}: in the Tab order, a named button`).toEqual([0, 'button', true]);
+    else expect([d.tab, d.role], `${d.what}: no row, not focusable`).toEqual([-1, null]);
+  }
+
+  const cell = page.locator('#p-land [data-cell][data-seq]').first();
+  const where = (await cell.getAttribute('data-cell'))!;
+  const seq = Number(await cell.getAttribute('data-seq'));
+  const row = ROWS.find((r) => r.seq === seq)!;
+  const point = row.point as Record<string, unknown>;
+  for (const axis of AXES) await expect(cell, axis.name).toHaveAccessibleName(new RegExp(`${axis.name} ${valueText(point[axis.name])}\\b`));
+  await expect(cell).toHaveAccessibleName(new RegExp(`walk ${row.walk}\\b`));
+  await cell.focus();
+  await page.keyboard.press(' ');
+  await expect(selectedWalk(page)).toHaveText(String(row.walk));
+  const again = page.locator(`#p-land [data-cell="${where}"]`);
+  await expect(again, 'the focus stays on the cell after the redraw').toBeFocused();
+  expect(await again.evaluate((e) => getComputedStyle(e).outlineStyle), 'the focus is shown').not.toBe('none');
+  expect(errors).toEqual([]);
+});
+
+test('a path word starting with ~ or % is quoted, an = inside a word is not', async ({ page }) => {
+  const errors = await open(page);
+  await receive(page, { ...SNAP, run: { spec: '~/specs', out: '%1' } });
+  await expect(replayCommand(page)).toContainText("--spec '~/specs' --trace '%1/result.json' ");
+  await receive(page, { ...SNAP, run: { spec: 'a=b', out: 'sim/out/x' } });
+  await expect(replayCommand(page)).toContainText('--spec a=b --trace sim/out/x/result.json ');
+  expect(errors).toEqual([]);
+});

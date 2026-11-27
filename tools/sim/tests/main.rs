@@ -1784,3 +1784,326 @@ fn a_search_weight_that_is_not_finite_is_refused_at_load() {
     );
     assert!(experiment::load(&path).is_ok());
 }
+
+// ---- adversary: replay of a search point ------------------------------------------------------
+
+/// Replays every row of the result in `out` (relative to this crate) at its walk; the rows whose
+/// replay did not exit 0, with its output.
+fn adv_replay_every_row(out: &str, result: &serde_json::Value) -> Vec<String> {
+    let trace = format!("{out}/result.json");
+    let mut failed = Vec::new();
+    for row in result["search"].as_array().expect("search rows") {
+        let walk = row["walk"].as_u64().expect("a walk").to_string();
+        let run = sim_here(&[
+            "replay",
+            "--spec",
+            "tests/fixture-search",
+            "--trace",
+            &trace,
+            "--walk",
+            &walk,
+            "--out",
+            &format!("{out}-w{walk}"),
+        ]);
+        if run.status.code() != Some(0) {
+            failed.push(format!(
+                "seq {} walk {walk} ({}): exit {:?}\n{}{}",
+                row["seq"],
+                row["decision"],
+                run.status.code(),
+                String::from_utf8_lossy(&run.stdout),
+                String::from_utf8_lossy(&run.stderr)
+            ));
+        }
+    }
+    failed
+}
+
+/// Property behind acceptance 1: not two chosen rows but every row of a fit run and of an
+/// exhaustive run reruns at its walk to the KPIs it recorded (exit 0).
+#[test]
+fn adv_every_search_row_of_a_fit_and_an_exhaustive_run_replays_to_its_kpis() {
+    let (out, result) = relative_fit_run("adv-every-fit");
+    let mut failed = adv_replay_every_row(&out, &result);
+
+    let exp = search_experiment("adv-every-exhaustive", &[("mode: fit", "mode: exhaustive")]);
+    let out = "target/tmp/replay/adv-every-exhaustive".to_owned();
+    let _ = std::fs::remove_dir_all(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&out));
+    let run = sim_here(&[
+        "simulate",
+        "--spec",
+        "tests/fixture-search",
+        "--experiment",
+        exp.to_str().unwrap(),
+        "--out",
+        &out,
+        "--threads",
+        "2",
+    ]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let result = read_result(&out);
+    assert!(!result["search"].as_array().unwrap().is_empty());
+    failed.extend(adv_replay_every_row(&out, &result));
+    assert!(failed.is_empty(), "{}", failed.join("\n---\n"));
+}
+
+/// Target 1, a trace whose experiment changed since the run: the experiment of `run.experiment`
+/// renamed its mutation `opens` to `count` after the run. The row's point names `opens`, which
+/// the experiment no longer has, so `apply_point` skips it and the rerun runs the experiment's
+/// base value of `opens` instead of the point's. For the start row the base value equals the
+/// point's, the KPIs match by chance, and replay prints "0 of N KPIs differ" and exits 0: a rerun
+/// of a point that was not applied passes as a reproduction. Expected: refused (exit 2) naming the
+/// mutation `opens` that the experiment lacks.
+#[test]
+fn adv_replay_refuses_a_point_whose_mutation_the_experiment_no_longer_has() {
+    let exp = search_experiment("adv-renamed", &[]);
+    let out = "target/tmp/replay/adv-renamed".to_owned();
+    let _ = std::fs::remove_dir_all(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&out));
+    let run = sim_here(&[
+        "simulate",
+        "--spec",
+        "tests/fixture-search",
+        "--experiment",
+        exp.to_str().unwrap(),
+        "--out",
+        &out,
+        "--threads",
+        "2",
+    ]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let result = read_result(&out);
+    let start = result["search"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["decision"] == "start")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        start["point"]["opens"], 1,
+        "the start point is at the base value of opens"
+    );
+    // The experiment is edited after the run: its mutation `opens` is now named `count`.
+    let text = std::fs::read_to_string(&exp).unwrap();
+    assert!(text.contains("{name: opens,"));
+    std::fs::write(&exp, text.replace("{name: opens,", "{name: count,")).unwrap();
+
+    let walk = start["walk"].as_u64().unwrap().to_string();
+    let replay = sim_here(&[
+        "replay",
+        "--spec",
+        "tests/fixture-search",
+        "--trace",
+        &format!("{out}/result.json"),
+        "--walk",
+        &walk,
+        "--out",
+        &format!("{out}-replay"),
+    ]);
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&replay.stdout),
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(
+        replay.status.code(),
+        Some(2),
+        "the point names `opens`, the experiment has no such mutation: {said}"
+    );
+    assert!(said.contains("opens"), "names the mutation: {said}");
+}
+
+// ---- replay of a search point: inputs that changed since the run ------------------------------
+
+/// A fit run of `experiment` on `spec` (paths as given, from this crate), written to
+/// `target/tmp/replay/<name>`: that directory and its `result.json`.
+fn fit_run_of(name: &str, spec: &str, experiment: &str) -> (String, serde_json::Value) {
+    let out = format!("target/tmp/replay/{name}");
+    let _ = std::fs::remove_dir_all(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&out));
+    let run = sim_here(&[
+        "simulate",
+        "--spec",
+        spec,
+        "--experiment",
+        experiment,
+        "--out",
+        &out,
+        "--threads",
+        "2",
+    ]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let result = read_result(&out);
+    (out, result)
+}
+
+/// `replay --walk` of the first search row of `result` (its start point): the exit code and what
+/// it printed on both streams.
+fn replay_start(
+    spec: &str,
+    trace: &str,
+    result: &serde_json::Value,
+    out: &str,
+) -> (Option<i32>, String) {
+    let walk = result["search"][0]["walk"]
+        .as_u64()
+        .expect("a walk")
+        .to_string();
+    let run = sim_here(&[
+        "replay", "--spec", spec, "--trace", trace, "--walk", &walk, "--out", out,
+    ]);
+    (
+        run.status.code(),
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&run.stderr)
+        ),
+    )
+}
+
+/// Finding F1: the result records digests of the inputs a point's rerun reads (each top-level key
+/// of the experiment, each file of the spec); a replay after one changed is refused with exit 2,
+/// naming the key or the file, and runs nothing. A result with no digests cannot be checked and is
+/// refused too.
+#[test]
+fn replay_refuses_a_point_whose_experiment_or_spec_changed_since_the_run() {
+    // The seed of the experiment, edited after the run.
+    let exp = search_experiment("changed-seed", &[]);
+    let (out, result) = fit_run_of(
+        "changed-seed",
+        "tests/fixture-search",
+        exp.to_str().unwrap(),
+    );
+    assert!(
+        result["run"]["digests"]["experiment"]["seed"].is_string(),
+        "the run records a digest of each key of the experiment: {}",
+        result["run"]
+    );
+    let trace = format!("{out}/result.json");
+    let (code, said) = replay_start(
+        "tests/fixture-search",
+        &trace,
+        &result,
+        &format!("{out}-same"),
+    );
+    assert_eq!(code, Some(0), "unchanged inputs replay: {said}");
+    let text = std::fs::read_to_string(&exp).unwrap();
+    std::fs::write(&exp, text.replace("seed: 7", "seed: 8")).unwrap();
+    let (code, said) = replay_start(
+        "tests/fixture-search",
+        &trace,
+        &result,
+        &format!("{out}-seed"),
+    );
+    assert_eq!(code, Some(2), "{said}");
+    assert!(
+        said.contains("seed") && said.contains("changed since the run"),
+        "names the key: {said}"
+    );
+    assert!(!said.contains("KPIs differ"), "runs nothing: {said}");
+
+    // A file of the spec, edited after the run.
+    let spec = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("changed-spec");
+    let _ = std::fs::remove_dir_all(&spec);
+    std::fs::create_dir_all(&spec).unwrap();
+    for entry in std::fs::read_dir(fixture_search()).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), spec.join(entry.file_name())).unwrap();
+    }
+    let spec = spec.to_str().unwrap().to_owned();
+    let exp = search_experiment("changed-spec", &[]);
+    let (out, result) = fit_run_of("changed-spec", &spec, exp.to_str().unwrap());
+    let trace = format!("{out}/result.json");
+    let box_yaml = format!("{spec}/box.yaml");
+    let text = std::fs::read_to_string(&box_yaml).unwrap();
+    std::fs::write(&box_yaml, format!("{text}\n# edited after the run\n")).unwrap();
+    let (code, said) = replay_start(&spec, &trace, &result, &format!("{out}-spec"));
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("box.yaml"), "names the file: {said}");
+    assert!(!said.contains("KPIs differ"), "runs nothing: {said}");
+
+    // A result that records no digests (written before they were recorded).
+    let (out, mut result) = fit_run_of(
+        "no-digests",
+        "tests/fixture-search",
+        "tests/fixture-search/search.yaml",
+    );
+    result["run"].as_object_mut().unwrap().remove("digests");
+    let file = format!("{out}/older.json");
+    std::fs::write(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&file),
+        result.to_string(),
+    )
+    .unwrap();
+    let (code, said) = replay_start(
+        "tests/fixture-search",
+        &file,
+        &result,
+        &format!("{out}-older"),
+    );
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("cannot be checked"), "{said}");
+}
+
+/// Finding F1 (b): a point that names a key the experiment has no mutation of is refused with exit
+/// 2, naming the key, instead of the key being skipped and the base value run.
+#[test]
+fn replay_refuses_a_point_key_that_is_no_mutation_of_the_experiment() {
+    let (out, mut result) = fit_run_of(
+        "stray-key",
+        "tests/fixture-search",
+        "tests/fixture-search/search.yaml",
+    );
+    result["search"][0]["point"]["stray"] = serde_json::json!(3);
+    let file = format!("{out}/stray.json");
+    std::fs::write(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&file),
+        result.to_string(),
+    )
+    .unwrap();
+    let (code, said) = replay_start(
+        "tests/fixture-search",
+        &file,
+        &result,
+        &format!("{out}-stray"),
+    );
+    assert_eq!(code, Some(2), "{said}");
+    assert!(said.contains("`stray`"), "names the key: {said}");
+    assert!(!said.contains("KPIs differ"), "runs nothing: {said}");
+}
+
+/// A replay whose `--out` is the directory that holds the trace would write its own `result.json`
+/// over the trace: refused with exit 2, the trace unchanged.
+#[test]
+fn replay_refuses_an_out_that_holds_the_trace() {
+    let (out, result) = relative_fit_run("out-is-trace");
+    let trace = format!("{out}/result.json");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&trace);
+    let before = std::fs::read(&path).unwrap();
+    for given in [
+        out.clone(),
+        format!("./{out}/"),
+        format!("{out}/../out-is-trace"),
+    ] {
+        let (code, said) = replay_start("tests/fixture-search", &trace, &result, &given);
+        assert_eq!(code, Some(2), "--out {given}: {said}");
+        assert!(said.contains("holds the trace"), "--out {given}: {said}");
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "--out {given}: the trace is unchanged"
+        );
+    }
+}

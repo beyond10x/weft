@@ -6,6 +6,7 @@ pub mod coverage;
 pub mod experiment;
 pub mod explore;
 pub mod gen;
+pub mod inputs;
 pub mod relate;
 pub mod report;
 pub mod rng;

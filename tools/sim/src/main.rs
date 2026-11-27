@@ -12,7 +12,7 @@ use serde_json::json;
 use weft_sim::catalog::Catalog;
 use weft_sim::coverage::Coverage;
 use weft_sim::gen::Candidates;
-use weft_sim::{experiment, explore, report, serve, simulate, spec};
+use weft_sim::{experiment, explore, inputs, report, serve, simulate, spec};
 
 const USAGE: &str = "usage:
   weft-sim explore  --spec DIR --seed N --walks W --steps S --threads T --out DIR
@@ -31,7 +31,9 @@ const USAGE: &str = "usage:
                                           the trace of walk K again; or, for a search row of a
                                           simulate result, its point rerun at walk K: each KPI beside
                                           the recorded one (exit 2 when one differs), the result and
-                                          page with its timeline in --out (default sim/out/replay-K)
+                                          page with its timeline in --out (default sim/out/replay-K);
+                                          refused (exit 2) when the experiment or spec changed since
+                                          the run (run.digests) or --out holds the trace
   weft-sim relate   --spec DIR --base EXPERIMENT [--settle N] [--base-append STEPS]
                     [--drop LABELS] [--derived-append STEPS] [--hide VARS] [--observe VARS] [--ignore FIELDS]
                                           a metamorphic relation: after the setup of the base and of
@@ -431,6 +433,8 @@ fn simulate_cmd(args: &Args) -> Result<ExitCode, String> {
     if args.has("no-search") {
         exp.search = None;
     }
+    // What `replay` of a search point checks the inputs against before it reruns one.
+    let digests = inputs::record(&spec_dir, &file)?;
     let (cat, compile_s) = load_without(&spec_dir, &exp.lost_bindings)?;
     let cat = Arc::new(cat);
     let cov = Arc::new(Coverage::new(&cat, "simulate", threads));
@@ -457,6 +461,7 @@ fn simulate_cmd(args: &Args) -> Result<ExitCode, String> {
         "experiment": file.display().to_string(),
         "spec": spec_dir.display().to_string(),
         "out": out.display().to_string(),
+        "digests": digests,
         "compile_s": compile_s,
         "run_s": run_s,
         "result": outcome,
@@ -570,11 +575,45 @@ fn replay_point(
     let file = result["run"]["experiment"].as_str().ok_or_else(|| {
         format!("{trace}: walk {walk} is a search row, but the result names no experiment (run.experiment)")
     })?;
+    let out = PathBuf::from(args.get("out", &format!("sim/out/replay-{walk}")));
+    let holder = match std::path::Path::new(trace).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    if let (Ok(a), Ok(b)) = (out.canonicalize(), holder.canonicalize()) {
+        if a == b {
+            return Err(format!(
+                "--out {} is the directory that holds the trace {trace}: the replay's result.json would be written over it; give another --out",
+                out.display()
+            ));
+        }
+    }
     let exp = experiment::load(&PathBuf::from(file))?;
     let point: BTreeMap<String, serde_json::Value> =
         serde_json::from_value(row["point"].clone())
             .map_err(|e| format!("{trace}: the point of walk {walk}: {e}"))?;
-    let out = PathBuf::from(args.get("out", &format!("sim/out/replay-{walk}")));
+    // The rerun is a reproduction only of the inputs the run read: refuse a point the experiment
+    // cannot apply, and inputs that changed since the run, before running anything.
+    let mut refused: Vec<String> = simulate::unknown_point_keys(&exp, &point)
+        .into_iter()
+        .map(|k| format!("the point of walk {walk} names `{k}`, which is no mutation of the experiment {file}"))
+        .collect();
+    match result["run"].get("digests") {
+        Some(recorded) => refused.extend(inputs::changed(
+            recorded,
+            spec_dir,
+            std::path::Path::new(file),
+        )?),
+        None => refused.push(format!(
+            "{trace} records no digests of its inputs (run.digests, written by weft-sim simulate since the replay of search points): whether the experiment and the spec are still those of the run cannot be checked; run simulate again"
+        )),
+    }
+    if !refused.is_empty() {
+        return Err(format!(
+            "replay of walk {walk} refused:\n  {}",
+            refused.join("\n  ")
+        ));
+    }
     let (cat, compile_s) = load_without(spec_dir, &exp.lost_bindings)?;
     let cov = Coverage::new(&cat, "replay", 1);
     let replay = json!({"trace": trace, "walk": walk, "seq": row["seq"], "point": point});

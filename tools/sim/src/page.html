@@ -75,7 +75,9 @@ svg text.an { fill: var(--mute); }
 #p-land text.ct { font-size:12px; fill: #1d1d1f; pointer-events: none; }
 #p-replay { margin:4px 0 8px; }
 #p-replay code { display:block; overflow-wrap:anywhere; }
-#p-land [data-path-step], #p-land [data-cell] { cursor:pointer; }
+#p-land [role=button] { cursor:pointer; }
+#p-land [role=button]:focus { outline:2px solid var(--accent); outline-offset:2px; }
+#p-land rect[role=button]:focus { stroke: var(--fg); stroke-width:3; }
 </style>
 </head>
 <body>
@@ -404,8 +406,20 @@ function fixedIndex(shown) {
   return at ? at.index : P.axes.map(() => 0);
 }
 
-/** A word for a POSIX shell: as it is when it needs no quoting, else in single quotes. */
-const shq = (s) => /^[A-Za-z0-9_.\/:=@%+,-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+/** A word for a POSIX shell: as it is when it needs no quoting, else in single quotes. A leading
+ * `=` (zsh's EQUALS), `~` (a home directory) or `%` (a job) is expanded unquoted, so such a word
+ * is quoted. */
+const shq = (s) => /^[A-Za-z0-9_.\/:@+,-][A-Za-z0-9_.\/:=@%+,-]*$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+
+/** What a landscape mark or cell selects, read aloud: the walk and the values of its point. */
+const pointLabel = (r, what) => `select walk ${r.walk}: ${what}, ${Object.entries(r.point || {}).map(([k, v]) => `${k} ${valueText(v)}`).join(', ')}`;
+
+/** Makes a drawn landscape element of row `r` a button: in the Tab order and named. */
+function asButton(node, r, what) {
+  node.setAttribute('tabindex', '0');
+  node.setAttribute('role', 'button');
+  node.setAttribute('aria-label', pointLabel(r, what));
+}
 
 /** A path the run was given: `run.<key>`, the live `info.paths`, its command line, or the default. */
 function runPath(key, fallback) {
@@ -487,7 +501,7 @@ function landscape(shown) {
     if (r) { attrs['data-fitness'] = String(r.fitness); attrs['data-seq'] = String(r.seq); }
     if (state === 'feasible') { const t = hi > lo ? (r.fitness - lo) / (hi - lo) : 1; attrs.fill = `hsl(${Math.round(210 - 90 * t)}, 60%, ${Math.round(80 - 25 * t)}%)`; }
     const cell = el('rect', attrs, svg);
-    if (r) { const tt = el('title', {}, cell); tt.textContent = `${JSON.stringify(r.point)}: ${state}${state === 'feasible' ? ' ' + r.fitness : ''}`; }
+    if (r) { const tt = el('title', {}, cell); tt.textContent = `${JSON.stringify(r.point)}: ${state}${state === 'feasible' ? ' ' + r.fitness : ''}`; asButton(cell, r, `cell of row ${r.seq}, ${state}`); }
     if (state === 'feasible') { const tx = el('text', { x: left(i) + C - 6, y: top(j) + C - 7, 'text-anchor': 'end', class: 'ct' }, svg); tx.textContent = fmt(r.fitness); }
   }
   xa.values.forEach((v, i) => {
@@ -524,6 +538,7 @@ function landscape(shown) {
     }
     if (r.seq === (P.selected ?? P.frame)) el('circle', { cx: x, cy: y, r: 20, fill: 'none', stroke: 'var(--fg)', 'stroke-width': 1.5, 'stroke-dasharray': '3 3' }, g);
     const tt = el('title', {}, g); tt.textContent = `row ${r.seq}: ${r.decision}${r.parent ? ' from row ' + r.parent : ''}`;
+    asButton(g, r, `row ${r.seq}, ${r.decision}`);
   }
 }
 
@@ -555,12 +570,21 @@ $('p-pause').addEventListener('click', pause);
 $('p-fwd').addEventListener('click', () => step(1));
 $('p-back').addEventListener('click', () => step(-1));
 $('p-frame').addEventListener('input', (ev) => { P.frame = Number(ev.target.value); playerDraw(); });
-$('p-land').addEventListener('click', (ev) => {
-  // A path mark or a cell: its row is the selected point until the frame moves.
-  const hit = ev.target.closest('[data-path-step], [data-cell]');
+/** Selects the row of a path mark or a cell (`hit`): its row is the selected point until the frame
+ * moves. The landscape is drawn anew, so the focus moves to the same mark or cell in it. */
+function selectHit(hit, refocus) {
   const seq = hit ? Number(hit.getAttribute('data-path-step') ?? hit.getAttribute('data-seq')) : 0;
-  if (!seq) return;
+  if (!seq) return false;
+  const key = hit.hasAttribute('data-path-step') ? `[data-path-step="${seq}"]` : `[data-cell="${hit.getAttribute('data-cell')}"]`;
   P.selected = seq; playerDraw();
+  if (refocus) { const again = $('p-land').querySelector(key); if (again) again.focus(); }
+  return true;
+}
+$('p-land').addEventListener('click', (ev) => { selectHit(ev.target.closest('[data-path-step], [data-cell]'), false); });
+$('p-land').addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Enter' && ev.key !== ' ') return;
+  const hit = ev.target.closest('[role=button]');
+  if (hit && selectHit(hit, true)) ev.preventDefault();
 });
 $('p-speed').addEventListener('change', (ev) => { P.speed = Number(ev.target.value); if (P.playing) arm(); playerDraw(); });
 $('p-x').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.y) P.y = P.x; P.x = i; playerDraw(); });
