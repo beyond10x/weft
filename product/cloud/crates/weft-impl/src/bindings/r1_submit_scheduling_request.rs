@@ -7,10 +7,13 @@
 //! `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //! (E2). Drops `already-requested` (a repeated delivery); retries every other refusal.
 
+use serde_json::Value;
 use weft_system::SystemEvent;
 use weft_types::scheduling::{SubmitSchedulingRequest, SubmitSchedulingRequestOutcome};
+use weft_types::workloads::InstanceCreated;
 
 use super::{invoke, outcome_name, Entry, Invoked};
+use crate::storage::codec::Codec;
 use crate::System;
 
 /// The entry of the runner.
@@ -18,7 +21,20 @@ pub const ENTRY: Entry = Entry {
     id: "r1-submit-scheduling-request",
     drop: &["already-requested"],
     invoke: deliver,
+    encode,
+    decode,
 };
+
+fn encode(event: &SystemEvent) -> Option<Value> {
+    match event {
+        SystemEvent::WorkloadsInstanceCreated(created) => Some(created.encode()),
+        _ => None,
+    }
+}
+
+fn decode(value: &Value) -> Result<SystemEvent, String> {
+    InstanceCreated::decode(value).map(SystemEvent::WorkloadsInstanceCreated)
+}
 
 fn deliver(system: &mut System, event: &SystemEvent) -> Option<Invoked> {
     let SystemEvent::WorkloadsInstanceCreated(created) = event else {

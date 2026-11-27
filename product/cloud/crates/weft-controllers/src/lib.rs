@@ -32,9 +32,10 @@ pub struct Sent {
     pub events: Vec<SystemEvent>,
 }
 
-/// Runs every step once: the commands sent, in order.
-pub fn tick(system: &mut System) -> Vec<Sent> {
-    replicas::tick(system)
+/// Runs every step once, given the events the hand-run bindings hold for another attempt
+/// (`held`, [`weft_impl::bindings::Runner::held_events`]): the commands sent, in order.
+pub fn tick(system: &mut System, held: &[SystemEvent]) -> Vec<Sent> {
+    replicas::tick(system, held)
 }
 
 /// Sends `operation` with `input` to `weft-control` as `actor`.

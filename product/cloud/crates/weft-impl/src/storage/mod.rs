@@ -8,7 +8,8 @@
 //! One writer: [`Store::open`] holds an exclusive lock (`flock`) on `<state>.lock` for the life
 //! of the store and refuses a state file another store holds. The control host log's lines live
 //! in the same file (table `weft.impl.Log`, see [`crate::log`]), so a command's rows and its log
-//! lines commit in one [`Store::transaction`].
+//! lines commit in one [`Store::transaction`], and so do the events the hand-run bindings hold
+//! for another attempt (table `weft.impl.Held`, see [`crate::bindings`]).
 //!
 //! The port's methods cannot fail (`weft_types::behaviour::…Storage`), so a state file SQLite
 //! cannot read or write ends the process with a panic naming the table: a control host whose
@@ -43,6 +44,9 @@ const JOIN_TOKENS: &str = "weft.impl.JoinTokenDigest";
 /// The table of the control host log's lines, by `seq`.
 const LOG: &str = "weft.impl.Log";
 
+/// The table of the events the hand-run bindings hold for another attempt, in the order held.
+const HELD: &str = "weft.impl.Held";
+
 /// The state file.
 pub struct Store {
     connection: Mutex<Connection>,
@@ -72,8 +76,9 @@ impl Store {
             ));
         }
         schema.push_str(&format!(
-            "CREATE TABLE IF NOT EXISTS {} (seq INTEGER PRIMARY KEY NOT NULL, line TEXT NOT NULL);\nCOMMIT;",
-            table(LOG)
+            "CREATE TABLE IF NOT EXISTS {} (seq INTEGER PRIMARY KEY NOT NULL, line TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY NOT NULL, binding TEXT NOT NULL, event TEXT NOT NULL, attempts INTEGER NOT NULL, wait INTEGER NOT NULL);\nCOMMIT;",
+            table(LOG),
+            table(HELD)
         ));
         connection.execute_batch(&schema).map_err(fail)?;
         Ok(Self {
@@ -218,6 +223,83 @@ impl Store {
             .unwrap_or_else(|error| failed(LOG, "read", &error));
         (u64::try_from(last).unwrap_or(0), lines)
     }
+
+    /// Every held event, in the order held.
+    pub fn held(&self) -> Vec<Held> {
+        self.connection()
+            .prepare_cached(&format!(
+                "SELECT id, binding, event, attempts, wait FROM {} ORDER BY id",
+                table(HELD)
+            ))
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| {
+                        Ok(Held {
+                            id: row.get(0)?,
+                            binding: row.get(1)?,
+                            event: row.get(2)?,
+                            attempts: row.get(3)?,
+                            wait: row.get(4)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<Held>, _>>()
+            })
+            .unwrap_or_else(|error| failed(HELD, "list", &error))
+    }
+
+    /// Holds `event` (its text) of `binding` after `attempts` attempts, to be attempted again
+    /// `wait` ticks on, in the open transaction if any.
+    pub fn hold(&self, binding: &str, event: &str, attempts: u32, wait: u32) {
+        self.connection()
+            .prepare_cached(&format!(
+                "INSERT INTO {} (binding, event, attempts, wait) VALUES (?1, ?2, ?3, ?4)",
+                table(HELD)
+            ))
+            .and_then(|mut statement| statement.execute(params![binding, event, attempts, wait]))
+            .unwrap_or_else(|error| failed(HELD, "write", &error));
+    }
+
+    /// Sets the attempts and the wait of the held event `id`.
+    pub fn set_held(&self, id: i64, attempts: u32, wait: u32) {
+        self.connection()
+            .prepare_cached(&format!(
+                "UPDATE {} SET attempts = ?2, wait = ?3 WHERE id = ?1",
+                table(HELD)
+            ))
+            .and_then(|mut statement| statement.execute(params![id, attempts, wait]))
+            .unwrap_or_else(|error| failed(HELD, "write", &error));
+    }
+
+    /// Lets go of the held event `id`.
+    pub fn release(&self, id: i64) {
+        self.connection()
+            .prepare_cached(&format!("DELETE FROM {} WHERE id = ?1", table(HELD)))
+            .and_then(|mut statement| statement.execute(params![id]))
+            .unwrap_or_else(|error| failed(HELD, "delete", &error));
+    }
+
+    /// Makes every held event due at the next tick: the wait of each is 1.
+    pub fn make_held_due(&self) {
+        self.connection()
+            .prepare_cached(&format!("UPDATE {} SET wait = 1", table(HELD)))
+            .and_then(|mut statement| statement.execute([]))
+            .unwrap_or_else(|error| failed(HELD, "write", &error));
+    }
+}
+
+/// An event a hand-run binding holds for another attempt (table `weft.impl.Held`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    /// Its place in the order held.
+    pub id: i64,
+    /// The binding's `id` in `ess/components.yaml`.
+    pub binding: String,
+    /// The event, in the form of [`codec`].
+    pub event: String,
+    /// How many times the binding attempted it.
+    pub attempts: u32,
+    /// The ticks until its next attempt: it is attempted by the tick that finds it at 1.
+    pub wait: u32,
 }
 
 /// An open transaction, rolled back when dropped before its commit (a panic in its work).

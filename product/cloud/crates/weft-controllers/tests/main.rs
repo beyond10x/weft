@@ -3,7 +3,9 @@
 //! - [`replicas`]: the acceptance of `story:skeleton-replica-instances`, the R1 level step and
 //!   the two hand-run bindings of R1, on the `weft` binary and in-process;
 //! - [`obligations`]: `weft.workloads.CreateInstance` and `weft.scheduling.SubmitSchedulingRequest`,
-//!   each guard in the selection precedence of its contract.
+//!   each guard in the selection precedence of its contract;
+//! - [`runner`]: the runner of the hand-run bindings on a state file of its own;
+//! - [`adversary`]: the cases of the adversary pass.
 
 /// What both modules share: a control host in this process after the operator and tenant path
 /// and the workload definitions, and readers of its views and log.
@@ -94,7 +96,9 @@ mod replicas {
     use weft_system::SystemEvent;
     use weft_testkit::steps;
     use weft_testkit::ControlHost;
-    use weft_types::behaviour::{FormationStorage, InstanceStorage, QuotaStorage, WorkloadStorage};
+    use weft_types::behaviour::{
+        FormationStorage, InstanceStorage, QuotaStorage, ServiceStorage, WorkloadStorage,
+    };
     use weft_types::primitives::Uuid;
     use weft_types::shared::{QuotaId, ServiceId, WorkloadId};
     use weft_types::workloads::{InstanceCreated, ReplicaRequested};
@@ -184,57 +188,178 @@ mod replicas {
         assert_eq!(
             lines,
             vec![
-                json!({"seq": lines[0]["seq"], "kind": "binding", "binding": CREATE_REPLICA, "refusal": "replica-live", "result": "dropped"})
+                json!({"seq": lines[0]["seq"], "kind": "binding", "binding": CREATE_REPLICA, "refusal": "replica-live", "result": "dropped", "attempt": 1})
             ],
         );
         assert_eq!(instances(client, &w.ids.workload_id).len(), 1);
         assert_eq!(w.process.host().held(), 0);
     }
 
+    /// Sets the limit and the remainder of the world's `cpu` quota to `limit`.
+    fn set_limit(w: &World, limit: i64) {
+        let mut ports = w.ports();
+        let key = QuotaId(Uuid(w.path.quota_id.clone()));
+        let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
+        quota.data.limit = limit;
+        quota.data.remaining = limit;
+        QuotaStorage::put(&mut ports, quota);
+    }
+
     /// Statement 3: a `ReplicaRequested` whose instance would take the account past its `cpu`
-    /// quota is answered `over-quota`, off the drop list: retried, not dropped. Once the quota is
-    /// raised, the next tick creates it.
+    /// quota is answered `over-quota`, off the drop list: retried, not dropped. It is attempted
+    /// again on the next tick, then after a wait of two ticks; once the quota is raised, the
+    /// next attempt creates it.
     #[test]
     fn a_replica_request_past_the_account_quota_is_retried_until_the_quota_admits_it() {
         let w = World::new();
         w.process.host().tick();
         let client = w.process.client();
-        let set_limit = |limit: i64| {
-            let mut ports = w.ports();
-            let key = QuotaId(Uuid(w.path.quota_id.clone()));
-            let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
-            quota.data.limit = limit;
-            quota.data.remaining = limit;
-            QuotaStorage::put(&mut ports, quota);
-        };
         // The one live instance claims 1 cpu: the quota is used up.
-        set_limit(1);
+        set_limit(&w, 1);
         let seq = w.process.last_seq();
         w.process.host().replay(vec![replica_requested(&w, 1)]);
         let lines = binding_lines(&w.process.log_after(seq), CREATE_REPLICA);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert_eq!(lines[0]["refusal"], json!("over-quota"));
         assert_eq!(lines[0]["result"], json!("retried"));
+        assert_eq!(lines[0]["attempt"], json!(1));
         assert_eq!(instances(client, &w.ids.workload_id).len(), 1);
         assert_eq!(w.process.host().held(), 1);
 
-        // Still used up: the tick attempts it again and holds it again.
+        // Still used up: the next tick attempts it again and holds it again.
         let seq = w.process.last_seq();
         w.process.host().tick();
         let lines = binding_lines(&w.process.log_after(seq), CREATE_REPLICA);
         assert_eq!(lines.len(), 1, "{lines:?}");
         assert_eq!(lines[0]["result"], json!("retried"));
+        assert_eq!(lines[0]["attempt"], json!(2));
 
-        set_limit(64);
+        // Raised: the first tick waits, the second attempts it.
+        set_limit(&w, 64);
         let seq = w.process.last_seq();
+        w.process.host().tick();
+        assert_eq!(
+            binding_lines(&w.process.log_after(seq), CREATE_REPLICA),
+            Vec::<Value>::new()
+        );
         w.process.host().tick();
         let after = w.process.log_after(seq);
         let lines = binding_lines(&after, CREATE_REPLICA);
         assert_eq!(lines.len(), 1, "{after:?}");
         assert_eq!(lines[0]["result"], json!("applied"));
+        assert_eq!(lines[0]["attempt"], json!(3));
         assert!(lines[0].get("refusal").is_none(), "{lines:?}");
         assert_eq!(binding_lines(&after, SUBMIT)[0]["result"], json!("applied"));
         assert_eq!(instances(client, &w.ids.workload_id).len(), 2);
+        assert_eq!(w.process.host().held(), 0);
+    }
+
+    /// A held event is attempted again after a wait that doubles from one tick up to 32 ticks,
+    /// one binding line per attempt with its number: over 100 ticks, 8 lines, at most
+    /// log2(100) + 2. The service, whose replica is held, is not requested again.
+    #[test]
+    fn a_held_replica_request_is_attempted_after_doubling_waits_with_one_line_per_attempt() {
+        const TICKS: u32 = 100;
+        let w = World::new();
+        set_limit(&w, 0);
+        let start = w.process.last_seq();
+        let mut attempted_at = Vec::new();
+        for tick in 1..=TICKS {
+            let seq = w.process.last_seq();
+            w.process.host().tick();
+            if !binding_lines(&w.process.log_after(seq), CREATE_REPLICA).is_empty() {
+                attempted_at.push(tick);
+            }
+        }
+        // Tick 1 requests the replica (attempt 1); waits of 1, 2, 4, 8, 16, then 32, 32.
+        assert_eq!(attempted_at, [1, 2, 4, 8, 16, 32, 64, 96]);
+        let after = w.process.log_after(start);
+        let lines = binding_lines(&after, CREATE_REPLICA);
+        let attempts: Vec<Value> = lines.iter().map(|line| line["attempt"].clone()).collect();
+        assert_eq!(attempts, (1..=8).map(|n| json!(n)).collect::<Vec<_>>());
+        assert!(
+            lines
+                .iter()
+                .all(|line| line["refusal"] == json!("over-quota")
+                    && line["result"] == json!("retried")),
+            "{lines:?}"
+        );
+        assert!(
+            f64::from(u32::try_from(lines.len()).expect("a count"))
+                <= f64::from(TICKS).log2() + 2.0
+        );
+        assert_eq!(
+            request_lines(&after, "weft.workloads.RequestReplica").len(),
+            1,
+            "{after:?}"
+        );
+
+        // Raised: the attempt due at tick 128 creates it.
+        set_limit(&w, 64);
+        for _ in 0..28 {
+            w.process.host().tick();
+        }
+        assert_eq!(instances(w.process.client(), &w.ids.workload_id).len(), 1);
+        assert_eq!(w.process.host().held(), 0);
+    }
+
+    /// One replica request per service at a time: a service whose `ReplicaRequested` is held is
+    /// skipped, and another service below scale is still requested.
+    #[test]
+    fn a_service_with_a_held_replica_request_is_skipped_and_another_is_requested() {
+        let w = World::new();
+        let mut ports = w.ports();
+        let first = ServiceId(Uuid(w.ids.service_id.clone()));
+        let mut workload =
+            WorkloadStorage::get(&ports, &WorkloadId(Uuid(w.ids.workload_id.clone())))
+                .expect("the workload row");
+        workload.data.workload_id = WorkloadId(Uuid(weft_impl::context::mint()));
+        let mut service = ServiceStorage::get(&ports, &first).expect("the service row");
+        service.data.service_id = ServiceId(Uuid(weft_impl::context::mint()));
+        service.data.workload_id = workload.data.workload_id.clone();
+        let second = service.data.service_id.clone();
+        WorkloadStorage::put(&mut ports, workload);
+        ServiceStorage::put(&mut ports, service);
+        set_limit(&w, 0);
+        w.process.host().replay(vec![replica_requested(&w, 0)]);
+        assert_eq!(w.process.host().held(), 1);
+
+        let seq = w.process.last_seq();
+        w.process.host().tick();
+        let after = w.process.log_after(seq);
+        assert_eq!(
+            request_lines(&after, "weft.workloads.RequestReplica").len(),
+            1,
+            "{after:?}"
+        );
+        let running = |id: &ServiceId| {
+            ServiceStorage::get(&w.ports(), id)
+                .expect("the service row")
+                .data
+                .running_replicas
+        };
+        assert_eq!((running(&first), running(&second)), (0, 1));
+    }
+
+    /// `r1-create-replica` drops `workload-retired`: a replica of a retired workload is not held.
+    #[test]
+    fn a_replica_request_of_a_retired_workload_is_dropped() {
+        let w = World::new();
+        let mut ports = w.ports();
+        let key = WorkloadId(Uuid(w.ids.workload_id.clone()));
+        let mut workload = WorkloadStorage::get(&ports, &key).expect("the workload row");
+        workload.state = weft_types::workloads::WorkloadState::Retired;
+        WorkloadStorage::put(&mut ports, workload);
+        let seq = w.process.last_seq();
+        w.process.host().replay(vec![replica_requested(&w, 0)]);
+        let lines = binding_lines(&w.process.log_after(seq), CREATE_REPLICA);
+        assert_eq!(
+            lines,
+            vec![
+                json!({"seq": lines[0]["seq"], "kind": "binding", "binding": CREATE_REPLICA, "refusal": "workload-retired", "result": "dropped", "attempt": 1})
+            ],
+        );
+        assert_eq!(instances(w.process.client(), &w.ids.workload_id).len(), 0);
         assert_eq!(w.process.host().held(), 0);
     }
 
@@ -1114,5 +1239,278 @@ mod obligations {
         assert_eq!(scheduling_requested.cluster_id, data.cluster_id);
         assert_eq!(scheduling_requested.min_isolation, data.min_isolation);
         assert_eq!(scheduling_requested.priority, data.priority);
+    }
+
+    /// `replica-live` and the quota count an instance in `Pending`, `Scheduled`, `Starting`,
+    /// `Running` or `Paused` and no other: with a quota of 1 cpu and every instance in a live
+    /// state, replica 0 is live and replica 1 over the quota; in any other state both are
+    /// created.
+    #[test]
+    fn replica_live_and_the_quota_count_the_five_live_states_and_no_other() {
+        let w = World::new();
+        let mut ports = w.ports();
+        let key = QuotaId(Uuid(w.path.quota_id.clone()));
+        let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
+        quota.data.limit = 1;
+        QuotaStorage::put(&mut ports, quota);
+        let set_all = |ports: &mut Ports, state: InstanceState| {
+            for mut row in InstanceStorage::list(ports) {
+                row.state = state;
+                InstanceStorage::put(ports, row);
+            }
+        };
+        let second = CreateInstance {
+            replica_index: Some(1),
+            ..replica(&w)
+        };
+        creates(&w, replica(&w));
+        for state in [
+            InstanceState::Pending,
+            InstanceState::Scheduled,
+            InstanceState::Starting,
+            InstanceState::Running,
+            InstanceState::Paused,
+        ] {
+            set_all(&mut ports, state);
+            refuses(&w, replica(&w), "replica-live");
+            refuses(&w, second.clone(), "over-quota");
+        }
+        for state in [
+            InstanceState::Exited,
+            InstanceState::Failed,
+            InstanceState::Evicted,
+        ] {
+            set_all(&mut ports, state);
+            creates(&w, replica(&w));
+            set_all(&mut ports, state);
+            creates(&w, second.clone());
+        }
+    }
+}
+
+/// The runner of the hand-run bindings (`weft_impl::bindings`) with a binding of its own whose
+/// port answers an unmet obligation, on a state file of its own.
+mod runner {
+    use weft_impl::bindings::{Answer, Entry, Invoked, Runner};
+    use weft_impl::context::mint;
+    use weft_impl::log::BindingResult;
+    use weft_impl::{Ports, System};
+    use weft_system::SystemEvent;
+    use weft_types::primitives::Uuid;
+    use weft_types::shared::{ServiceId, WorkloadId};
+    use weft_types::workloads::ReplicaRequested;
+
+    /// Reacts to `ReplicaRequested` as `r1-create-replica` does; its port answers an unmet
+    /// obligation, as one whose transport failed.
+    fn unmet(_: &mut System, event: &SystemEvent) -> Option<Invoked> {
+        matches!(event, SystemEvent::WorkloadsReplicaRequested(_))
+            .then(|| Invoked::Unmet("the port is down".to_owned()))
+    }
+
+    static UNMET: Entry = Entry {
+        id: "unmet",
+        drop: &[],
+        invoke: unmet,
+        encode: weft_impl::bindings::r1_create_replica::ENTRY.encode,
+        decode: weft_impl::bindings::r1_create_replica::ENTRY.decode,
+    };
+
+    static ENTRIES: &[&Entry] = &[&UNMET];
+
+    /// An unmet obligation is retried: the event is held in the state file, attempted again
+    /// after waits of 1 and 2 ticks, still held after the state file is closed and opened
+    /// again, and due at the first tick of the runner that opens it.
+    #[test]
+    fn an_unmet_obligation_is_held_in_the_state_file_and_due_when_a_runner_opens() {
+        let dir = weft_testkit::TempDir::new();
+        let state = dir.path().join("state.db");
+        let event = SystemEvent::WorkloadsReplicaRequested(ReplicaRequested {
+            service_id: ServiceId(Uuid(mint())),
+            workload_id: WorkloadId(Uuid(mint())),
+            replica_index: 0,
+        });
+        {
+            let ports = Ports::open(&state).expect("the state file opens");
+            let mut system = weft_impl::system(&ports);
+            let runner = Runner::open_with(&ports, ENTRIES);
+            let answers = runner.deliver(&mut system, vec![event.clone()]);
+            assert_eq!(
+                answers,
+                [Answer {
+                    binding: "unmet",
+                    refusal: None,
+                    result: BindingResult::Retried,
+                    attempt: 1,
+                    events: Vec::new(),
+                }]
+            );
+            assert_eq!(runner.held_events(), std::slice::from_ref(&event));
+            let attempts = |answers: Vec<Answer>| -> Vec<u32> {
+                answers.iter().map(|answer| answer.attempt).collect()
+            };
+            assert_eq!(attempts(runner.retry(&mut system)), [2]);
+            assert_eq!(attempts(runner.retry(&mut system)), Vec::<u32>::new());
+            assert_eq!(attempts(runner.retry(&mut system)), [3]);
+            let held = ports.store().held();
+            assert_eq!((held[0].attempts, held[0].wait), (3, 4), "{held:?}");
+        }
+
+        let ports = Ports::open(&state).expect("the state file opens again");
+        let mut system = weft_impl::system(&ports);
+        let runner = Runner::open_with(&ports, ENTRIES);
+        assert_eq!(runner.held_events(), [event]);
+        let held = ports.store().held();
+        assert_eq!((held[0].attempts, held[0].wait), (3, 1), "{held:?}");
+        let answers = runner.retry(&mut system);
+        assert_eq!(answers.len(), 1, "{answers:?}");
+        assert_eq!(
+            (answers[0].attempt, answers[0].result),
+            (4, BindingResult::Retried)
+        );
+        assert_eq!(runner.held(), 1);
+    }
+}
+
+/// Adversary pass on `story:skeleton-replica-instances`: a replica the Scheduler requested while
+/// its `CreateInstance` is held for another attempt.
+mod adversary {
+    use std::path::Path as FsPath;
+    use std::time::{Duration, Instant};
+
+    use serde_json::json;
+    use weft_impl::Ports;
+    use weft_testkit::steps;
+    use weft_testkit::ControlHost;
+    use weft_types::behaviour::{InstanceStorage, QuotaStorage, ServiceStorage};
+    use weft_types::primitives::Uuid;
+    use weft_types::shared::{QuotaId, ServiceId};
+
+    use super::world::{binding_lines, instances, World};
+
+    const CREATE_REPLICA: &str = "r1-create-replica";
+
+    fn set_limit(ports: &mut Ports, quota_id: &str, limit: i64) {
+        let key = QuotaId(Uuid(quota_id.to_owned()));
+        let mut quota = QuotaStorage::get(ports, &key).expect("the quota row");
+        quota.data.limit = limit;
+        quota.data.remaining = limit;
+        QuotaStorage::put(ports, quota);
+    }
+
+    fn set_limit_in(state: &FsPath, quota_id: &str, limit: i64) {
+        let mut ports = Ports::open(state).expect("the stopped host's state file opens");
+        set_limit(&mut ports, quota_id, limit);
+    }
+
+    /// A service of 2 replicas whose account quota is used up: tick 1 requests replica 0 and
+    /// `CreateInstance` answers `over-quota` (held); tick 2 attempts it again and the level step,
+    /// which sees no live instance of index 0, requests index 0 a second time. Once the quota
+    /// admits both, the service must hold replicas 0 and 1 (`ess/4-applications/workloads.yaml`
+    /// RequestReplica OPEN: "the controller requests one replica per service at a time and waits
+    /// for InstanceCreated or the refusal").
+    #[test]
+    fn a_held_replica_is_not_requested_twice_and_every_index_is_made_once_the_quota_admits_it() {
+        let w = World::new();
+        let mut ports = w.ports();
+        set_limit(&mut ports, &w.path.quota_id, 0);
+        let key = ServiceId(Uuid(w.ids.service_id.clone()));
+        let mut service = ServiceStorage::get(&ports, &key).expect("the service row");
+        service.data.replicas = 2;
+        ServiceStorage::put(&mut ports, service);
+
+        w.process.host().tick();
+        w.process.host().tick();
+        assert_eq!(InstanceStorage::list(&w.ports()).len(), 0);
+
+        set_limit(&mut ports, &w.path.quota_id, 64);
+        for _ in 0..4 {
+            w.process.host().tick();
+        }
+        let mut indexes: Vec<i64> = instances(w.process.client(), &w.ids.workload_id)
+            .iter()
+            .map(|row| row["replica_index"].as_i64().expect("a replica index"))
+            .collect();
+        indexes.sort_unstable();
+        let service = ServiceStorage::get(&w.ports(), &key).expect("the service row");
+        assert_eq!(
+            (indexes, service.data.running_replicas),
+            (vec![0, 1], 2),
+            "replicas made and the service's live count after the quota was raised"
+        );
+    }
+
+    /// A replica whose `CreateInstance` was answered `over-quota` is held for another attempt;
+    /// the control host restarts; the quota is raised. `r1-create-replica` is
+    /// `delivery: at_least_once` and retries `over-quota` (`ess/components.yaml`), and
+    /// `RequestReplica` already counted the replica, so the level step never asks again: the
+    /// instance must still be made.
+    ///
+    /// The quota is used up by replica 0 of the service, not by a limit of 0 before the
+    /// definitions: `DefineWorkload` and `DefineService` answer `over-quota` themselves when the
+    /// workload's claims alone pass a limit. Replica 1 is the held one.
+    #[test]
+    fn a_replica_held_over_quota_is_made_after_the_control_host_restarts() {
+        let mut host = ControlHost::start();
+        let path = steps::run_path(&host.client());
+        let ids = steps::run_definitions(&host.client(), &path);
+        let started = Instant::now();
+        while instances(&host.client(), &ids.workload_id).is_empty() {
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "no replica 0 2 s after the definitions"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        host.stop();
+        {
+            let mut ports = Ports::open(&host.state_path()).expect("the state file opens");
+            set_limit(&mut ports, &path.quota_id, 1);
+            let key = ServiceId(Uuid(ids.service_id.clone()));
+            let mut service = ServiceStorage::get(&ports, &key).expect("the service row");
+            service.data.replicas = 2;
+            ServiceStorage::put(&mut ports, service);
+        }
+        let mut host = host.restart();
+        let seq = host.last_seq();
+
+        // Positive control: the tick requested replica 1 and its creation is held.
+        let started = Instant::now();
+        loop {
+            let held = binding_lines(&host.log_after(seq), CREATE_REPLICA);
+            if held.iter().any(|line| {
+                line["refusal"] == json!("over-quota") && line["result"] == json!("retried")
+            }) {
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "no held over-quota attempt of r1-create-replica: {held:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        host.stop();
+        set_limit_in(&host.state_path(), &path.quota_id, 64);
+        let host = host.restart();
+        let client = host.client();
+        let started = Instant::now();
+        loop {
+            let rows = instances(&client, &ids.workload_id);
+            if rows.len() > 1 {
+                let mut indexes: Vec<i64> = rows
+                    .iter()
+                    .map(|row| row["replica_index"].as_i64().expect("a replica index"))
+                    .collect();
+                indexes.sort_unstable();
+                assert_eq!(indexes, [0, 1], "{rows:?}");
+                break;
+            }
+            assert!(
+                started.elapsed() < Duration::from_secs(3),
+                "3 s after the restart with the quota raised the service has no instance: the held \
+                 ReplicaRequested was lost with the process"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }

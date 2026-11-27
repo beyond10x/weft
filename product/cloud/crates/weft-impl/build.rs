@@ -5,7 +5,8 @@
 //!   generated memory store (`weft-server/src/memory.rs`) keeps, its table named by the entity's
 //!   qualified name, and the `Row` enum `seed` writes through;
 //! - the codec of every type a stored row reaches (`weft-types/src/*.rs`), from which the rows
-//!   are written to and read from their tables;
+//!   are written to and read from their tables, and of the events the hand-run bindings hold
+//!   ([`HELD_EVENTS`]);
 //! - the behaviour bundle: every file of `src/behaviours/` is a module whose name is the method
 //!   of the obligation it implements (`create_tenant.rs` implements `CreateTenantBehavior`), and
 //!   every obligation without a file answers the generated stub, `UnmetObligation`. A later story
@@ -477,6 +478,13 @@ fn named(
 /// Types whose codec is written by hand in `src/storage/codec.rs`.
 const BY_HAND: &[(&str, &str)] = &[("primitives", "Binary64")];
 
+/// Types stored beside the rows: the events the hand-run bindings of `src/bindings/` hold for
+/// another attempt (table `weft.impl.Held`).
+const HELD_EVENTS: &[(&str, &str)] = &[
+    ("workloads", "ReplicaRequested"),
+    ("workloads", "InstanceCreated"),
+];
+
 fn write_codecs(out: &mut String, types: &BTreeMap<(String, String), Shape>, storages: &[Storage]) {
     let mut queue: VecDeque<(String, String)> = VecDeque::new();
     for storage in storages {
@@ -487,6 +495,9 @@ fn write_codecs(out: &mut String, types: &BTreeMap<(String, String), Shape>, sto
             let (module, name) = path.split_once("::").expect("module::Name");
             queue.push_back((module.to_owned(), name.to_owned()));
         }
+    }
+    for (module, name) in HELD_EVENTS {
+        queue.push_back(((*module).to_owned(), (*name).to_owned()));
     }
     let mut seen = BTreeSet::new();
     while let Some(key) = queue.pop_front() {

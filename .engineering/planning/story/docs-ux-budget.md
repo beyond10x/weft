@@ -16,8 +16,10 @@ scope:
 - confidence: cited
   path: website/ux/probe.ts
 - confidence: cited
+  path: website/ux/scenarios.spec.ts
+- confidence: cited
   path: website/ux/site.spec.ts
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 4, decided_on: {"recorded":{"approval":1}}}

@@ -5,7 +5,7 @@
 //! ```text
 //! {"seq": 1, "kind": "request", "operation": "weft.accounts.CreateTenant", "actor": "weft.actors.ClusterOperator", "status": 202}
 //! {"seq": 2, "kind": "event", "name": "weft.accounts.TenantCreated"}
-//! {"seq": 3, "kind": "binding", "binding": "r1-create-replica", "refusal": "...", "result": "retried"}
+//! {"seq": 3, "kind": "binding", "binding": "r1-create-replica", "refusal": "...", "result": "retried", "attempt": 1}
 //! ```
 //!
 //! Each line is written first to the state file (table `weft.impl.Log`), in the transaction of
@@ -154,10 +154,16 @@ impl Log {
         self.write(json!({"kind": "event", "name": name}))
     }
 
-    /// Writes the line of a binding's answer: the refusal that stopped it, if any, and what
-    /// became of the event.
-    pub fn binding(&self, binding: &str, refusal: Option<&str>, result: BindingResult) -> u64 {
-        let mut line = json!({"kind": "binding", "binding": binding, "result": result.name()});
+    /// Writes the line of a binding's answer: the refusal that stopped it, if any, what became
+    /// of the event, and the attempt's number for the event, from 1.
+    pub fn binding(
+        &self,
+        binding: &str,
+        refusal: Option<&str>,
+        result: BindingResult,
+        attempt: u32,
+    ) -> u64 {
+        let mut line = json!({"kind": "binding", "binding": binding, "result": result.name(), "attempt": attempt});
         if let Some(refusal) = refusal {
             line["refusal"] = json!(refusal);
         }

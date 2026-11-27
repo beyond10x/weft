@@ -10,6 +10,13 @@
 //!   the class and every quota above it.
 //! - An account with no quota for a class may hold none of it (`weft.accounts.Quota`: "an
 //!   account with no quota row for a class ... Taken: no (default deny)").
+//!
+//! What each step adds: `CreateInstance` one instance of the workload, against what the account
+//! holds ([`exceeded`]). `DefineWorkload` and `DefineService` make no instance; they declare
+//! what their instances will take, and are refused only where that alone passes a limit
+//! ([`exceeded_alone`]): one instance of the workload, and `replicas` instances of the service.
+//! A definition is not refused because the account's live instances hold its quota (a new
+//! revision is defined while the old one runs); its instances are, by `CreateInstance`.
 
 use std::collections::HashMap;
 
@@ -35,6 +42,29 @@ pub fn live(state: InstanceState) -> bool {
 /// Whether adding `claims` to what `account` holds would take its quota, or a quota above it,
 /// past its limit for a class the claims name.
 pub fn exceeded(ports: &Ports, account: &AccountId, claims: &[ClaimRequest]) -> bool {
+    past(ports, account, claims, true)
+}
+
+/// Whether `claims` alone, with nothing held, would take the quota of `account`, or a quota
+/// above it, past its limit for a class the claims name.
+pub fn exceeded_alone(ports: &Ports, account: &AccountId, claims: &[ClaimRequest]) -> bool {
+    past(ports, account, claims, false)
+}
+
+/// `claims` times `count`: what `count` instances that each claim `claims` take.
+pub fn times(claims: &[ClaimRequest], count: i64) -> Vec<ClaimRequest> {
+    claims
+        .iter()
+        .map(|claim| ClaimRequest {
+            amount: claim.amount.saturating_mul(count.max(0)),
+            ..claim.clone()
+        })
+        .collect()
+}
+
+/// Whether `claims`, added to what `account` holds where `count_held`, would take a quota of its
+/// chain past its limit.
+fn past(ports: &Ports, account: &AccountId, claims: &[ClaimRequest], count_held: bool) -> bool {
     // Every quota by its identity.
     let quotas: HashMap<String, QuotaData> = QuotaStorage::list(ports)
         .into_iter()
@@ -65,7 +95,7 @@ pub fn exceeded(ports: &Ports, account: &AccountId, claims: &[ClaimRequest]) -> 
         .collect();
     let mut held: HashMap<String, i64> = HashMap::new();
     for instance in InstanceStorage::list(ports) {
-        if !live(instance.state) {
+        if !count_held || !live(instance.state) {
             continue;
         }
         let Some(workload_claims) = claims_of.get(&instance.data.workload_id.0 .0) else {

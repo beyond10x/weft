@@ -1249,13 +1249,14 @@ mod definitions {
         use weft_testkit::steps::{self, input, Definitions, Path};
         use weft_types::behaviour::{
             AccountStorage, ArtifactStorage, ClusterStorage, ComponentStorage, EnvironmentStorage,
-            FormationRevisionStorage, FormationStorage, RuntimeStorage, ServiceStorage,
-            WorkloadStorage,
+            FormationRevisionStorage, FormationStorage, QuotaStorage, RuntimeStorage,
+            ServiceStorage, WorkloadStorage,
         };
         use weft_types::primitives::Uuid;
         use weft_types::shared::{
             AccountId, ArtifactDigest, ClusterId, EnvironmentId, FormationId, RuntimeId, WorkloadId,
         };
+        use weft_types::workloads::obligations::CreateInstanceBehavior;
 
         const CREATE_FORMATION: &str = "weft.formations.CreateFormation";
         const ADD_COMPONENT: &str = "weft.formations.AddComponent";
@@ -2390,6 +2391,135 @@ mod definitions {
             assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
             assert_eq!(row.data.workload_id, WorkloadId(Uuid(second)));
             assert!(row.data.sleep_snapshots.is_empty() && row.data.backoff_until.is_none());
+        }
+
+        /// Sets the limit of `acme`'s `cpu` quota.
+        fn set_limit(w: &World, limit: i64) {
+            let mut ports = w.ports();
+            let key = weft_types::shared::QuotaId(Uuid(w.path.quota_id.clone()));
+            let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
+            quota.data.limit = limit;
+            QuotaStorage::put(&mut ports, quota);
+        }
+
+        /// Creates replica 0 of the definitions' service: a `Pending` instance holding the
+        /// workload's 1 cpu.
+        fn hold_one_cpu(w: &World) {
+            let mut ports = w.ports();
+            let input = weft_types::workloads::CreateInstance {
+                workload_id: WorkloadId(Uuid(w.ids.workload_id.clone())),
+                job_id: None,
+                task_index: None,
+                invocation_id: None,
+                box_id: None,
+                session_id: None,
+                replica_index: Some(0),
+                warm_pool_id: None,
+                service_id: Some(weft_types::shared::ServiceId(Uuid(
+                    w.ids.service_id.clone(),
+                ))),
+            };
+            let answer =
+                CreateInstanceBehavior::create_instance(&mut ports, input).expect("an outcome");
+            assert!(
+                matches!(
+                    answer,
+                    weft_types::workloads::CreateInstanceOutcome::Created { .. }
+                ),
+                "{answer:?}"
+            );
+        }
+
+        /// `over-quota` of `DefineWorkload` (outcome group `quota`, an external branch the
+        /// contract answers before its default `defined`): after every other guard, from the
+        /// claims of one instance of the workload alone against each quota of the account's
+        /// chain. What the account's live instances hold does not count: a workload is defined
+        /// while its account is full, and `CreateInstance` asks for its instances.
+        #[test]
+        fn define_workload_answers_over_quota_before_defined_from_one_instance_s_claims() {
+            let w = World::new();
+            let base = w.workload_request();
+            set_limit(&w, 0);
+            w.refuses(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &base,
+                "over-quota",
+                workloads,
+            );
+            w.refuses(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &with(&base, "/artifact_digest", json!("sha256:none")),
+                "no-artifact",
+                workloads,
+            );
+            set_limit(&w, 1);
+            w.refuses(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &with(&base, "/claims/0/amount", json!(2)),
+                "over-quota",
+                workloads,
+            );
+            hold_one_cpu(&w);
+            w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &base,
+                "defined",
+            );
+        }
+
+        /// `over-quota` of `DefineService`: after every other guard, from the claims of
+        /// `replicas` instances of the workload alone against each quota of the account's
+        /// chain; what the account's live instances hold does not count.
+        #[test]
+        fn define_service_answers_over_quota_before_defined_from_its_replicas_claims() {
+            let w = World::new();
+            let second = w.workload(&w.ids.workload_id, |_| {});
+            let request = |workload: &str, replicas: i64| {
+                with(
+                    &input::define_service(workload, w.acme()),
+                    "/replicas",
+                    json!(replicas),
+                )
+            };
+            set_limit(&w, 2);
+            w.refuses(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_SERVICE,
+                &request(&second, 3),
+                "over-quota",
+                services,
+            );
+            let retired = w.workload(&w.ids.workload_id, |row| {
+                row.state = weft_types::workloads::WorkloadState::Retired
+            });
+            w.refuses(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_SERVICE,
+                &request(&retired, 3),
+                "workload-retired",
+                services,
+            );
+            hold_one_cpu(&w);
+            let body = w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_SERVICE,
+                &request(&second, 2),
+                "defined",
+            );
+            let id = weft_types::shared::ServiceId(Uuid(published(&body, "service_id")));
+            let row = ServiceStorage::get(&w.ports(), &id).expect("the service row");
+            assert_eq!(row.data.replicas, 2);
         }
 
         /// Cases of the adversary pass on `story:skeleton-workload-definitions`: the values the

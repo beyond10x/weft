@@ -52,8 +52,8 @@ impl std::error::Error for Error {}
 /// The system, its ports and its log.
 pub struct Host {
     system: Mutex<System>,
-    /// Locked only while `system` is.
-    bindings: Mutex<Runner>,
+    /// Used only while `system` is locked.
+    bindings: Runner,
     ports: Ports,
     log: Log,
     operations: HashMap<String, String>,
@@ -83,7 +83,7 @@ impl Host {
             .map_err(|error| Error(format!("control host log {}: {error}", log.display())))?;
         Ok(Self {
             system: Mutex::new(weft_impl::system(&ports)),
-            bindings: Mutex::new(Runner::new()),
+            bindings: Runner::open(&ports),
             ports,
             log,
             operations: operations(),
@@ -160,18 +160,14 @@ impl Host {
     /// each attempt logged as a binding line and the lines of what it published. The unit commits
     /// nothing when a command answers `committed: false` or `work` calls [`Unit::abort`]: then
     /// every command's request line is still logged, without event lines, no binding runs, and
-    /// the bindings hold what they held before the unit.
+    /// the bindings hold what they held before the unit (the events they hold are rows of the
+    /// same transaction).
     pub fn unit<T>(&self, work: impl FnOnce(&mut Unit<'_>) -> T) -> T {
         let mut system = self.system();
-        let mut runner = self
-            .bindings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let before = runner.clone();
         let (value, steps, committed) = self.ports.store().transaction(|| {
             let mut unit = Unit {
                 system: &mut system,
-                runner: &mut runner,
+                runner: &self.bindings,
                 steps: Vec::new(),
                 pending: Vec::new(),
                 abort: false,
@@ -200,9 +196,11 @@ impl Host {
                         binding,
                         refusal,
                         result,
+                        attempt,
                         ..
                     } => {
-                        self.log.binding(binding, refusal.as_deref(), *result);
+                        self.log
+                            .binding(binding, refusal.as_deref(), *result, *attempt);
                     }
                 }
                 for event in step.events() {
@@ -212,7 +210,6 @@ impl Host {
             ((value, steps, true), true)
         });
         if !committed {
-            *runner = before;
             for step in &steps {
                 if let Step::Request {
                     operation,
@@ -231,12 +228,14 @@ impl Host {
     }
 
     /// One tick of the controllers, as one unit: first the events the bindings hold are
-    /// attempted again, then every step of [`weft_controllers::tick`] sends its commands, each
-    /// logged as a request line, and what they published goes to the bindings.
+    /// attempted again ([`Runner::retry`]), then every step of [`weft_controllers::tick`] sends
+    /// its commands, given the events still held, each logged as a request line, and what they
+    /// published goes to the bindings.
     pub fn tick(&self) {
         self.unit(|unit| {
             unit.retry();
-            for sent in weft_controllers::tick(unit.system) {
+            let held = unit.runner.held_events();
+            for sent in weft_controllers::tick(unit.system, &held) {
                 unit.run(Some(sent.operation), Some(sent.actor.name()), |_| {
                     (sent.answer, sent.events)
                 });
@@ -254,10 +253,7 @@ impl Host {
     /// How many events the hand-run bindings hold for another attempt.
     pub fn held(&self) -> usize {
         let _system = self.system();
-        self.bindings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .held()
+        self.bindings.held()
     }
 
     /// The ports of the system.
@@ -275,7 +271,7 @@ impl Host {
 /// The commands of one unit of work of [`Host::unit`].
 pub struct Unit<'a> {
     system: &'a mut System,
-    runner: &'a mut Runner,
+    runner: &'a Runner,
     steps: Vec<Step>,
     /// What the unit's commands published that no binding was given yet.
     pending: Vec<SystemEvent>,
@@ -294,6 +290,7 @@ enum Step {
         binding: &'static str,
         refusal: Option<String>,
         result: BindingResult,
+        attempt: u32,
         events: Vec<String>,
     },
 }
@@ -335,6 +332,7 @@ impl Unit<'_> {
                 binding: answer.binding,
                 refusal: answer.refusal,
                 result: answer.result,
+                attempt: answer.attempt,
                 events: names(&answer.events),
             });
         }

@@ -14,8 +14,16 @@
 //!   and attempted again by [`Runner::retry`];
 //! - the events an invocation published go through the runner again.
 //!
-//! Each attempt is one [`Answer`], which the control host logs as a binding line
-//! ([`crate::log::Log::binding`]) followed by the lines of the events it published.
+//! Held events live in the state file (table `weft.impl.Held`), written in the transaction of
+//! the unit of work that held them, so a held event outlives a restart (`delivery:
+//! at_least_once`) and never outlives the rows it came from. Each [`Runner::retry`] is one tick:
+//! a held event is attempted again once its wait is over. The wait doubles with each attempt,
+//! from one tick up to [`BACKOFF_CAP`] ticks ([`wait_after`]), so a held event that never goes
+//! through writes about one log line per [`BACKOFF_CAP`] ticks. A runner that opens makes every
+//! held event due at its first tick.
+//!
+//! Each attempt is one [`Answer`], with its number, which the control host logs as a binding
+//! line ([`crate::log::Log::binding`]) followed by the lines of the events it published.
 //!
 //! Entries, each with the ESS story whose fix removes it (with its line in
 //! `tools/synth-input.sh`, in one change):
@@ -29,13 +37,17 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
+use serde_json::Value;
 use weft_system::SystemEvent;
 
 use crate::log::BindingResult;
-use crate::System;
+use crate::{Ports, System};
 
 pub mod r1_create_replica;
 pub mod r1_submit_scheduling_request;
+
+/// The longest wait between two attempts of a held event, in ticks.
+pub const BACKOFF_CAP: u32 = 32;
 
 /// One binding delivered by hand.
 pub struct Entry {
@@ -46,6 +58,11 @@ pub struct Entry {
     /// The binding's delivery of `event`: `None` where the binding does not react to it (another
     /// event, or its `where:` filter does not hold), else what the invoked command answered.
     pub invoke: fn(&mut System, &SystemEvent) -> Option<Invoked>,
+    /// The event the binding reacts to in the form of the state file
+    /// ([`crate::storage::codec`]); `None` for another event.
+    pub encode: fn(&SystemEvent) -> Option<Value>,
+    /// The event written by `encode`.
+    pub decode: fn(&Value) -> Result<SystemEvent, String>,
 }
 
 /// What an invoked command answered.
@@ -75,22 +92,26 @@ pub struct Answer {
     pub refusal: Option<String>,
     /// What became of the event.
     pub result: BindingResult,
+    /// The attempt's number for its event, from 1.
+    pub attempt: u32,
     /// What the invoked command published, in log order; empty unless `Applied`.
     pub events: Vec<SystemEvent>,
 }
 
-/// An event a binding holds for another attempt.
-#[derive(Debug, Clone)]
-struct Held {
-    entry: &'static Entry,
-    event: SystemEvent,
+/// The ticks a held event waits after its attempt number `attempts`: 1, 2, 4, ... up to
+/// [`BACKOFF_CAP`].
+pub fn wait_after(attempts: u32) -> u32 {
+    let doubled = 1u32
+        .checked_shl(attempts.saturating_sub(1))
+        .unwrap_or(u32::MAX);
+    doubled.min(BACKOFF_CAP)
 }
 
-/// The runner: the events its bindings hold for another attempt. Cloned before a unit of work
-/// and put back when the unit rolls back, so a held event never outlives the rows it came from.
-#[derive(Debug, Clone, Default)]
+/// The runner over the state file behind its ports, where it holds events for another
+/// attempt.
 pub struct Runner {
-    held: Vec<Held>,
+    ports: Ports,
+    entries: &'static [&'static Entry],
 }
 
 impl Debug for Entry {
@@ -100,24 +121,56 @@ impl Debug for Entry {
 }
 
 impl Runner {
-    /// A runner that holds nothing.
-    pub fn new() -> Self {
-        Self::default()
+    /// The runner of [`ENTRIES`] over the state file behind `ports`: every event held there is
+    /// due at the next tick.
+    pub fn open(ports: &Ports) -> Self {
+        Self::open_with(ports, ENTRIES)
+    }
+
+    /// As [`Runner::open`], with the bindings `entries`.
+    pub fn open_with(ports: &Ports, entries: &'static [&'static Entry]) -> Self {
+        ports.store().make_held_due();
+        Self {
+            ports: ports.clone(),
+            entries,
+        }
     }
 
     /// How many events its bindings hold for another attempt.
     pub fn held(&self) -> usize {
-        self.held.len()
+        self.ports.store().held().len()
+    }
+
+    /// The events its bindings hold for another attempt, in the order held. An event of a
+    /// binding the runner does not run stays held and is not answered.
+    pub fn held_events(&self) -> Vec<SystemEvent> {
+        self.ports
+            .store()
+            .held()
+            .iter()
+            .filter_map(|held| {
+                let entry = self.entry(&held.binding)?;
+                Some(decode(entry, &held.event))
+            })
+            .collect()
     }
 
     /// Delivers `events` to every hand-run binding that reacts to them, and what each invocation
-    /// published in turn: every attempt, in order.
-    pub fn deliver(&mut self, system: &mut System, events: Vec<SystemEvent>) -> Vec<Answer> {
+    /// published in turn: every attempt, in order. An event a binding retries is held.
+    pub fn deliver(&self, system: &mut System, events: Vec<SystemEvent>) -> Vec<Answer> {
         let mut queue: VecDeque<SystemEvent> = events.into();
         let mut answers = Vec::new();
         while let Some(event) = queue.pop_front() {
-            for entry in ENTRIES {
-                if let Some(answer) = self.attempt(system, entry, &event) {
+            for entry in self.entries {
+                if let Some(answer) = attempt(system, entry, &event, 1) {
+                    if answer.result == BindingResult::Retried {
+                        let encoded = (entry.encode)(&event).unwrap_or_else(|| {
+                            panic!("{entry:?} reacted to an event it cannot encode: {event:?}")
+                        });
+                        self.ports
+                            .store()
+                            .hold(entry.id, &encoded.to_string(), 1, wait_after(1));
+                    }
                     queue.extend(answer.events.iter().cloned());
                     answers.push(answer);
                 }
@@ -126,49 +179,81 @@ impl Runner {
         answers
     }
 
-    /// Attempts every held event again, in the order it was held, and delivers what each
-    /// invocation published: every attempt, in order. An event refused again is held again.
-    pub fn retry(&mut self, system: &mut System) -> Vec<Answer> {
+    /// One tick of the held events, in the order held: an event whose wait is over is attempted
+    /// again, and what its invocation published is delivered; every other event waits one tick
+    /// less. An event retried again waits [`wait_after`] its attempts; any other answer lets it
+    /// go. Every attempt, in order.
+    pub fn retry(&self, system: &mut System) -> Vec<Answer> {
+        let store = self.ports.store();
         let mut answers = Vec::new();
-        for held in std::mem::take(&mut self.held) {
-            if let Some(answer) = self.attempt(system, held.entry, &held.event) {
-                let published = answer.events.clone();
-                answers.push(answer);
-                answers.extend(self.deliver(system, published));
+        for held in store.held() {
+            let Some(entry) = self.entry(&held.binding) else {
+                continue;
+            };
+            if held.wait > 1 {
+                store.set_held(held.id, held.attempts, held.wait - 1);
+                continue;
             }
+            let event = decode(entry, &held.event);
+            let number = held.attempts + 1;
+            let Some(answer) = attempt(system, entry, &event, number) else {
+                store.release(held.id);
+                continue;
+            };
+            if answer.result == BindingResult::Retried {
+                store.set_held(held.id, number, wait_after(number));
+            } else {
+                store.release(held.id);
+            }
+            let published = answer.events.clone();
+            answers.push(answer);
+            answers.extend(self.deliver(system, published));
         }
         answers
     }
 
-    /// One attempt of `entry` on `event`, with its policy applied.
-    fn attempt(
-        &mut self,
-        system: &mut System,
-        entry: &'static Entry,
-        event: &SystemEvent,
-    ) -> Option<Answer> {
-        let invoked = (entry.invoke)(system, event)?;
-        let (refusal, result, events) = match invoked {
-            Invoked::Accepted(events) => (None, BindingResult::Applied, events),
-            Invoked::Refused(refusal) if entry.drop.contains(&refusal.as_str()) => {
-                (Some(refusal), BindingResult::Dropped, Vec::new())
-            }
-            Invoked::Refused(refusal) => (Some(refusal), BindingResult::Retried, Vec::new()),
-            Invoked::Unmet(_) => (None, BindingResult::Retried, Vec::new()),
-        };
-        if result == BindingResult::Retried {
-            self.held.push(Held {
-                entry,
-                event: event.clone(),
-            });
-        }
-        Some(Answer {
-            binding: entry.id,
-            refusal,
-            result,
-            events,
-        })
+    fn entry(&self, id: &str) -> Option<&'static Entry> {
+        self.entries.iter().copied().find(|entry| entry.id == id)
     }
+}
+
+/// The held event `text` of `entry`.
+///
+/// # Panics
+///
+/// When it does not decode: the state file holds what no runner wrote.
+fn decode(entry: &Entry, text: &str) -> SystemEvent {
+    serde_json::from_str::<Value>(text)
+        .map_err(|error| error.to_string())
+        .and_then(|value| (entry.decode)(&value))
+        .unwrap_or_else(|error| {
+            panic!("state file: a held event of {entry:?} does not decode: {error}")
+        })
+}
+
+/// Attempt `number` of `entry` on `event`, with its policy applied.
+fn attempt(
+    system: &mut System,
+    entry: &'static Entry,
+    event: &SystemEvent,
+    number: u32,
+) -> Option<Answer> {
+    let invoked = (entry.invoke)(system, event)?;
+    let (refusal, result, events) = match invoked {
+        Invoked::Accepted(events) => (None, BindingResult::Applied, events),
+        Invoked::Refused(refusal) if entry.drop.contains(&refusal.as_str()) => {
+            (Some(refusal), BindingResult::Dropped, Vec::new())
+        }
+        Invoked::Refused(refusal) => (Some(refusal), BindingResult::Retried, Vec::new()),
+        Invoked::Unmet(_) => (None, BindingResult::Retried, Vec::new()),
+    };
+    Some(Answer {
+        binding: entry.id,
+        refusal,
+        result,
+        attempt: number,
+        events,
+    })
 }
 
 /// The declared name of `outcome`, a variant of a generated outcome enum: its variant name in
