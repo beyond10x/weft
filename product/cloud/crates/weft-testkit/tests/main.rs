@@ -1254,7 +1254,7 @@ mod definitions {
         };
         use weft_types::primitives::Uuid;
         use weft_types::shared::{
-            AccountId, ArtifactDigest, ClusterId, FormationId, RuntimeId, WorkloadId,
+            AccountId, ArtifactDigest, ClusterId, EnvironmentId, FormationId, RuntimeId, WorkloadId,
         };
 
         const CREATE_FORMATION: &str = "weft.formations.CreateFormation";
@@ -1434,6 +1434,36 @@ mod definitions {
                 if component {
                     steps::add_component(&self.client, &self.caller, &id, self.acme());
                 }
+                id
+            }
+
+            /// `AddComponent` of a component `name` to `acme`'s formation `formation`.
+            fn component(&self, formation: &str, name: &str) {
+                let input =
+                    json!({"formation_id": formation, "account_id": self.acme(), "name": name});
+                self.accepts(
+                    steps::DEPLOYER,
+                    &self.caller,
+                    ADD_COMPONENT,
+                    &input,
+                    "added",
+                );
+            }
+
+            /// A copy of environment `of` under a new identity, changed by `change`: its
+            /// identity.
+            fn environment(
+                &self,
+                of: &str,
+                change: impl FnOnce(&mut weft_types::formations::EnvironmentSnapshot),
+            ) -> String {
+                let mut ports = self.ports();
+                let key = EnvironmentId(Uuid(of.to_owned()));
+                let mut row = EnvironmentStorage::get(&ports, &key).expect("the environment row");
+                let id = mint();
+                row.data.environment_id = EnvironmentId(Uuid(id.clone()));
+                change(&mut row);
+                EnvironmentStorage::put(&mut ports, row);
                 id
             }
 
@@ -2014,11 +2044,38 @@ mod definitions {
                 with(&base, "/restart_policy/backoff_max_seconds", json!(0)),
                 "invalid-restart-policy",
             );
+            // Settings tagged with another shape: refused with the input refusals, ahead of
+            // every row read (here, a formation that does not exist).
+            let job_settings = json!({
+                "shape": "job",
+                "value": {"parallelism": 1, "gang": false, "max_retries": 0, "backoff": "PT1S"},
+            });
+            refuses(
+                &w.caller,
+                with(&base, "/settings", job_settings.clone()),
+                "settings-shape-mismatch",
+            );
+            refuses(
+                &w.caller,
+                with(
+                    &with(&base, "/settings", job_settings),
+                    "/formation_id",
+                    json!(mint()),
+                ),
+                "settings-shape-mismatch",
+            );
+            let daemon_settings = json!({"shape": "daemon", "value": {"node_selector": {}}});
+            refuses(
+                &w.caller,
+                with(&base, "/settings", daemon_settings),
+                "settings-shape-mismatch",
+            );
 
             // Existence, in declaration order, ahead of every predicate: another account's
             // formation and no runtime answer `no-runtime`.
             let globex =
                 steps::create_formation(&w.client, &w.other, &w.other_account, &w.path.cluster_id);
+            steps::add_component(&w.client, &w.other, &globex, &w.other_account);
             refuses(
                 &w.caller,
                 with(&base, "/formation_id", json!(mint())),
@@ -2045,6 +2102,20 @@ mod definitions {
                 json!(mint()),
             );
             refuses(&w.caller, foreign_without_runtime, "no-runtime");
+            // A component the formation does not have: after `no-runtime`, ahead of the
+            // predicates (another account's formation without the component answers it too).
+            let absent = with(&base, "/component", json!("absent"));
+            refuses(&w.caller, absent.clone(), "component-missing");
+            refuses(
+                &w.caller,
+                with(&absent, "/runtime_id", json!(mint())),
+                "no-runtime",
+            );
+            refuses(
+                &w.caller,
+                with(&absent, "/formation_id", json!(globex)),
+                "component-missing",
+            );
 
             // The predicates on the related rows.
             refuses(
@@ -2053,6 +2124,13 @@ mod definitions {
                 "formation-foreign",
             );
             let other = w.formation("other", true);
+            // A component of another formation is not one of this formation's.
+            w.component(&other, "elsewhere");
+            refuses(
+                &w.caller,
+                with(&base, "/component", json!("elsewhere")),
+                "component-missing",
+            );
             let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.acme());
             let other_environment =
                 steps::create_environment(&w.client, &w.caller, &other, w.acme());
@@ -2076,6 +2154,54 @@ mod definitions {
                 &w.caller,
                 with(&base, "/runtime_id", json!(retired)),
                 "runtime-retired",
+            );
+            // A retired environment, then a retired formation: after the foreign checks, ahead
+            // of the runtime's state.
+            let retired_environment = w.environment(&w.ids.environment_id, |row| {
+                row.state = weft_types::formations::EnvironmentState::Retired
+            });
+            let in_retired_environment = with(&base, "/environment_id", json!(retired_environment));
+            refuses(
+                &w.caller,
+                in_retired_environment.clone(),
+                "environment-retired",
+            );
+            refuses(
+                &w.caller,
+                with(&in_retired_environment, "/runtime_id", json!(retired)),
+                "environment-retired",
+            );
+            let in_other = with(
+                &with(&base, "/formation_id", json!(other)),
+                "/formation_revision_id",
+                json!(other_revision),
+            );
+            let in_other = with(&in_other, "/environment_id", json!(other_environment));
+            w.retire_formation(&other);
+            refuses(&w.caller, in_other.clone(), "formation-retired");
+            refuses(
+                &w.caller,
+                with(&in_other, "/runtime_id", json!(retired)),
+                "formation-retired",
+            );
+            let other_retired_environment = w.environment(&other_environment, |row| {
+                row.state = weft_types::formations::EnvironmentState::Retired
+            });
+            refuses(
+                &w.caller,
+                with(
+                    &in_other,
+                    "/environment_id",
+                    json!(other_retired_environment),
+                ),
+                "formation-retired",
+            );
+            // Another account's retired formation answers as another account's.
+            w.retire_formation(&globex);
+            refuses(
+                &w.caller,
+                with(&base, "/formation_id", json!(globex)),
+                "formation-foreign",
             );
             let image = w.runtime(&["Image", "Wasm"], "Container");
             refuses(
@@ -2177,6 +2303,7 @@ mod definitions {
                     services,
                 );
             };
+            w.component(&w.ids.formation_id, "second");
             let second = steps::define_workload(
                 &w.client,
                 &w.caller,
@@ -2263,6 +2390,345 @@ mod definitions {
             assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
             assert_eq!(row.data.workload_id, WorkloadId(Uuid(second)));
             assert!(row.data.sleep_snapshots.is_empty() && row.data.backoff_until.is_none());
+        }
+
+        /// Cases of the adversary pass on `story:skeleton-workload-definitions`: the values the
+        /// seven obligations write and publish, the inputs of the document digest, and the
+        /// shape/settings agreement.
+        mod adversary {
+            use serde_json::{json, Value};
+            use weft_testkit::steps;
+            use weft_types::behaviour::{
+                FormationRevisionStorage, ServiceStorage, WorkloadStorage,
+            };
+            use weft_types::primitives::Uuid;
+            use weft_types::shared::{
+                ArtifactDigest, ComponentName, EnvironmentId, FormationRevisionId, IsolationLevel,
+                ServiceId, WorkloadId,
+            };
+
+            use super::{
+                published, with, workloads, World, ADD_COMPONENT, COMMIT_REVISION,
+                CREATE_ENVIRONMENT, CREATE_FORMATION, DEFINE_SERVICE, DEFINE_WORKLOAD,
+                REGISTER_ARTIFACT,
+            };
+
+            /// The payload of the first event `body` published.
+            fn payload(body: &Value) -> Value {
+                body["published"][0]["payload"].clone()
+            }
+
+            /// `CommitRevision` of `formation` by `acme`: the published (number, digest).
+            fn commit(w: &World, formation: &str) -> (Value, Value) {
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    COMMIT_REVISION,
+                    &json!({"formation_id": formation, "account_id": w.acme()}),
+                    "committed",
+                );
+                let payload = payload(&body);
+                (
+                    payload["number"].clone(),
+                    payload["document_digest"].clone(),
+                )
+            }
+
+            /// `ess/4-applications/workloads.yaml`, DefineWorkload `settings-shape-mismatch`: the
+            /// shape and the tag of `settings` agree. A `Service` workload carrying `job`
+            /// settings is not defined, and no workload row is added.
+            #[test]
+            fn a_workload_whose_settings_tag_is_not_its_shape_is_not_defined() {
+                let w = World::new();
+                w.component(&w.ids.formation_id, "mismatched");
+                let job_settings = json!({
+                    "shape": "job",
+                    "value": {"parallelism": 1, "gang": false, "max_retries": 0, "backoff": "PT1S"},
+                });
+                let mismatched = with(
+                    &with(&w.workload_request(), "/component", json!("mismatched")),
+                    "/settings",
+                    job_settings,
+                );
+                let before = workloads(&w.ports());
+                let answer = w
+                    .client
+                    .command(
+                        DEFINE_WORKLOAD,
+                        steps::DEPLOYER,
+                        w.caller.clone(),
+                        mismatched.clone(),
+                    )
+                    .expect("the control host answers");
+                assert_ne!(
+                    answer.body["outcome"],
+                    json!("defined"),
+                    "shape Service with settings tagged job was defined: {} {}",
+                    answer.status,
+                    answer.body
+                );
+                assert_eq!(workloads(&w.ports()), before, "a workload row was added");
+            }
+
+            /// The workload row and `WorkloadDefined` hold every value sent, on a request whose
+            /// isolation (`MicroVm`) is stronger than the runtime's minimum (`Container`): a
+            /// row that took the runtime's minimum, or a payload field from another input, is
+            /// caught.
+            #[test]
+            fn define_workload_writes_and_publishes_the_values_sent() {
+                let w = World::new();
+                w.component(&w.ids.formation_id, "strong");
+                let request = with(
+                    &with(&w.workload_request(), "/component", json!("strong")),
+                    "/isolation",
+                    json!("MicroVm"),
+                );
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    DEFINE_WORKLOAD,
+                    &request,
+                    "defined",
+                );
+                let sent = payload(&body);
+                for field in [
+                    "account_id",
+                    "formation_id",
+                    "environment_id",
+                    "component",
+                    "package_kind",
+                    "artifact_digest",
+                    "shape",
+                    "isolation",
+                ] {
+                    assert_eq!(
+                        sent[field], request[field],
+                        "WorkloadDefined.{field}: {body}"
+                    );
+                }
+                let id = WorkloadId(Uuid(published(&body, "workload_id")));
+                let row = WorkloadStorage::get(&w.ports(), &id).expect("the workload row");
+                assert_eq!(row.data.isolation, IsolationLevel::MicroVm);
+                assert_eq!(row.data.shape, weft_types::workloads::ShapeKind::Service);
+                assert_eq!(row.data.component, ComponentName("strong".to_owned()));
+                assert_eq!(
+                    row.data.environment_id,
+                    EnvironmentId(Uuid(w.ids.environment_id.clone()))
+                );
+                assert_eq!(
+                    row.data.formation_revision_id,
+                    FormationRevisionId(Uuid(w.ids.revision_id.clone()))
+                );
+                assert_eq!(
+                    row.data.artifact_digest,
+                    ArtifactDigest(steps::input::ARTIFACT_DIGEST.to_owned())
+                );
+                assert!(
+                    matches!(
+                        row.data.settings,
+                        weft_types::workloads::ShapeSettings::Service(_)
+                    ),
+                    "{:?}",
+                    row.data.settings
+                );
+                assert_eq!(row.data.claims.len(), 1);
+                let policy = &row.data.restart_policy;
+                assert_eq!(
+                    (
+                        policy.backoff_initial_seconds,
+                        policy.backoff_max_seconds,
+                        policy.backoff_limit,
+                        policy.backoff_window_seconds
+                    ),
+                    (1, 60, 5, 600)
+                );
+            }
+
+            /// A sleeping service's row keeps its sleep policy and scale rule, and
+            /// `ServiceDefined` carries the replicas and scale rule sent.
+            #[test]
+            fn define_service_writes_and_publishes_the_values_sent() {
+                let w = World::new();
+                w.component(&w.ids.formation_id, "sleeper");
+                let workload = steps::define_workload(
+                    &w.client,
+                    &w.caller,
+                    with(&w.workload_request(), "/component", json!("sleeper")),
+                );
+                let base = steps::input::define_service(&workload, w.acme());
+                let request = with(
+                    &with(
+                        &with(&base, "/scale_rule/min_replicas", json!(0)),
+                        "/replicas",
+                        json!(0),
+                    ),
+                    "/sleep_policy",
+                    json!({"idle_after": "PT5M", "kind": "Stop"}),
+                );
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    DEFINE_SERVICE,
+                    &request,
+                    "defined",
+                );
+                let sent = payload(&body);
+                assert_eq!(sent["workload_id"], json!(workload), "{body}");
+                assert_eq!(sent["replicas"], json!(0), "{body}");
+                assert_eq!(sent["scale_rule"], request["scale_rule"], "{body}");
+                let id = ServiceId(Uuid(published(&body, "service_id")));
+                let row = ServiceStorage::get(&w.ports(), &id).expect("the service row");
+                assert_eq!(row.data.replicas, 0);
+                assert_eq!(
+                    (
+                        row.data.scale_rule.min_replicas,
+                        row.data.scale_rule.max_replicas
+                    ),
+                    (0, 6)
+                );
+                let policy = row.data.sleep_policy.expect("the sleep policy sent");
+                assert_eq!(policy.idle_after.0, "PT5M");
+            }
+
+            /// The payloads of `CreateFormation`, `AddComponent`, `CreateEnvironment`,
+            /// `RegisterArtifact` and `CommitRevision` carry the values sent, and the revision's
+            /// payload is its row.
+            #[test]
+            fn the_formation_and_artifact_events_carry_the_values_sent() {
+                let w = World::new();
+                let formation = json!({"account_id": w.acme(), "name": "events", "zones": [], "cluster_id": w.path.cluster_id});
+                let body = w.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &w.caller,
+                    CREATE_FORMATION,
+                    &formation,
+                    "created",
+                );
+                let sent = payload(&body);
+                assert_eq!(
+                    (sent["account_id"].clone(), sent["name"].clone()),
+                    (json!(w.acme()), json!("events")),
+                    "{body}"
+                );
+                let id = published(&body, "formation_id");
+
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    ADD_COMPONENT,
+                    &json!({"formation_id": id, "account_id": w.acme(), "name": "api"}),
+                    "added",
+                );
+                let sent = payload(&body);
+                assert_eq!(
+                    (sent["formation_id"].clone(), sent["name"].clone()),
+                    (json!(id), json!("api")),
+                    "{body}"
+                );
+
+                let body = w.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &w.caller,
+                    CREATE_ENVIRONMENT,
+                    &json!({"formation_id": id, "account_id": w.acme(), "name": "staging", "protected": false}),
+                    "created",
+                );
+                let sent = payload(&body);
+                assert_eq!(
+                    (sent["formation_id"].clone(), sent["name"].clone()),
+                    (json!(id), json!("staging")),
+                    "{body}"
+                );
+
+                let mut artifact = steps::input::register_artifact(w.acme());
+                artifact["artifact_digest"] = json!("sha256:events");
+                artifact["kind"] = json!("Wasm");
+                artifact["signer_key_id"] = json!("k-events");
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    REGISTER_ARTIFACT,
+                    &artifact,
+                    "registered",
+                );
+                let sent = payload(&body);
+                for field in ["artifact_digest", "account_id", "kind", "signer_key_id"] {
+                    assert_eq!(
+                        sent[field], artifact[field],
+                        "ArtifactRegistered.{field}: {body}"
+                    );
+                }
+
+                let body = w.accepts(
+                    steps::DEPLOYER,
+                    &w.caller,
+                    COMMIT_REVISION,
+                    &json!({"formation_id": id, "account_id": w.acme()}),
+                    "committed",
+                );
+                let sent = payload(&body);
+                assert_eq!(sent["formation_id"], json!(id), "{body}");
+                let revision = FormationRevisionId(Uuid(published(&body, "revision_id")));
+                let row =
+                    FormationRevisionStorage::get(&w.ports(), &revision).expect("the revision row");
+                assert_eq!(
+                    (json!(row.data.number), json!(row.data.document_digest.0)),
+                    (sent["number"].clone(), sent["document_digest"].clone()),
+                    "{body}"
+                );
+            }
+
+            /// A formation's document is its own rows: a component or an environment added to
+            /// another formation of the account leaves its digest as it was.
+            #[test]
+            fn another_formations_rows_leave_the_digest_as_it_was() {
+                let w = World::new();
+                let site = w.ids.formation_id.clone();
+                let (_, before) = commit(&w, &site);
+                let other = w.formation("neighbour", true);
+                steps::create_environment(&w.client, &w.caller, &other, w.acme());
+                let (number, after) = commit(&w, &site);
+                assert_eq!(number, json!(3));
+                assert_eq!(
+                    after, before,
+                    "another formation's rows changed site's digest"
+                );
+            }
+
+            /// The digest is the SHA-256 of the canonical form `commit_revision.rs` documents:
+            /// `["twin", [[name, internal name, on border], ...], [[name, protected], ...]]`,
+            /// each list sorted by name, compact JSON. Components added in reverse order and a
+            /// protected environment; other formations of the store hold rows too. The literal is
+            /// `printf '%s' '<that document>' | sha256sum`.
+            #[test]
+            fn the_digest_is_the_documented_canonical_form() {
+                let w = World::new();
+                let twin = w.formation("twin", false);
+                for name in ["e", "d", "c", "b", "a"] {
+                    w.accepts(
+                        steps::DEPLOYER,
+                        &w.caller,
+                        ADD_COMPONENT,
+                        &json!({"formation_id": twin, "account_id": w.acme(), "name": name}),
+                        "added",
+                    );
+                }
+                w.accepts(
+                    steps::ACCOUNT_ADMIN,
+                    &w.caller,
+                    CREATE_ENVIRONMENT,
+                    &json!({"formation_id": twin, "account_id": w.acme(), "name": "prod", "protected": true}),
+                    "created",
+                );
+                let (number, digest) = commit(&w, &twin);
+                assert_eq!(number, json!(1));
+                assert_eq!(
+                    digest,
+                    json!(
+                        "sha256:bb3b0e3a3d8b7aada2cabe5eefa65099db3fb80c42f138cdfcb50e03b1f4864e"
+                    )
+                );
+            }
         }
     }
 }

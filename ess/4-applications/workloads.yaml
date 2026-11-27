@@ -1435,6 +1435,8 @@ errors:
     summary: >-
       A restart policy holds a backoff that is not positive, a cap below its initial wait, or a
       limit or window that is not positive.
+  - name: weft.workloads.SettingsShapeMismatch
+    summary: The settings are tagged with another shape than the workload's shape.
   - name: weft.workloads.CheckNotDeclared
     summary: The instance's process declares no check of this role; the result is not recorded.
   - name: weft.workloads.StartupPending
@@ -2058,14 +2060,14 @@ commands:
   # 230-231), a Box of another package kind (lines 248-249), no main process (lines 264-266), an
   # artifact that is missing, revoked, of another kind or of another account (lines 215-216;
   # section 1 lines 139-140), a runtime that is missing, retired, does not run the kind, or whose
-  # minimum isolation the workload's is below (section 10 lines 456-458).
+  # minimum isolation the workload's is below (section 10 lines 456-458), settings of another shape
+  # than the workload's, a component the formation does not have (section 3), and a retired
+  # formation or environment.
   # OPEN: which actor defines a workload: the deployments domain applies a release (section 5);
   # the sketch's actor list has no controller. Smallest answer: the release apply, as Deployer.
   # OPEN: "untrusted code default to microvm" (section 10 line 458): which kinds are untrusted. The
   # caller (CLI, translator) fills in MicroVm when the user names no isolation; nothing here
   # weakens it.
-  # OPEN: the shape and the tag of `settings` must agree; the predicate language reads no union
-  # tag, so the implementation checks it.
   - name: weft.workloads.DefineWorkload
     naming:
       display: Define a workload
@@ -2152,6 +2154,13 @@ commands:
             - restart_policy.backoff_limit < 1
             - restart_policy.backoff_window_seconds < 1
         error: weft.workloads.InvalidRestartPolicy
+      # The settings are those of the shape the workload declares: `settings` is a ShapeSettings
+      # whose variant is named by its `shape` tag, and that tag equals `shape`. External because
+      # a guard reads no union tag; `before_row` keeps it with the input refusals above.
+      - name: settings-shape-mismatch
+        external: the settings are tagged with another shape than the workload's shape
+        before_row: true
+        error: weft.workloads.SettingsShapeMismatch
       # hardening pass 1 W1: the formation, its environment and its revision are the account's,
       # so a workload never joins another account's formation (and its identity never matches
       # that formation's exchange policies). Missing and foreign answer alike; every existence
@@ -2168,6 +2177,17 @@ commands:
       - name: no-runtime
         when_related: {via: input.runtime_id, exists: false}
         error: weft.workloads.RuntimeNotFound
+      # Section 3: a workload is one of the formation's components; the component is named by
+      # (formation_id, name), as weft.formations keys it.
+      - name: component-missing
+        when_related:
+          entity: weft.formations.Component
+          where:
+            all:
+              - formation_id == input.formation_id
+              - name == input.component
+          exists: false
+        error: weft.workloads.NotFound
       - name: formation-foreign
         when_related: {via: input.formation_id, predicate: account_id != input.account_id}
         error: weft.workloads.NotFound
@@ -2177,6 +2197,15 @@ commands:
       - name: revision-foreign
         when_related: {via: input.formation_revision_id, predicate: formation_id != input.formation_id}
         error: weft.workloads.NotFound
+      # A retired formation or environment takes no new workload (weft.formations: a retired
+      # formation takes no edit and no commit). After the foreign checks, so another account's
+      # state is not read.
+      - name: formation-retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.workloads.StateConflict
+      - name: environment-retired
+        when_related: {via: input.environment_id, predicate: state == Retired}
+        error: weft.workloads.StateConflict
       - name: runtime-retired
         when_related: {via: input.runtime_id, predicate: state == Retired}
         error: weft.workloads.RuntimeIsRetired

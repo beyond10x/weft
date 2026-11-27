@@ -3,11 +3,14 @@
 //!
 //! 1. the input guards in declaration order: `not-callers-account` (a caller acting in no
 //!    account counts as another account's), `spec-kind`, `box-package`, `no-main`,
-//!    `invalid-check`, `invalid-restart-policy`;
+//!    `invalid-check`, `invalid-restart-policy`, and the external `settings-shape-mismatch`
+//!    (`before_row`: the tag of `settings` names another shape than `shape`);
 //! 2. every existence check before every predicate, in declaration order:
-//!    `formation-missing`, `environment-missing`, `revision-missing`, `no-runtime`;
+//!    `formation-missing`, `environment-missing`, `revision-missing`, `no-runtime`,
+//!    `component-missing` (no `weft.formations.Component` of the formation has the name);
 //! 3. the predicates on those rows: `formation-foreign`, `environment-foreign`,
-//!    `revision-foreign`, `runtime-retired`, `runtime-kind`, `below-runtime-isolation`;
+//!    `revision-foreign`, `formation-retired`, `environment-retired`, `runtime-retired`,
+//!    `runtime-kind`, `below-runtime-isolation`;
 //! 4. the external branches ahead of `defined`, decided from the `weft.artifacts.Artifact` row
 //!    of the same store: `no-artifact`, `artifact-foreign` (registered to another account),
 //!    `artifact-revoked`, `artifact-kind` (an artifact kind other than the package kind, the
@@ -15,15 +18,13 @@
 //! 5. `defined`: a `Defined` workload with the values sent. `over-quota`, an external branch
 //!    declared after `defined`, is never reached (its contract: accepting and external branches
 //!    in declaration order).
-//!
-//! The specification leaves one check to the implementation that no outcome names: that the
-//! shape and the tag of `settings` agree. With no outcome to answer, it is not made here.
 
 use weft_types::artifacts::{ArtifactKind, ArtifactState};
 use weft_types::behaviour::{
-    ArtifactStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage, RuntimeStorage,
-    WorkloadStorage,
+    ArtifactStorage, ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage,
+    RuntimeStorage, WorkloadStorage,
 };
+use weft_types::formations::{EnvironmentState, FormationState};
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
 use weft_types::shared::{IsolationLevel, WorkloadId};
@@ -32,7 +33,8 @@ use weft_types::workloads::{
     ArtifactIsRevoked, ArtifactKindMismatch, ArtifactNotFound, BoxPackageKind, Check, CheckKind, DefineWorkload,
     DefineWorkloadOutcome, InvalidCheck, InvalidRestartPolicy, IsolationBelowMinimum, NoMainProcess, NotFound,
     PackageKind, ProcessRole, RestartPolicy, RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound, RuntimeState,
-    ShapeKind, SpecKindNotRunnable, WorkloadData, WorkloadDefined, WorkloadSnapshot, WorkloadState,
+    SettingsShapeMismatch, ShapeKind, ShapeSettings, SpecKindNotRunnable, StateConflict, WorkloadData,
+    WorkloadDefined, WorkloadSnapshot, WorkloadState,
 };
 
 use crate::context::mint;
@@ -65,6 +67,9 @@ impl DefineWorkloadBehavior for Ports {
         if invalid_restart_policy(&input.restart_policy) {
             return Ok(DefineWorkloadOutcome::InvalidRestartPolicy { error: InvalidRestartPolicy });
         }
+        if settings_shape(&input.settings) != input.shape {
+            return Ok(DefineWorkloadOutcome::SettingsShapeMismatch { error: SettingsShapeMismatch });
+        }
 
         let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
             return Ok(DefineWorkloadOutcome::FormationMissing { error: NotFound });
@@ -78,6 +83,12 @@ impl DefineWorkloadBehavior for Ports {
         let Some(runtime) = RuntimeStorage::get(self, &input.runtime_id) else {
             return Ok(DefineWorkloadOutcome::NoRuntime { error: RuntimeNotFound });
         };
+        if !ComponentStorage::list(self)
+            .iter()
+            .any(|row| row.data.formation_id == input.formation_id && row.data.name == input.component)
+        {
+            return Ok(DefineWorkloadOutcome::ComponentMissing { error: NotFound });
+        }
 
         if formation.data.account_id != input.account_id {
             return Ok(DefineWorkloadOutcome::FormationForeign { error: NotFound });
@@ -87,6 +98,12 @@ impl DefineWorkloadBehavior for Ports {
         }
         if revision.data.formation_id != input.formation_id {
             return Ok(DefineWorkloadOutcome::RevisionForeign { error: NotFound });
+        }
+        if formation.state == FormationState::Retired {
+            return Ok(DefineWorkloadOutcome::FormationRetired { error: StateConflict });
+        }
+        if environment.state == EnvironmentState::Retired {
+            return Ok(DefineWorkloadOutcome::EnvironmentRetired { error: StateConflict });
         }
         if runtime.state == RuntimeState::Retired {
             return Ok(DefineWorkloadOutcome::RuntimeRetired { error: RuntimeIsRetired });
@@ -172,6 +189,19 @@ fn invalid_restart_policy(policy: &RestartPolicy) -> bool {
         || policy.backoff_max_seconds < policy.backoff_initial_seconds
         || policy.backoff_limit < 1
         || policy.backoff_window_seconds < 1
+}
+
+/// The shape the tag of `settings` names (the check of `settings-shape-mismatch`).
+fn settings_shape(settings: &ShapeSettings) -> ShapeKind {
+    match settings {
+        ShapeSettings::Box(_) => ShapeKind::Box,
+        ShapeSettings::Daemon(_) => ShapeKind::Daemon,
+        ShapeSettings::Invocation(_) => ShapeKind::Invocation,
+        ShapeSettings::Job(_) => ShapeKind::Job,
+        ShapeSettings::Schedule(_) => ShapeKind::Schedule,
+        ShapeSettings::Service(_) => ShapeKind::Service,
+        ShapeSettings::Session(_) => ShapeKind::Session,
+    }
 }
 
 /// The predicate of `below-runtime-isolation`: `isolation` is weaker than the runtime's
