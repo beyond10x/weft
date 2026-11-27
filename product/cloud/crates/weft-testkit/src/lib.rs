@@ -11,7 +11,10 @@ use std::time::Duration;
 use serde_json::Value;
 use weft_client::Client;
 
+pub mod node_agent;
 pub mod steps;
+
+pub use node_agent::NodeAgent;
 
 /// The repository root: the directory of the root workspace manifest.
 pub fn repo_root() -> PathBuf {

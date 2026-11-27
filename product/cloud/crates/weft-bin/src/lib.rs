@@ -166,24 +166,32 @@ impl Host {
         &self.ports
     }
 
-    /// Serves `listener` one connection at a time, until the listener fails for good.
+    /// Serves `listener` one connection at a time, until the listener fails for good: each
+    /// request is answered by [`Host::handle`] with `trust_callers`.
     pub fn serve(&self, listener: &TcpListener, trust_callers: bool) {
-        for connection in listener.incoming() {
-            let Ok(connection) = connection else {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                continue;
-            };
-            let _ = connection.set_read_timeout(Some(http::READ_TIMEOUT));
-            let _ = connection.set_write_timeout(Some(http::WRITE_TIMEOUT));
-            let mut reader = BufReader::new(connection);
-            let (answer, refused) = match http::read(&mut reader) {
-                Ok(request) => (self.handle(&request, trust_callers), false),
-                Err(refusal) => (refusal, true),
-            };
-            let mut stream = reader.into_inner();
-            if http::write(&mut stream, &answer).is_ok() && refused {
-                http::linger(&mut stream);
-            }
+        serve(listener, |request| self.handle(request, trust_callers));
+    }
+}
+
+/// Serves `listener` one connection at a time, until the listener fails for good: each request
+/// is answered by `answer`, the router of a binary that serves more than [`Host::handle`] on the
+/// same listener (the node channel of `weft`).
+pub fn serve(listener: &TcpListener, answer: impl Fn(&Request) -> Response) {
+    for connection in listener.incoming() {
+        let Ok(connection) = connection else {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        };
+        let _ = connection.set_read_timeout(Some(http::READ_TIMEOUT));
+        let _ = connection.set_write_timeout(Some(http::WRITE_TIMEOUT));
+        let mut reader = BufReader::new(connection);
+        let (answer, refused) = match http::read(&mut reader) {
+            Ok(request) => (answer(&request), false),
+            Err(refusal) => (refusal, true),
+        };
+        let mut stream = reader.into_inner();
+        if http::write(&mut stream, &answer).is_ok() && refused {
+            http::linger(&mut stream);
         }
     }
 }

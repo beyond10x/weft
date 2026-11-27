@@ -1393,7 +1393,10 @@ version = "0.1.0"
 dependencies = [
  "b10x-substrate-sdk",
  "serde_json",
+ "time",
  "tokio",
+ "weft-client",
+ "weft-testkit",
 ]
 
 [[package]]

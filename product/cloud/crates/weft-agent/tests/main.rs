@@ -281,3 +281,187 @@ mod confine {
         );
     }
 }
+
+/// `join` (`story:skeleton-node-join-session`): `weft-agent` joins the node `ProvisionPoolNode`
+/// made with its token, reports what it observed, and opens its session with a `hello` frame on
+/// the node channel of the control host, which records it as `OpenNodeSession` sent by the
+/// ControlPlane. Each test runs a `ControlHost` of its own.
+mod join {
+    use std::time::{Duration, Instant};
+
+    use serde_json::{json, Value};
+    use time::format_description::well_known::Rfc3339;
+    use time::OffsetDateTime;
+    use weft_client::{Client, Expect};
+    use weft_testkit::steps::{self, Provisioned};
+    use weft_testkit::{ControlHost, NodeAgent};
+
+    /// How long the agent may take to its first `hello` answer.
+    const HELLO_LIMIT: Duration = Duration::from_secs(30);
+
+    /// A control host with one zone, one pool and one provisioned node.
+    fn provisioned() -> (ControlHost, Provisioned) {
+        let host = ControlHost::start();
+        let client = host.client();
+        let cloud_id = steps::create_cloud(&client);
+        steps::declare_zone(&client, &cloud_id, "z1");
+        let pool = steps::create_node_pool(&client);
+        let node = steps::provision_pool_node(&client, &pool);
+        (host, node)
+    }
+
+    /// The row of `view` whose `key` is `id`.
+    fn row(client: &Client, view: &str, key: &str, id: &str) -> Value {
+        let answer = client.view(view, &[]).ok_body(200);
+        answer["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row[key] == json!(id))
+            .unwrap_or_else(|| panic!("no row with {key} {id} in {view}: {answer}"))
+            .clone()
+    }
+
+    fn rows(client: &Client, view: &str) -> usize {
+        client.view(view, &[]).ok_body(200)["rows"]
+            .as_array()
+            .expect("rows")
+            .len()
+    }
+
+    fn instant(text: &str) -> OffsetDateTime {
+        OffsetDateTime::parse(text, &Rfc3339)
+            .unwrap_or_else(|error| panic!("{text} is not RFC 3339: {error}"))
+    }
+
+    fn hellos(lines: &[Value]) -> Vec<Value> {
+        lines
+            .iter()
+            .filter(|line| line.get("hello").is_some())
+            .cloned()
+            .collect()
+    }
+
+    /// Statements 1 to 3: Provisioning before the agent, Ready after it; its first `hello` is
+    /// opened, and the session row and the control host log record it.
+    #[test]
+    fn the_agent_joins_its_node_and_opens_its_session_on_the_first_hello() {
+        let (host, node) = provisioned();
+        let client = host.client();
+        let nodes = "weft.infrastructure.Nodes";
+        assert_eq!(
+            row(&client, nodes, "node_id", &node.node_id)["state"],
+            json!("Provisioning")
+        );
+
+        let before_seq = host.last_seq();
+        let before = OffsetDateTime::now_utc();
+        let mut agent = NodeAgent::start(&host, &node.node_id, &node.join_token);
+        let lines = agent.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());
+        let after = OffsetDateTime::now_utc();
+
+        // 1. The node reads Ready.
+        let joined = row(&client, nodes, "node_id", &node.node_id);
+        assert_eq!(joined["state"], json!("Ready"), "{joined}");
+        assert!(
+            joined["isolation_facts"]["levels"]
+                .as_array()
+                .is_some_and(|levels| levels.contains(&json!("Container"))),
+            "{joined}"
+        );
+
+        // 2. The first hello is opened, and its session is Open, opened between the two reads.
+        let first = &hellos(&lines)[0];
+        assert_eq!(first["hello"], json!("opened"), "{lines:?}");
+        let session_id = first["session_id"].as_str().expect("a session_id");
+        let session = row(&client, "weft.nodes.NodeSessions", "session_id", session_id);
+        assert_eq!(
+            (session["node_id"].clone(), session["state"].clone()),
+            (json!(node.node_id), json!("Open")),
+            "{session}"
+        );
+        let opened_at = instant(session["opened_at"].as_str().expect("opened_at"));
+        assert!(
+            before <= opened_at && opened_at <= after,
+            "opened_at {opened_at} is not between {before} and {after}"
+        );
+
+        // 3. The log after the seq read before the agent started holds OpenNodeSession as the
+        // ControlPlane, answered 2xx.
+        let log = host.log_after(before_seq);
+        let request = log
+            .iter()
+            .find(|line| {
+                line["kind"] == "request" && line["operation"] == "weft.nodes.OpenNodeSession"
+            })
+            .unwrap_or_else(|| {
+                panic!("no OpenNodeSession request line after seq {before_seq}: {log:?}")
+            });
+        assert_eq!(
+            request["actor"],
+            json!("weft.actors.ControlPlane"),
+            "{request}"
+        );
+        let status = request["status"].as_u64().expect("a status");
+        assert!((200..300).contains(&status), "{request}");
+    }
+
+    /// Statement 4: OpenNodeSession over HTTP as the node agent is not granted, and writes no
+    /// session.
+    #[test]
+    fn open_node_session_sent_by_the_node_agent_is_not_granted() {
+        let (host, node) = provisioned();
+        let client = host.client();
+        let sessions = "weft.nodes.NodeSessions";
+        let before = rows(&client, sessions);
+        let answer = client
+            .command(
+                "weft.nodes.OpenNodeSession",
+                steps::NODE_AGENT,
+                json!({}),
+                json!({
+                    "node_id": node.node_id,
+                    "agent_version": "0.1.0",
+                    "received_at": OffsetDateTime::now_utc().format(&Rfc3339).expect("RFC 3339"),
+                }),
+            )
+            .expect("the control host answers");
+        assert_eq!(answer.status, 403, "{}", answer.body);
+        assert_eq!(
+            answer.body["refused"],
+            json!("not granted"),
+            "{}",
+            answer.body
+        );
+        assert_eq!(rows(&client, sessions), before);
+    }
+
+    /// A refused `hello` is reported with its status and sent again after the redial delay of
+    /// the protocol model (3000 ms): a second agent of a node whose session is open is refused.
+    #[test]
+    fn a_refused_hello_is_reported_and_sent_again_after_the_redial_delay() {
+        let (host, node) = provisioned();
+        let mut first = NodeAgent::start(&host, &node.node_id, &node.join_token);
+        let lines = first.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());
+        assert_eq!(hellos(&lines)[0]["hello"], json!("opened"), "{lines:?}");
+
+        let mut second = NodeAgent::start(&host, &node.node_id, &node.join_token);
+        let lines = second.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());
+        let refused_once = Instant::now();
+        let first_hello = &hellos(&lines)[0];
+        assert_eq!(first_hello["hello"], json!("refused"), "{lines:?}");
+        assert!(
+            first_hello["status"]
+                .as_u64()
+                .is_some_and(|status| status >= 400),
+            "{first_hello}"
+        );
+        let lines = second.wait_for(Duration::from_secs(10), |lines| hellos(lines).len() >= 2);
+        let gap = refused_once.elapsed();
+        assert_eq!(hellos(&lines)[1]["hello"], json!("refused"), "{lines:?}");
+        assert!(
+            gap >= Duration::from_millis(2900),
+            "the second hello came {gap:?} after the first refusal, before the redial delay"
+        );
+    }
+}

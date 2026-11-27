@@ -92,6 +92,15 @@ impl Client {
         self.send("GET", &view_target(view, params), Some(&header), &[])
     }
 
+    /// Posts the JSON `body` to `path` as no caller: a frame of the node channel (`/node/...`).
+    ///
+    /// # Errors
+    ///
+    /// What the connection refuses, or an answer that is not HTTP.
+    pub fn post(&self, path: &str, body: &Value) -> io::Result<Answer> {
+        self.send("POST", path, None, body.to_string().as_bytes())
+    }
+
     fn send(
         &self,
         method: &str,
