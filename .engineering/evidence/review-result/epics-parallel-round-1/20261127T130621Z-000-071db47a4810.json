@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-27T13:06:21Z",
+  "actor": "human:operator",
+  "artifact": "review-result:epics-parallel-round-1",
+  "kind": "review-result",
+  "revision": 2,
+  "change": {
+    "change": "redaction",
+    "literal_sha256": "dc47a251ca17a4ae84e7ca7b152a34d0c472de473efbf59cf30bac116aca5a8b",
+    "literal_chars": 77,
+    "replacement": "the worktree of story:skeleton-generated-code",
+    "count": 1,
+    "reason": "a local path does not belong in a public repository"
+  }
+}

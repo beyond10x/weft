@@ -649,7 +649,7 @@ pub fn run(
     cands: &Candidates,
     config: &Config,
     pattern: Option<&crate::experiment::Pattern>,
-) {
+) -> bool {
     let threads = config.threads.clamp(1, 8);
     let barrier = Barrier::new(threads);
     let prior: RwLock<Arc<Vec<u64>>> = RwLock::new(Arc::new(vec![0; cat.outcomes_total]));
@@ -743,5 +743,7 @@ pub fn run(
             config.walks
         );
         inner.notes.push(note);
+        return true;
     }
+    false
 }

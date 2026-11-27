@@ -22,7 +22,7 @@ Inputs:
 | 4 determinism | `weft-sim explore`, twice per seed | yes, exit 1 | 2 | 1 (partly) | 2 |
 | 5 metamorphic | `weft-sim relate` from `sim/experiments/full-setup.yaml` | yes, both relations | 2 | 0 | 2 |
 
-9 findings; 1 fixed in full, 1 in part (D1, the warning; its decision stays open); 8 open. None
+9 findings; 2 fixed in full (D1 decided A afterwards: a cut explore run fails); 7 open. None
 changes `ess/`. `ess specify validate --path ess --strict-requires`: `weft v1 — 25 file(s),
 valid`. `slot --timeout 20m task check`: exit 0, 29 s; the spec-diff gate step takes 7.2 s.
 
@@ -229,14 +229,16 @@ The aggregate alone would have passed: a tenant's name changes no count. Restore
 
 ### Findings
 
-- D1 (fixed in part, open): explore stops at `--max-seconds` (default 280 s) between epochs, so
+- D1 (fixed, decided A): explore stops at `--max-seconds` (default 280 s) between epochs, so
   the number of walks, and every count after it, depends on the host's load. Same seed, a 4 s
   cap: 8 threads 736 walks, outcomes 1004 / 2525; 2 threads 224 walks, outcomes 902. Pass 2
   recorded 640 of 1024 walks in the cap at a load of 45-60. The run exited 0 and said so only in
   `notes`. Changed: it now prints `weft-sim: stopped after N s (--max-seconds) at W walks of
-  1024: the result depends on the host's load, not only on --seed`. Open: whether a capped run
+  1024: the result depends on the host's load, not only on --seed`. Was open: whether a capped run
   fails (`task sim-explore-from` feeds the ratchet's `no-lost-outcomes`; the ratchet's
-  `executed: {min: 1024}` would catch it once `ratchet validate` runs). Decided by: the owner.
+  `executed: {min: 1024}` would catch it once `ratchet validate` runs). Decided 2026-11-27 by the
+  host operator, option A: a cut run fails. `weft-sim explore` exits 4 after writing its result
+  (test `an_explore_run_cut_by_max_seconds_fails_and_still_writes_its_result`).
 - D2 (open, note): `first_reached` (the walk named to replay an outcome), the kept `traces`
   (63 of 64 the same), `branch`, `feed` and `growth` follow thread completion order, not the seed.
   Every kept walk is reproducible; only the choice of which walk is recorded varies. Decided by:
@@ -393,7 +395,7 @@ sim-relations: cordon-round-trip exit 1
   severity: warning
   verdict: CONFIRMED
   origin: pre-existing
-  message: the --max-seconds cap makes the walk count and every explore count depend on host load while the run exits 0; now warned on stderr, whether it fails stays open
+  message: the --max-seconds cap makes the walk count and every explore count depend on host load while the run exits 0; a cut run now fails with exit 4 (decided A)
 - file: tools/sim/src/coverage.rs
   category: spec-gap
   severity: note

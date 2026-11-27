@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T10:52:00Z",
+  "actor": "human:operator",
+  "artifact": "epic:docs-fidelity",
+  "kind": "epic",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the owner: do it, keep going"
+  }
+}
