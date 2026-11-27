@@ -17,12 +17,14 @@
 //! ([`exceeded_alone`]): one instance of the workload, and `replicas` instances of the service.
 //! A definition is not refused because the account's live instances hold its quota (a new
 //! revision is defined while the old one runs); its instances are, by `CreateInstance`.
+//! `PlaceInstance` places an instance that already holds its claims: the claims against what
+//! the account holds besides that instance ([`exceeded_besides`]).
 
 use std::collections::HashMap;
 
 use weft_types::accounts::QuotaData;
 use weft_types::behaviour::{InstanceStorage, QuotaStorage, WorkloadStorage};
-use weft_types::shared::AccountId;
+use weft_types::shared::{AccountId, InstanceId};
 use weft_types::workloads::{ClaimRequest, InstanceState};
 
 use crate::Ports;
@@ -42,13 +44,26 @@ pub fn live(state: InstanceState) -> bool {
 /// Whether adding `claims` to what `account` holds would take its quota, or a quota above it,
 /// past its limit for a class the claims name.
 pub fn exceeded(ports: &Ports, account: &AccountId, claims: &[ClaimRequest]) -> bool {
-    past(ports, account, claims, true)
+    past(ports, account, claims, Held::All)
 }
 
 /// Whether `claims` alone, with nothing held, would take the quota of `account`, or a quota
 /// above it, past its limit for a class the claims name.
 pub fn exceeded_alone(ports: &Ports, account: &AccountId, claims: &[ClaimRequest]) -> bool {
-    past(ports, account, claims, false)
+    past(ports, account, claims, Held::Nothing)
+}
+
+/// Whether `claims`, added to what `account` holds besides the instance `own`, would take its
+/// quota, or a quota above it, past its limit for a class the claims name: the claims of an
+/// instance that already counts as held (`weft.scheduling.PlaceInstance` places an instance
+/// `CreateInstance` admitted), against the quota the others leave.
+pub fn exceeded_besides(
+    ports: &Ports,
+    account: &AccountId,
+    claims: &[ClaimRequest],
+    own: &InstanceId,
+) -> bool {
+    past(ports, account, claims, Held::AllBut(own))
 }
 
 /// `claims` times `count`: what `count` instances that each claim `claims` take.
@@ -62,9 +77,20 @@ pub fn times(claims: &[ClaimRequest], count: i64) -> Vec<ClaimRequest> {
         .collect()
 }
 
-/// Whether `claims`, added to what `account` holds where `count_held`, would take a quota of its
-/// chain past its limit.
-fn past(ports: &Ports, account: &AccountId, claims: &[ClaimRequest], count_held: bool) -> bool {
+/// What of the account's live instances [`past`] counts as held.
+#[derive(Clone, Copy)]
+enum Held<'a> {
+    /// None: the claims alone.
+    Nothing,
+    /// Every live instance.
+    All,
+    /// Every live instance but this one.
+    AllBut(&'a InstanceId),
+}
+
+/// Whether `claims`, added to what `held` counts of what `account` holds, would take a quota of
+/// its chain past its limit.
+fn past(ports: &Ports, account: &AccountId, claims: &[ClaimRequest], held: Held<'_>) -> bool {
     // Every quota by its identity.
     let quotas: HashMap<String, QuotaData> = QuotaStorage::list(ports)
         .into_iter()
@@ -93,9 +119,14 @@ fn past(ports: &Ports, account: &AccountId, claims: &[ClaimRequest], count_held:
         .into_iter()
         .map(|workload| (workload.data.workload_id.0 .0, workload.data.claims))
         .collect();
-    let mut held: HashMap<String, i64> = HashMap::new();
+    let mut holding: HashMap<String, i64> = HashMap::new();
     for instance in InstanceStorage::list(ports) {
-        if !count_held || !live(instance.state) {
+        let counted = match held {
+            Held::Nothing => false,
+            Held::All => true,
+            Held::AllBut(own) => &instance.data.instance_id != own,
+        };
+        if !counted || !live(instance.state) {
             continue;
         }
         let Some(workload_claims) = claims_of.get(&instance.data.workload_id.0 .0) else {
@@ -106,7 +137,7 @@ fn past(ports: &Ports, account: &AccountId, claims: &[ClaimRequest], count_held:
                 .into_iter()
                 .flatten()
             {
-                *held.entry(quota).or_default() += claim.amount;
+                *holding.entry(quota).or_default() += claim.amount;
             }
         }
     }
@@ -120,7 +151,7 @@ fn past(ports: &Ports, account: &AccountId, claims: &[ClaimRequest], count_held:
             None => amount > 0,
             Some(chain) => chain.iter().any(|quota| {
                 let limit = quotas.get(quota).map_or(0, |quota| quota.limit);
-                held.get(quota).copied().unwrap_or(0) + amount > limit
+                holding.get(quota).copied().unwrap_or(0) + amount > limit
             }),
         })
 }

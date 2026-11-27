@@ -493,6 +493,9 @@ const BY_HAND: &[(&str, &str)] = &[("primitives", "Binary64")];
 const HELD_EVENTS: &[(&str, &str)] = &[
     ("workloads", "ReplicaRequested"),
     ("workloads", "InstanceCreated"),
+    ("scheduling", "InstancePlaced"),
+    ("scheduling", "PlacementBound"),
+    ("nodes", "InstanceAssigned"),
 ];
 
 fn write_codecs(out: &mut String, types: &BTreeMap<(String, String), Shape>, storages: &[Storage]) {

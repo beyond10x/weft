@@ -32,6 +32,10 @@
 //!   (E3);
 //! - [`r1_submit_scheduling_request`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
+//!   (E2);
+//! - [`r4_bind_placement`], [`r4_assign`], [`r4_schedule_instance`] and
+//!   [`r4_record_placement_assigned`], ESS
+//!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2).
 
 use std::collections::VecDeque;
@@ -45,6 +49,10 @@ use crate::{Ports, System};
 
 pub mod r1_create_replica;
 pub mod r1_submit_scheduling_request;
+pub mod r4_assign;
+pub mod r4_bind_placement;
+pub mod r4_record_placement_assigned;
+pub mod r4_schedule_instance;
 
 /// The longest wait between two attempts of a held event, in ticks.
 pub const BACKOFF_CAP: u32 = 32;
@@ -80,6 +88,10 @@ pub enum Invoked {
 pub const ENTRIES: &[&Entry] = &[
     &r1_create_replica::ENTRY,
     &r1_submit_scheduling_request::ENTRY,
+    &r4_bind_placement::ENTRY,
+    &r4_assign::ENTRY,
+    &r4_schedule_instance::ENTRY,
+    &r4_record_placement_assigned::ENTRY,
 ];
 
 /// One attempt of a binding: the line the control host logs for it.
