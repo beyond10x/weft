@@ -21,6 +21,7 @@ while IFS= read -r path; do
   seen=1
   case "$path" in
     .engineering/*) ;;
+    website/ux/fixtures/sim-player*) echo "not planning-only: $path (a weft-sim test holds it)"; exit 1 ;;
     website/*)
       if [ "$mode" = docs ]; then echo "docs site: $path"; exit 1; fi ;;
     *.md) ;;

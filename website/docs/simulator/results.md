@@ -122,7 +122,8 @@ The full lists are in `gaps.commands_never_accepted`, `gaps.entities_never_held`
 | Growth | distinct abstract states and outcomes reached, over steps |
 | Live feed | the last steps, while the run goes on |
 | Experiment timeline | for `simulate`: setup, traffic, faults and controller ticks |
-| Search, Pattern matches | the mutation search and the patterns found |
+| Search | for a `simulate` run with a `search` block, a player of the recorded rows, one row a frame. The landscape has one cell per pair of values of two axes; a cell is coloured by fitness, marked infeasible or failed, or empty until the frame reaches its point. The other axes stay at the best point so far, and marks off that slice are faded. The path shows the start as a ring, accepted steps as lines from their parent, rejected neighbours as crosses and restarts as dashed jumps. Beside it, the best feasible fitness over the rows. Controls: Play, Pause, Step back, Step forward, a Frame slider, Speed in rows per second, and the X axis and Y axis pickers. With `--serve` the player follows new rows while it plays at the last one. Below the player is the table of every point, one line a point, scrolling sideways in its own box. A KPI that is a list shows its length, with the items in its tooltip. A result written without the climb fields shows the table and a line saying the run has no recorded climb |
+| Pattern matches | the patterns found |
 | Violations | each violation and the walk to replay |
 | Top gaps | `gaps.top`, each with the file and line of the specification |
 | Commands never accepted | with their refusals and class |
