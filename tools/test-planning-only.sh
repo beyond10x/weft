@@ -78,6 +78,11 @@ fixture 0 - docs/unmarked.md
 # No PLANNING_ONLY_BASE and no origin/main to find the merge base with: the base cannot be read,
 # so the change is not planning-only.
 fixture 1 unset docs/plain.md
+# The fixture page of weft-sim's player is held byte for byte only by a weft-sim test of the gate
+# (`task sim-test`): a change to it alone must run the gate.
+expect 1 "" website/ux/fixtures/sim-player.html
+expect 1 "" website/docs/index.md website/ux/fixtures/sim-player-markup.html
+expect 0 "" website/ux/fixtures/overflow.html website/ux/sim-player.spec.ts
 expect 0 --docs .engineering/project.yaml README.md docs/hardening/pass-2.md
 expect 1 --docs website/docs/index.md
 expect 1 --docs README.md website/package.json
