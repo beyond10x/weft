@@ -54,6 +54,13 @@ jobs:
       - name: Build the Docusaurus site
         if: steps.paths.outputs.skip != 'true'
         run: npm --prefix website ci && npm --prefix website run build
+      - name: Install Chromium for Playwright
+        if: steps.paths.outputs.skip != 'true'
+        working-directory: website
+        run: npx playwright install --with-deps --only-shell chromium
+      - name: Layout, accessibility and screen-only user checks with the baseline ratchet
+        if: steps.paths.outputs.skip != 'true'
+        run: npm --prefix website run ux
       - name: Typecheck the Docusaurus site
         if: steps.paths.outputs.skip != 'true'
         run: npm --prefix website run typecheck
