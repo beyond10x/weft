@@ -32,6 +32,14 @@ none is written before the specification of what it implements.
   against the interpreted target. Synthesis goes through `slot` with `--jobs 2`, one run at a time
   (2026-11-26: a synthesis held 22 GB and the host ran out of memory).
 - `docs/domain-sketch.md`: the design every specification file follows.
+- `website/`: the public documentation site (Docusaurus 3.10.2, `@beyond10x/docs-system`, setup
+  copied from spindle), published at `https://beyond10x.github.io/weft/` by
+  `.github/workflows/pages.yml` (builds on pull requests and `main`, uploads on `main`) and
+  `b10x-docs-site.yml` (deploys). Build: `slot --timeout 15m npm ci` then `slot npm run build`
+  inside `website/`. The site is public: it names no person, session, private repository or
+  host. A page about something not built carries a `:::caution[Planned]` banner.
+  `tools/planning-only.sh` lets a `website/`-only change skip the code gate; `--docs` is the
+  docs build's filter, where a `website/` path builds.
 
 ## Rules for the specification
 

@@ -1,0 +1,47 @@
+import type {SidebarsConfig} from '@docusaurus/plugin-content-docs';
+
+const sidebars: SidebarsConfig = {
+  docsSidebar: [
+    'index',
+    'getting-started',
+    {
+      type: 'category',
+      label: 'Concepts',
+      collapsed: false,
+      items: [
+        'concepts/tenants-and-accounts',
+        'concepts/formations',
+        'concepts/workloads',
+        'concepts/claims',
+        'concepts/nodes-and-clusters',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'The specification',
+      collapsed: false,
+      items: ['specification/read', 'specification/layers', 'specification/validate'],
+    },
+    {
+      type: 'category',
+      label: 'weft-sim',
+      collapsed: false,
+      items: ['simulator/install', 'simulator/run', 'simulator/results'],
+    },
+    {
+      type: 'category',
+      label: 'Run weft (Planned)',
+      collapsed: false,
+      items: ['run/control-host-and-node', 'run/deploy-a-workload'],
+    },
+    {
+      type: 'category',
+      label: 'Operate',
+      collapsed: false,
+      items: ['operate/troubleshoot'],
+    },
+    'status',
+  ],
+};
+
+export default sidebars;
