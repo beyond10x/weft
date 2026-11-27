@@ -15,8 +15,8 @@ none is written before the specification of what it implements.
 - `product/<product>/crates/<crate>`: the Rust crates of the root workspace. `product/cloud/` is
   weft's cloud (its operator CLI included); a consumer app, such as the user's management CLI,
   gets `product/<app>/`.
-- `target/generated/`: the code ESS synthesizes from `ess/`, not committed (`tools/synth.sh`,
-  cached by the digest of its sources). Crates use it through path dependencies, so a cargo
+- `target/generated/`: the code ESS synthesizes from `ess/`, not committed; `tools/synth.sh`
+  writes `target/generated/`, cached by the digest of its sources. Crates use it through path dependencies, so a cargo
   command in the root workspace fails with "failed to read
   `.../target/generated/crates/<crate>/Cargo.toml`" until `tools/synth.sh` has run once;
   `task test` runs it first.
@@ -35,8 +35,10 @@ none is written before the specification of what it implements.
   `weft.shared.StampedAt` input is granted outside `tools/stamped-time-actors` (`task stamped-time`).
 - `tools/check-spec-diff.sh [--acknowledge | --negative]`: classifies the change of `ess/` since
   the newest release tag (`ess verify diff --fail-on breaking-or-unknown`) and fails on a breaking
-  or unknown change that `quality/spec-diff-acknowledgements.json` does not name. A change to
-  `ess/` makes that file stale: review the change, then `--acknowledge` writes it again. Run by
+  or unknown change that the acknowledgements file does not name; `--acknowledge` writes
+  `quality/spec-diff-acknowledgements.json` (and removes it when there is nothing to
+  acknowledge). A change to `ess/` makes that file stale: review the change, then acknowledge
+  again. Run by
   `tools/check.d/50-spec-diff` in `task check` (hardening pass 3).
 - `tools/sim-relations.sh [spec dir]` (`task sim-relations`): the metamorphic relations of
   hardening pass 3, `weft-sim relate` from the full setup; steps in `sim/relations/`. Measures, so
@@ -65,14 +67,14 @@ none is written before the specification of what it implements.
   host. A page about something not built carries a `:::caution[Planned]` banner.
   `tools/planning-only.sh` lets a `website/`-only change skip the code gate; `--docs` is the
   docs build's filter, where a `website/` path builds.
-- `tools/check-docs.sh` (`task docs-check`, part of `task check`, and the first step of
-  `.github/workflows/pages.yml`, which runs on every pull request): holds
+- `tools/check-docs.sh` (`task docs-check`, part of `task check`, and the step after the
+  checkout in `.github/workflows/pages.yml`, which runs on every pull request): holds
   `docs.dead-repo-links`, `docs.planned-without-banner` and `repo.agents-md-dead-paths` at 0
-  with the hooks of `tools/docs-check.d/` (contract in its `README.md`); each prints
-  `<kpi-id> <count>` last. `tools/test-docs-check.sh` runs every hook on its `pass` and `fail`
-  tree in `tools/docs-check-fixture/`. A path named in this file exists, is written by a tool
-  its bullet names (`target/generated/` beside `tools/synth.sh`), or stands under a heading that
-  says Planned.
+  with the hooks of `tools/docs-check.d/` (contract in its `README.md`); every hook runs and
+  prints `<kpi-id> <count>` last. `tools/test-docs-check.sh` runs every hook on its `pass` and
+  `fail` trees in `tools/docs-check-fixture/`. A path named in this file is committed (or new
+  and not ignored), is written by a tool its bullet names (`tools/synth.sh` writes
+  `target/generated/`), or stands under a heading that says Planned.
 
 ### Planned: named here, not in the tree yet
 

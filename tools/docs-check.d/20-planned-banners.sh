@@ -4,8 +4,9 @@
 # status `planned` whose page carries no `:::caution[Planned]` banner and does not say "Planned" in
 # the section at the anchor of its href. The page of /docs/<path> is website/docs/<path>.md or .mdx,
 # or <path>/index.md or .mdx. The section at #<anchor> runs from the heading whose slug (or
-# `{#id}`) is <anchor> to the next heading of the same or a higher level; headings in a code
-# block do not count. An item whose page is not found counts. Prints
+# `{#id}`) is <anchor> to the next heading of the same or a higher level; a slug that repeats
+# gets -1, -2 (github-slugger). A banner, a heading or the word inside a code block does not
+# count. An item whose page is not found counts. Prints
 # `website/data/status.json:<line> <label>: <href>, <reason>` per item, then
 # `docs.planned-without-banner <count>`; exits 1 when the count is above 0, 2 when it cannot
 # read the file. sh, jq, grep and awk only; no network.
@@ -20,27 +21,35 @@ command -v jq > /dev/null 2>&1 || { echo "20-planned-banners: jq is not on PATH"
 items=$(jq -r '.items[] | select(.status == "planned") | [.label, .href] | @tsv' "$status") ||
   { echo "20-planned-banners: jq cannot read $status" >&2; exit 2; }
 
-# says_planned <file> <anchor>: exit 0 when the section at the anchor says "Planned".
-says_planned() {
+# page_says <file> <anchor>: prints `banner` when the page carries the banner, `anchor` when the
+# section at the anchor says "Planned", nothing otherwise. Text inside a code block counts for
+# neither: the site prints it as an example. A heading's id is its `{#id}`, else its slug; a slug
+# that repeats gets -1, -2 and so on, as github-slugger numbers them.
+page_says() {
   awk -v want="$2" '
-    function slug(t, s) {
+    function slug(t, s, n) {
       if (match(t, /\{#[^}]*\}[ \t]*$/)) { s = substr(t, RSTART + 2); sub(/\}[ \t]*$/, "", s); return s }
       s = tolower(t)
       gsub(/[^a-z0-9 _-]/, "", s)
       gsub(/ /, "-", s)
+      if (s in seen) { n = ++seen[s]; return s "-" n }
+      seen[s] = 0
       return s
     }
-    /^[ \t]*(```|~~~)/ { fence = !fence }
-    !fence && /^#+[ \t]/ {
+    /^[ \t]*(```|~~~)/ { fence = !fence; next }
+    fence { next }
+    /^[ \t]*:::caution\[Planned\]/ { banner = 1 }
+    /^#+[ \t]/ {
       match($0, /^#+/); level = RLENGTH
       t = $0
       sub(/^#+[ \t]+/, "", t)
       sub(/[ \t#]*$/, "", t)
+      id = slug(t)
       if (inside && level <= at) inside = 0
-      if (!inside && slug(t) == want) { inside = 1; at = level }
+      if (!inside && want != "" && id == want) { inside = 1; at = level }
     }
     inside && /Planned/ { found = 1 }
-    END { exit !found }
+    END { if (banner) print "banner"; else if (found) print "anchor" }
   ' "$1"
 }
 
@@ -70,9 +79,9 @@ for item in $items; do
   reason=
   if [ -z "$page" ]; then
     reason="no page ${base:+$base.md}"; [ -n "$base" ] || reason="no page for a route outside /docs"
-  elif grep -q '^[[:space:]]*:::caution\[Planned\]' "$page"; then
-    :
-  elif [ -n "$anchor" ] && says_planned "$page" "$anchor"; then
+  elif ! says=$(page_says "$page" "$anchor"); then
+    reason="awk cannot read $page"
+  elif [ -n "$says" ]; then
     :
   elif [ -n "$anchor" ]; then
     reason="$page has no :::caution[Planned] and no Planned at #$anchor"

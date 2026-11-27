@@ -23,7 +23,7 @@ scope:
   path: tools/docs-check.d
 - confidence: inferred
   path: tools/test-docs-check.sh
-revision: 10
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T15:01:10Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
 - {from: "proposed", to: "active", at: "2026-11-27T15:01:10Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
@@ -111,10 +111,12 @@ None. This story touches no entity of `ess/`.
 5. `tools/test-docs-check.sh` passes only when each of the three hooks exits 1 on its `fail`
    fixture (a link to a missing path, a planned item whose page has no banner, a backticked path
    that does not exist) and 0 on its `pass` fixture.
-6. On `AGENTS.md` as it was before this story, `30-agents-md-paths.sh` reports exactly
-   `ess/scenarios/`, `surfaces/http/weft-api.yaml` and `surfaces/cli/weft.yaml` in a clean checkout
-   (`ess/scenarios/` is not committed; `ess/ess-inputs.yaml` has `scenarios: []`).
-7. After this story, `AGENTS.md` lists the three paths under a heading that says Planned and
+6. On `AGENTS.md` as it was before this story, `30-agents-md-paths.sh` reports exactly five
+   paths in a clean checkout: `target/generated/`, `ess/scenarios/`, `surfaces/http/weft-api.yaml`,
+   `surfaces/cli/weft.yaml` and `quality/spec-diff-acknowledgements.json` (`ess/scenarios/` is not
+   committed; the base text does not say that a tool writes the first and the last).
+7. After this story, `AGENTS.md` lists the planned paths under a Planned heading, says which tool
+   writes each generated path, under a heading that says Planned and
    `30-agents-md-paths.sh` on the tree reports `repo.agents-md-dead-paths 0`.
 
 ## Rules for this work
