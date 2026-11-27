@@ -8,6 +8,12 @@ subjects:
   simulator:
     kind: codebase
     audiences: [developer, coding-agent]
+  repository:
+    kind: development-workflow
+    audiences: [developer, coding-agent]
+  docs-site:
+    kind: documentation
+    audiences: [reader, developer]
 
 assessments:
   explore-from-setup:
@@ -143,6 +149,73 @@ assessments:
         output: duration
         scope: test
 
+  repository-facts:
+    subject: repository
+    assessor: repo-facts@1
+    target: {kind: revision, environments: [local]}
+    observation:
+      kind: snapshot
+      command: task kpis
+      conditions:
+        all: {cache_profile: warm}
+    measurements:
+      gate-seconds:
+        kind: sampled
+        output: gate_seconds
+        boundary: run_time
+        scope: run
+        unit: s
+        better: lower
+      test-step-seconds:
+        kind: sampled
+        output: test_step_seconds
+        boundary: run_time
+        scope: run
+        unit: s
+        better: lower
+      slowest-test-seconds:
+        kind: sampled
+        output: slowest_test_seconds
+        scope: run
+        unit: s
+        better: lower
+      gate-budget-cases-failed:
+        kind: exact
+        output: gate_budget_cases_failed
+        scope: run
+        unit: cases
+        better: lower
+      test-binaries-per-crate:
+        kind: exact
+        output: test_binaries_per_crate
+        scope: run
+        unit: binaries
+        better: lower
+      python-files:
+        kind: exact
+        output: python_files
+        scope: run
+        unit: files
+        better: lower
+      toolchain-pins-disagree:
+        kind: exact
+        output: toolchain_pins_disagree
+        scope: run
+        unit: files
+        better: lower
+      cache-bypass:
+        kind: exact
+        output: cache_bypass
+        scope: run
+        unit: lines
+        better: lower
+      plan-validate-defects:
+        kind: exact
+        output: plan_validate_defects
+        scope: run
+        unit: defects
+        better: lower
+
 requirements:
   no-invariant-violations:
     assessment: explore-from-setup
@@ -190,6 +263,46 @@ requirements:
     assessment: simulator-tests
     measurement: test-time
     condition: {operator: lte, value: 60, unit: s}
+  repo-gate-time-not-worse:
+    assessment: repository-facts
+    measurement: gate-seconds
+    condition: {operator: lte, value: 600, unit: s}
+    reference:
+      kind: accepted_value
+      tolerance: {percent: 20, absolute: 10}
+      adoption: {from: trusted_revision, runs: 5, aggregation: {kind: median}}
+  repo-test-step-within-budget:
+    assessment: repository-facts
+    measurement: test-step-seconds
+    condition: {operator: lte, value: 120, unit: s}
+  repo-slowest-test-within-budget:
+    assessment: repository-facts
+    measurement: slowest-test-seconds
+    condition: {operator: lte, value: 60, unit: s}
+  repo-gate-budget-cases-pass:
+    assessment: repository-facts
+    measurement: gate-budget-cases-failed
+    condition: {operator: lte, value: 0, unit: cases}
+  repo-one-test-binary-per-crate:
+    assessment: repository-facts
+    measurement: test-binaries-per-crate
+    condition: {operator: lte, value: 1, unit: binaries}
+  repo-no-python-files:
+    assessment: repository-facts
+    measurement: python-files
+    condition: {operator: lte, value: 0, unit: files}
+  repo-toolchain-pins-agree:
+    assessment: repository-facts
+    measurement: toolchain-pins-disagree
+    condition: {operator: lte, value: 0, unit: files}
+  repo-no-cache-bypass:
+    assessment: repository-facts
+    measurement: cache-bypass
+    condition: {operator: lte, value: 0, unit: lines}
+  repo-plan-validates:
+    assessment: repository-facts
+    measurement: plan-validate-defects
+    condition: {operator: lte, value: 0, unit: defects}
 
 gates:
   merge:
@@ -207,3 +320,12 @@ gates:
       - no-lost-outcomes
       - explore-within-budget
       - test-within-budget
+      - repo-gate-time-not-worse
+      - repo-test-step-within-budget
+      - repo-slowest-test-within-budget
+      - repo-gate-budget-cases-pass
+      - repo-one-test-binary-per-crate
+      - repo-no-python-files
+      - repo-toolchain-pins-agree
+      - repo-no-cache-bypass
+      - repo-plan-validates

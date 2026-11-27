@@ -23,9 +23,9 @@ scope:
   path: tools/kpis.d/40-platform.sh
 - confidence: cited
   path: tools/sim/src/experiment.rs
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
-revision: 8
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
+revision: 11
 ---
 ## Epic
 
@@ -43,7 +43,7 @@ surfaces (`story:kpi-repository` -> `story:anim-search-record` -> `story:anim-se
 `story:kpi-flat-searches` and `story:kpi-simulator` edit `quality/ratchet.yaml` after it.
 
 Of the weft-sim sources it edits `tools/sim/src/experiment.rs` (the `search.maximised` field) and
-`tools/sim/tests/ratchet.rs` (its tests), both on the same chain: `story:kpi-flat-searches` edits
+`tools/sim/tests/ratchet/mod.rs` (its tests), both on the same chain: `story:kpi-flat-searches` edits
 both after it.
 
 `sim/experiments/` holds six experiments when this story lands. `story:anim-docs-published-run`
@@ -87,7 +87,7 @@ Shape (taken here):
   (`tools/sim/src/experiment.rs:231`, `Search`, `#[serde(deny_unknown_fields)]`), so this story
   adds the field to `Search`; weft-sim refuses an entry without a reason, an entry whose KPI is
   also in `gates`, and an entry whose KPI has no positive weight.
-- Tests in `tools/sim/tests/ratchet.rs` (the module of `story:kpi-repository`, run by
+- Tests in `tools/sim/tests/ratchet/mod.rs` (the module of `story:kpi-repository`, run by
   `task sim-test`, file-only, each under 1 s):
   - `ratchet::every_search_gates_every_platform_gate_kpi`: reads every file of `sim/experiments/`
     and fails when one with a `search:` block lacks a gate KPI of the list above in

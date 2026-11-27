@@ -1,0 +1,15 @@
+{
+  "format": "ratchet-reference/1",
+  "requirement": "repo-gate-time-not-worse",
+  "kind": "accepted_value",
+  "revision": "9229ceab92bab02845d721cafdb00625b4ac1693",
+  "values": [
+    {"scope": "run", "value": "19.3", "unit": "s"}
+  ],
+  "conditions": {
+    "tools": {"rustc": "1.98.1", "cargo-nextest": "0.9.143", "ess": "0.99.2", "task": "3.54.0"},
+    "cache_profile": "warm"
+  },
+  "evidence": [],
+  "last_change": {"kind": "first_adoption", "authorized_by": "epic:kpi-ratchet"}
+}

@@ -32,6 +32,11 @@ tasks:
     cmds:
       - tools/run-hooks.sh tools/slow.d
 
+  kpis:
+    desc: Print every KPI measured on this machine, one line each with its value, unit and command (tools/kpis.sh, the hooks of tools/kpis.d). Measures, so it runs without slot; never part of check.
+    cmds:
+      - tools/kpis.sh
+
   ci-paths:
     desc: Test the planning-only path filter of the CI gate on both sides.
     cmds:

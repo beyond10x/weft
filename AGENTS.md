@@ -35,6 +35,17 @@ none is written before the specification of what it implements.
 - `tools/sim-relations.sh [spec dir]` (`task sim-relations`): the metamorphic relations of
   hardening pass 3, `weft-sim relate` from the full setup; steps in `sim/relations/`. Measures, so
   it runs without `slot`.
+- `tools/kpis.sh` (`task kpis`): prints the KPIs of `design:quality-kpis` measured on this
+  machine, one line each with its value, unit and command, from the hooks of `tools/kpis.d/`
+  (contract in its `README.md`). Measures, so it runs without `slot`; its hooks put the prefix on
+  the builds and tests inside them. Never part of `task check` (test
+  `ratchet::check_runs_no_kpi_hook`).
+- `quality/ratchet.yaml`: the KPIs as a `ratchet/1` plan, with assessor declarations in
+  `quality/assessors/` and accepted values in `ratchet/references/<requirement>.json`
+  (`ratchet-reference/1`, written by hand until `ratchet reference adopt` runs). The test
+  `ratchet::the_ratchet_file_is_consistent` in `task sim-test` holds the three together; a new KPI
+  adds a measurement, its requirement, its record when it is a ratchet, and a test of its own in
+  `tools/sim/tests/ratchet/mod.rs`.
 - `tools/synth-domain.sh [--snapshot] <name> [paths]`: synthesizes the conformance suite of one
   domain on the subset of domains it needs (about 80 s; the whole system takes 451 s) and runs it
   against the interpreted target. Synthesis goes through `slot` with `--jobs 2`, one run at a time

@@ -20,9 +20,9 @@ scope:
   path: ratchet/references
 - confidence: inferred
   path: tools/kpis.d/20-ci.sh
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
-revision: 8
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
+revision: 11
 ---
 ## Epic
 
@@ -76,7 +76,7 @@ Shape:
   record each. `ci.gate-job-seconds` is a report: a measurement with no requirement.
 - A sampled time with an accepted value needs a tolerance and an adoption rule in ratchet/1
   (github.com/beyond10x/ratchet `docs/design.md` § 3); the story names both for each time.
-- Tests in `tools/sim/tests/ratchet.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::ci_kpis_have_measurements` (the eight ids above, a list
   in the test, each with a measurement under `ci` or `docs-site`),
   `ratchet::ci_gate_kpis_are_merge_requirements` (the three gate ids, each a requirement listed
