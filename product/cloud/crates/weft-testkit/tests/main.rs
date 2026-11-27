@@ -9,7 +9,7 @@ mod trivial {
     }
 }
 
-/// The form of the generated crates (`generated/`): a tree with a `[workspace]` of its own,
+/// The form of the generated crates (`target/generated/`): a tree with a `[workspace]` of its own,
 /// excluded from the root workspace, used by a weft crate through a path dependency.
 mod probe {
     use weft_probe_api::{echo, ProbeId};
@@ -24,5 +24,18 @@ mod probe {
             manifest.display()
         );
         assert_eq!(echo(ProbeId(7)), ProbeId(7));
+    }
+}
+
+/// The generated code (`target/generated/`, `tools/synth.sh`): `weft-server` builds as a path dependency
+/// and answers through its own mapping.
+mod generated {
+    use weft_server::entry::Refused;
+
+    #[test]
+    fn an_unmet_obligation_answers_501_through_the_generated_status() {
+        let refused = Refused::Unmet("weft.workloads.PlaceInstance".to_string());
+        assert_eq!(refused.status(), 501);
+        assert!(!refused.committed());
     }
 }

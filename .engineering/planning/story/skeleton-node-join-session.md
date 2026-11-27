@@ -13,26 +13,26 @@ scope:
 - confidence: inferred
   path: Cargo.lock
 - confidence: inferred
-  path: crates/weft-agent/Cargo.toml
+  path: product/cloud/crates/weft-agent/Cargo.toml
 - confidence: cited
-  path: crates/weft-agent/src/agent.rs
+  path: product/cloud/crates/weft-agent/src/agent.rs
 - confidence: cited
-  path: crates/weft-agent/src/main.rs
+  path: product/cloud/crates/weft-agent/src/main.rs
 - confidence: cited
-  path: crates/weft-agent/src/report.rs
+  path: product/cloud/crates/weft-agent/src/report.rs
 - confidence: cited
-  path: crates/weft-agent/tests/main.rs
+  path: product/cloud/crates/weft-agent/tests/main.rs
 - confidence: cited
-  path: crates/weft-bin/src/main.rs
+  path: product/cloud/crates/weft-bin/src/main.rs
 - confidence: cited
-  path: crates/weft-bin/src/node_channel.rs
+  path: product/cloud/crates/weft-bin/src/node_channel.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/open_node_session.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/open_node_session.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/record_node_observation.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/record_node_observation.rs
 - confidence: cited
-  path: crates/weft-testkit/src
-revision: 12
+  path: product/cloud/crates/weft-testkit/src
+revision: 23
 ---
 ## Epic
 
@@ -53,12 +53,12 @@ the join token `ProvisionPoolNode` issued, no inbound port on the node, mTLS a l
 - Session: no frame of the node carries a time (`protocols/node-channel.yaml` header, hardening
   pass 5). `OpenNodeSession` takes `received_at` (`weft.shared.StampedAt`) and is granted to
   ControlPlane alone (`ess/9-actors/actors.yaml` line 1050). So `weft-bin` gets a node-channel
-  endpoint, `crates/weft-bin/src/node_channel.rs`, served on the same listener under `/node/`: the
+  endpoint, `product/cloud/crates/weft-bin/src/node_channel.rs`, served on the same listener under `/node/`: the
   node sends a `hello` frame; the endpoint sends `weft.nodes.OpenNodeSession` in-process as
   ControlPlane, with `received_at` from the context clock on receipt, and answers `hello` with the
   session id or the refusal. On a refusal the node sends `hello` again after the redial delay of the
   protocol model (3000 ms).
-- Obligations implemented here, each in its own file under `crates/weft-impl/src/behaviours/`:
+- Obligations implemented here, each in its own file under `product/cloud/crates/weft-impl/src/behaviours/`:
   `weft.infrastructure.RecordNodeObservation` and `weft.nodes.OpenNodeSession` (2 of the 24 command
   behaviours on the skeleton path).
 - Not here: heartbeats (`weft.nodes.Heartbeat`), lease renewal and the R3 loss of a silent
@@ -85,12 +85,12 @@ the join token `ProvisionPoolNode` issued, no inbound port on the node, mTLS a l
 
 ## Scope
 
-- `crates/weft-agent/` (`src/main.rs`, `src/agent.rs`, `src/report.rs`, `tests/main.rs` module
+- `product/cloud/crates/weft-agent/` (`src/main.rs`, `src/agent.rs`, `src/report.rs`, `tests/main.rs` module
   `join`)
-- `crates/weft-bin/` (`src/node_channel.rs`, routing in `src/main.rs`)
-- `crates/weft-impl/` (`src/behaviours/`: `record_node_observation.rs`,
+- `product/cloud/crates/weft-bin/` (`src/node_channel.rs`, routing in `src/main.rs`)
+- `product/cloud/crates/weft-impl/` (`src/behaviours/`: `record_node_observation.rs`,
   `open_node_session.rs`)
-- `crates/weft-testkit/` (start `weft-agent` as a child process)
+- `product/cloud/crates/weft-testkit/` (start `weft-agent` as a child process)
 
 ## Acceptance
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-generated-code
 kind: story
-status: draft
+status: active
 title: Generated domain code from ess/ committed under generated/ with a source digest, checked fast and regenerated in the slow lane
 relations:
 - decomposes: epic:walking-skeleton
@@ -12,15 +12,11 @@ scope:
 - confidence: inferred
   path: Cargo.lock
 - confidence: cited
-  path: crates/weft-testkit/Cargo.toml
+  path: product/cloud/crates/weft-testkit/Cargo.toml
 - confidence: cited
-  path: crates/weft-testkit/tests/main.rs
-- confidence: cited
-  path: generated
+  path: product/cloud/crates/weft-testkit/tests/main.rs
 - confidence: cited
   path: tools/check.d/05-generated-selftest.sh
-- confidence: cited
-  path: tools/check.d/10-generated-digest.sh
 - confidence: cited
   path: tools/slow.d/10-generated-regenerate.sh
 - confidence: cited
@@ -29,7 +25,12 @@ scope:
   path: tools/synth.sh
 - confidence: cited
   path: tools/test-generated.sh
-revision: 6
+- confidence: cited
+  path: tools/test-setup.d/10-generated.sh
+revision: 13
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T10:36:58Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-27T10:36:58Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -45,6 +46,16 @@ that restore what a transformation removed land in the stories whose path needs 
 is never edited for this. Not blocked.
 
 ## Context
+
+Decided 2026-11-27 (D-gen B, the host operator, about 12:07 CET): the generated code is not
+committed. It is 68 MB (one file 40 MB) and every change of `ess/` would add tens of MB to the
+public history. `tools/synth.sh` synthesizes once per run into `target/generated/`, cached by the
+digest of `ess/`, `tools/synth-input.sh` and the ess version; `tools/test-setup.d/10-generated.sh`
+fills the cache before the test build; the self-test covers stale, damaged, partial and concurrent
+caches; the slow lane regenerates into a fresh directory and compares bytes with the cache. Where
+the text below says "committed under `generated/`" or names `tools/check.d/10-generated-digest.sh`,
+this paragraph replaces it. The owner's layout of the same day moves weft's crates to
+`product/cloud/crates/`.
 
 Decision A2 (`docs/implementation.md`): weft runs its domains as the Rust `ess generate synthesize
 --target rust` writes. The output is committed under `generated/` with the digest of its sources; a
@@ -118,7 +129,7 @@ None. The synthesis reads `ess/` as written; this story writes no entity.
 - `tools/synth-input.sh`, `tools/synth.sh`, `tools/test-generated.sh`
 - `tools/check.d/05-generated-selftest.sh`, `tools/check.d/10-generated-digest.sh`
 - `tools/slow.d/10-generated-regenerate.sh`
-- `crates/weft-testkit/` (`Cargo.toml` path dependency on `generated/crates/weft-server`;
+- `product/cloud/crates/weft-testkit/` (`Cargo.toml` path dependency on `generated/crates/weft-server`;
   `tests/main.rs` module `generated`)
 
 ## Acceptance
@@ -143,7 +154,7 @@ None. The synthesis reads `ess/` as written; this story writes no entity.
 4. `task slow` regenerates `generated/` from the committed sources into `target/` and finds it
    byte-equal to the committed `generated/`.
 5. `slot task check` builds `generated/crates/weft-server` as a path dependency of
-   `crates/weft-testkit` and runs its module `generated`, which maps `weft_server::entry::Refused::Unmet`
+   `product/cloud/crates/weft-testkit` and runs its module `generated`, which maps `weft_server::entry::Refused::Unmet`
    to status 501 through the generated `status()`.
 ## Rules for this work
 

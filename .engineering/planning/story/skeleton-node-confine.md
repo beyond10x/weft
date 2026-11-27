@@ -13,12 +13,12 @@ scope:
 - confidence: inferred
   path: Cargo.lock
 - confidence: cited
-  path: crates/weft-agent
+  path: product/cloud/crates/weft-agent
 - confidence: cited
   path: tools/test-setup.d/20-substrate.sh
 - confidence: cited
   path: tools/test-teardown.d/20-substrate.sh
-revision: 11
+revision: 13
 ---
 ## Epic
 
@@ -36,7 +36,7 @@ with `b10x-substrate-sdk` from the public repository `beyond10x/substrate` at an
 Exec states `accepted | running | exited | cancelled | expired | unknown`, event `exec.exited`.
 Ordinary execution has no egress: every run is under `--unshare-net` (substrate `README.md`).
 
-This story creates `crates/weft-agent` (the node agent; the package name `weft-node` is the
+This story creates `product/cloud/crates/weft-agent` (the node agent; the package name `weft-node` is the
 generated component crate's, `generated/crates/weft-node`) with the module `confine`: given one process of an instance
 (command, environment), it starts one exec through the SDK, reports its state changes, and on
 `exec.exited` returns the exit code and the captured output. Nothing here talks to the control host.
@@ -70,13 +70,13 @@ generated component crate's, `generated/crates/weft-node`) with the module `conf
 
 ## Scope
 
-- `crates/weft-agent/` (`Cargo.toml` with `b10x-substrate-sdk` at an exact `rev`, `src/lib.rs`,
+- `product/cloud/crates/weft-agent/` (`Cargo.toml` with `b10x-substrate-sdk` at an exact `rev`, `src/lib.rs`,
   `src/confine.rs`, the probe helper, `tests/main.rs` module `confine`)
 - `tools/test-setup.d/20-substrate.sh`, `tools/test-teardown.d/20-substrate.sh`
 
 ## Acceptance
 
-1. A test in `crates/weft-agent/tests/main.rs` starts `sh -c "echo weft"` through `substrate-daemon`
+1. A test in `product/cloud/crates/weft-agent/tests/main.rs` starts `sh -c "echo weft"` through `substrate-daemon`
    with the `confine` module and observes the exec leave `accepted` and end in `exited` with code 0
    and output `weft`, in `slot task check` locally and in the CI Gate job.
 2. In the same test binary, the probe binary run unconfined connects to a TCP listener the test

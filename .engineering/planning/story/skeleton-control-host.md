@@ -14,38 +14,38 @@ scope:
 - confidence: inferred
   path: Cargo.lock
 - confidence: cited
-  path: crates/weft-bin
+  path: product/cloud/crates/weft-bin
 - confidence: cited
-  path: crates/weft-client
+  path: product/cloud/crates/weft-client
 - confidence: cited
-  path: crates/weft-impl/Cargo.toml
+  path: product/cloud/crates/weft-impl/Cargo.toml
 - confidence: cited
-  path: crates/weft-impl/build.rs
+  path: product/cloud/crates/weft-impl/build.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_account.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_account.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_default_cluster.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_default_cluster.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_node_pool.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_node_pool.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/create_tenant.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/create_tenant.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/define_priority_class.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/define_priority_class.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/grant_top_quota.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/grant_top_quota.rs
 - confidence: cited
-  path: crates/weft-impl/src/behaviours/provision_pool_node.rs
+  path: product/cloud/crates/weft-impl/src/behaviours/provision_pool_node.rs
 - confidence: cited
-  path: crates/weft-impl/src/context
+  path: product/cloud/crates/weft-impl/src/context
 - confidence: cited
-  path: crates/weft-impl/src/lib.rs
+  path: product/cloud/crates/weft-impl/src/lib.rs
 - confidence: cited
-  path: crates/weft-impl/src/log.rs
+  path: product/cloud/crates/weft-impl/src/log.rs
 - confidence: cited
-  path: crates/weft-impl/src/storage
+  path: product/cloud/crates/weft-impl/src/storage
 - confidence: cited
-  path: crates/weft-testkit
-revision: 22
+  path: product/cloud/crates/weft-testkit
+revision: 39
 ---
 ## Epic
 
@@ -62,17 +62,17 @@ Decisions A2, A3 and A4 (`docs/implementation.md`): weft runs its domains as gen
 control host is one weft binary serving `weft-api` and `weft-control` in one process; SQLite behind
 the generated storage port.
 
-- `crates/weft-bin`: the control host binary. It builds one `weft_system::System` from the
-  generated components, the behaviours of `crates/weft-impl` and the obligations, and owns the
+- `product/cloud/crates/weft-bin`: the control host binary. It builds one `weft_system::System` from the
+  generated components, the behaviours of `product/cloud/crates/weft-impl` and the obligations, and owns the
   accept loop itself: each connection is read with `weft_server::http::read` and answered by the
   `dispatch_with_events` of the module whose routes hold the path, `weft_server::weft_api` or
   `weft_server::weft_control` (the generated `serve` loop takes the system for
   good, while the controllers and the node-channel endpoint of later stories must share it). One
   writer: the system sits behind one lock, commands run one at a time.
-- `crates/weft-impl`, the storage port: one SQLite table per entity the generated behaviours read
+- `product/cloud/crates/weft-impl`, the storage port: one SQLite table per entity the generated behaviours read
   or write (load, store, replace, remove, list in store order), one database file given by
   `--state <path>`.
-- `crates/weft-impl`, the context port:
+- `product/cloud/crates/weft-impl`, the context port:
   - the clock, a parameter (system clock in the binary; tests read the wall clock around a call);
   - identities and assigned values: UUIDv4 from a mint;
   - external decisions: a decider, for the skeleton a table in code; every `external:` branch the
@@ -84,8 +84,8 @@ the generated storage port.
     cargo feature `test-callers`; without it every request is answered as no caller
     (`403`, `not granted`). The authenticate function takes that switch as a parameter, so one test
     build checks both settings. Authentication proper (mTLS, tokens) is a later epic.
-- Obligations implemented here, each in its own file under `crates/weft-impl/src/behaviours/`
-  (`crates/weft-impl/build.rs` collects every file of that directory into the behaviour type, so a
+- Obligations implemented here, each in its own file under `product/cloud/crates/weft-impl/src/behaviours/`
+  (`product/cloud/crates/weft-impl/build.rs` collects every file of that directory into the behaviour type, so a
   later story adds its own files and edits no shared list): `weft.infrastructure.DefinePriorityClass`,
   `weft.infrastructure.CreateNodePool`, `weft.infrastructure.ProvisionPoolNode`,
   `weft.cluster.CreateDefaultCluster`, `weft.accounts.CreateTenant`, `weft.accounts.CreateAccount`,
@@ -103,12 +103,12 @@ the generated storage port.
   `{"seq", "kind": "event", "name"}`, and, from `story:skeleton-replica-instances` on, one per
   binding answer `{"seq", "kind": "binding", "binding", "refusal", "result"}` (`result` one of
   `applied`, `dropped`, `retried`; `refusal` the refusing outcome or absent). `seq` counts up from 1
-  over the life of the file. The writer is `crates/weft-impl/src/log.rs`, so an in-process system
+  over the life of the file. The writer is `product/cloud/crates/weft-impl/src/log.rs`, so an in-process system
   of the tests writes the same lines; a request handled in-process logs as a request too. Later
   stories read it by delta: the highest `seq` before an act, then only the lines after it.
-- `crates/weft-client`: the HTTP client the tests, the node agent and the conformance adapter
+- `product/cloud/crates/weft-client`: the HTTP client the tests, the node agent and the conformance adapter
   share: send a command as an actor with its caller, read a view, read the log after a `seq`.
-- `crates/weft-testkit`: `ControlHost` starts the test build of `weft-bin` with a temporary state
+- `product/cloud/crates/weft-testkit`: `ControlHost` starts the test build of `weft-bin` with a temporary state
   file, `--port 0`, the log in its temporary directory, reads the listening line and stops it on
   drop; `seed(rows)` writes rows into a state file through the storage port before a start; and the
   operator and tenant steps of the path as functions, input as in
@@ -125,15 +125,15 @@ the generated storage port.
 
 ## Scope
 
-- `crates/weft-bin/`
-- `crates/weft-impl/` (`src/storage/`, `src/context/`, `src/log.rs`, `build.rs`, and one file per
+- `product/cloud/crates/weft-bin/`
+- `product/cloud/crates/weft-impl/` (`src/storage/`, `src/context/`, `src/log.rs`, `build.rs`, and one file per
   obligation listed above)
-- `crates/weft-client/`
-- `crates/weft-testkit/` (`src/`, `tests/main.rs` module `control_host`)
+- `product/cloud/crates/weft-client/`
+- `product/cloud/crates/weft-testkit/` (`src/`, `tests/main.rs` module `control_host`)
 
 ## Acceptance
 
-1. A test in `crates/weft-testkit/tests/main.rs` starts the control host, sends `CreateCloud`,
+1. A test in `product/cloud/crates/weft-testkit/tests/main.rs` starts the control host, sends `CreateCloud`,
    `DeclareZone`, `DefinePriorityClass`, `CreateNodePool`, `ProvisionPoolNode`,
    `CreateDefaultCluster`, `CreateTenant`, `CreateAccount` and `GrantTopQuota` through `weft-client`,
    each as its own actor with the input of `sim/experiments/full-setup.yaml`, and reads each created

@@ -56,9 +56,9 @@ stacks, this most likely does depend on [Spindle]". The host operator relayed bo
 ```
   weft CLI / tests ──HTTP──▶ weft control host (one Rust binary)
                              │ weft-server: generated routes of weft-api + weft-control
-                             │ generated behaviours + weft's obligations (crates/weft-impl)
+                             │ generated behaviours + weft's obligations (product/cloud/crates/weft-impl)
                              │ storage port: SQLite; context port: clock, ids, deciders
-                             │ controllers: level and time steps (crates/weft-controllers)
+                             │ controllers: level and time steps (product/cloud/crates/weft-controllers)
                              │ node-channel endpoint: stamps received_at (ControlPlane)
                              └──────────────▲──────────────────────────────────
                                             │ node dials out (HTTP, join token)
@@ -67,10 +67,12 @@ stacks, this most likely does depend on [Spindle]". The host operator relayed bo
                              substrate-daemon (no root) ─▶ confined snippet
 ```
 
-- Generated code under `generated/` (the synthesis output), committed with the digest of
-  `ess/`. A fast check compares the digest; regeneration runs in the `slow` lane and compares
-  bytes (`~/beyond10x/AGENTS.md` § Tests stay fast). Generated files are never edited by hand.
-- weft's own crates under `crates/`: `weft-impl` (obligations and ports), `weft-controllers`,
+- Generated code in `target/generated/` (the synthesis output, `tools/synth.sh`), not committed:
+  synthesized once per digest of `ess/`, `tools/synth-input.sh` and the ess release, and reused
+  while that digest holds; the `slow` lane synthesizes afresh and compares bytes
+  (`~/beyond10x/AGENTS.md` § Tests stay fast). Generated files are never edited by hand.
+- weft's own crates under `product/cloud/crates/` (a later consumer app gets
+  `product/<app>/crates/`): `weft-impl` (obligations and ports), `weft-controllers`,
   `weft-agent` (the node agent; the generated code owns the name `weft-node`), `weft-bin` (the control host binary), `weft-testkit`.
 - The skeleton implements the obligations on its path. Every other obligation answers a declared
   "not implemented" refusal, and the conformance counts show each one as not executed.

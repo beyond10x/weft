@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T10:36:00Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-generated-code",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the host operator: go on with wave 2"
+  }
+}

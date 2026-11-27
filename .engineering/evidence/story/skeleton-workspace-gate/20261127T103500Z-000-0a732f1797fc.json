@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T10:35:00Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-workspace-gate",
+  "kind": "story",
+  "revision": 11,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#3, merged 58172a7",
+    "reference": "https://github.com/beyond10x/weft/pull/3"
+  }
+}
