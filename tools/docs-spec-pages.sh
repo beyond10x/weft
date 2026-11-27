@@ -6,6 +6,11 @@
 # each page is written by hand. Blocks:
 #   components.md        components      one row per component: its summary, the domains it owns
 #                                        and the number of commands it accepts
+#                        placement       where the domains sit: whether each domain with commands
+#                                        sits with exactly one component that accepts all of them,
+#                                        the domains without commands that sit with none, and
+#                                        whether a component accepts a command of a domain it
+#                                        does not own (each bullet says what the IR shows)
 #   managed-services.md  binding-modes   the variants of weft.catalog.BindingMode
 #                        instance-states the lifecycle of weft.catalog.ServiceInstance
 #                        plans           the summary and the fields of weft.catalog.OfferingPlan
@@ -51,6 +56,28 @@ block() {
       "|---|---|---|---|",
       (.components | keys[] as $k | .[$k] |
         "| \($k | code) | \(.naming.summary // "" | cell) | \(.owns | map(code) | join(", ")) | \(.accepts | length) |")
+    elif $name == "placement" then
+      .components as $c |
+      ([.domains | to_entries[] | select(.value.commands | length > 0) | .key as $d |
+        .value.commands as $cmds |
+        [$c | to_entries[] | select(.value.owns | index($d))] as $own |
+        select(($own | length) != 1 or
+          ([$cmds[] | select(. as $x | ($own[0].value.accepts // []) | index($x) | not)] | length) > 0) |
+        $d]) as $split |
+      ([.domains | to_entries[] | select(.value.commands | length == 0) | .key as $d |
+        select([$c[].owns[]] | index($d) | not) | $d]) as $none |
+      (if ($split | length) == 0
+        then "- Each domain with commands sits with exactly one component, which accepts every command of the domain."
+        else "- Domains with commands that do not sit with exactly one component accepting all of them: \($split | map(code) | join(", "))." end),
+      (if ($none | length) == 0
+        then "- Every domain without commands sits with a component too."
+        else "- Domains without commands sit with no component: \($none | map(code) | join(", "))." end),
+      ([$c | to_entries[] | .value.owns as $o | .key as $k |
+        select([.value.accepts[] | split(".")[0:2] | join(".") | select(. as $d | $o | index($d) | not)] | length > 0) |
+        $k]) as $foreign |
+      (if ($foreign | length) == 0
+        then "- A component accepts no command of a domain it does not own."
+        else "- Components that accept commands of a domain they do not own: \($foreign | map(code) | join(", "))." end)
     elif $name == "binding-modes" then
       (.types["weft.catalog.BindingMode"].body.variants[] | "- \(code)")
     elif $name == "instance-states" then
@@ -87,7 +114,7 @@ splice() {
 }
 
 status=0
-for spec in components.md:components managed-services.md:binding-modes managed-services.md:instance-states \
+for spec in components.md:components components.md:placement managed-services.md:binding-modes managed-services.md:instance-states \
   managed-services.md:plans managed-services.md:products; do
   page=$pages/${spec%%:*}
   name=${spec#*:}

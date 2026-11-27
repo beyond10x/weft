@@ -7,8 +7,7 @@ status: planned
 weft runs as four server components and one command-line client. The specification declares
 the components in
 [`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml): each
-owns a set of domains, accepts every command of those domains and publishes their events. A
-domain sits with exactly one component.
+owns a set of domains and accepts their commands.
 
 :::caution[Planned]
 Specified, not built. The components and their contracts are part of the specification, which
@@ -16,12 +15,12 @@ Specified, not built. The components and their contracts are part of the specifi
 :::
 
 Runs today: none of the four components serves a user, no offering provisions, and no release
-ships them. The walking
-skeleton under `product/cloud/` builds a control host binary, `weft`, that serves the generated
-HTTP surfaces of `weft-api` and `weft-control` and the node channel, and a node agent,
-`weft-agent`, that joins it. There is no login yet: built without its test feature, the binary
-answers every request as one without a caller. The gate runs a test build of both in its tests.
-`weft-edge` does not run.
+ships them. The walking skeleton under `product/cloud/` builds a control host binary named
+`weft` (not the CLI of the same name below) that serves the generated HTTP surfaces of
+`weft-api` and `weft-control` and the node channel, and a node agent, `weft-agent`, that joins
+it. There is no login yet: built without its test feature, the control host answers every
+request as one without a caller. The gate runs a test build of both in its tests. `weft-edge`
+does not run.
 
 ## The components
 
@@ -37,11 +36,13 @@ table no longer matches it.
 | `weft-node` | The node agent: the processes of the instances assigned to its node, their restarts and backoff, and the local endpoint where an instance asks for its identity document and its secrets. | `weft.node` | 9 |
 <!-- /generated: components -->
 
-How the specification places a domain: `weft-control` owns every domain with a command the node
-agent sends over its session or one of the control plane's own actors issues (the scheduler, the
-release controller); `weft-api` owns the user's other domains. The user reaches both through one
-API: `weft-api` forwards the user commands of the control plane's domains (`DefineWorkload`,
-`CreateSecret`) to `weft-control`.
+Where a domain sits, from the same specification:
+
+<!-- generated: placement -->
+- Each domain with commands sits with exactly one component, which accepts every command of the domain.
+- Domains without commands sit with no component: `weft.actors`, `weft.shared`.
+- A component accepts no command of a domain it does not own.
+<!-- /generated: placement -->
 
 ## Planes
 
@@ -52,9 +53,9 @@ Each component runs in one plane of the design
 | Plane | Component | What the plane does |
 |---|---|---|
 | Management | `weft-api` | The user API: tenants, accounts, formations, secrets, deploys. Called by the CLI and by CI. |
-| Control | `weft-control` | State, scheduler, translators, identity issuer, secret delivery. Decides; runs no workload. |
-| Worker | `weft-node` | One agent per node: starts, observes and stops instances. Holds no state the control plane does not know. |
-| Data | `weft-edge` | Traffic to public endpoints: the ready backends of each route, requests held while a sleeping service wakes, certificates. |
+| Control | `weft-control` | State store, scheduler, translators, identity issuer. Decides; runs no workload. |
+| Worker | `weft-node` | One node agent per node: starts, observes and stops instances. Holds no state the control plane does not know. |
+| Data | `weft-edge` | Traffic to endpoints: the edge gateway, links between components, egress through the node's filter. |
 
 How they talk:
 
@@ -74,10 +75,12 @@ process.
 
 ## weft CLI
 
-`weft` is the command-line client of the user API: login, contexts, deploy, plan, logs and
-secrets. It is no component: it holds no state and no power of its own beyond the caller's, and
-every call goes through `weft-api`. Its commands will be specified as an `ess-cli/2` surface of
-the specification; that document is not written yet.
+The planned `weft` CLI is the command-line client of the user API: login, contexts, deploy,
+plan, logs and secrets. It is no component: it holds no state and no power of its own beyond the
+caller's, and every call goes through `weft-api`. Its commands will be specified as an
+`ess-cli/2` surface of the specification; that document is not written yet. The CLI is not the
+control host binary that the walking skeleton builds under the same name today: that binary
+serves the user API and holds the state.
 
 Where the code will live: the cloud, with the server components and the operator's CLI, under
 `product/cloud/`; a consumer app such as the user's `weft` CLI in a product directory of its own

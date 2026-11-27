@@ -106,8 +106,12 @@ workers, a cache volume and an endpoint for build clients.
 
 weft operates an offering itself, behind the offering's own API: the tenant sees a queue or a
 database, never the formation that runs it. A product runs as the customer's own formation,
-which the customer can see, scale and pay for per use; an upgrade moves the installation to a
-newer product version, and an uninstall removes the formation.
+which the customer can see, scale and pay for per use; an upgrade moves the installation to
+another version of its product, and an uninstall removes the formation. The specification gives
+versions no order yet: whether an upgrade must go to a newer version, and whether a move to an
+older one (a rollback) is allowed, is an open question
+([`ess/7-services/catalog.yaml`](https://github.com/beyond10x/weft/blob/main/ess/7-services/catalog.yaml),
+`UpgradeInstallation`).
 
 ## Related
 
