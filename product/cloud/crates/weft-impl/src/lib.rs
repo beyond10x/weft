@@ -9,12 +9,16 @@
 //!   generated stub, `UnmetObligation` (`build.rs`).
 //! - [`log`]: the control host log, one JSON line per answered request, published event and
 //!   binding answer.
+//! - [`bindings`]: the bindings of the path delivered by hand, with their per-refusal policies.
+//! - [`quota`]: the `over-quota` decision of the outcome group `quota`.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+pub mod bindings;
 pub mod context;
 pub mod log;
+pub mod quota;
 pub mod storage;
 
 include!(concat!(env!("OUT_DIR"), "/weft_impl_generated.rs"));

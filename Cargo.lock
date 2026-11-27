@@ -1411,6 +1411,7 @@ name = "weft-bin"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "weft-controllers",
  "weft-impl",
  "weft-server",
  "weft-system",
@@ -1428,6 +1429,20 @@ dependencies = [
 name = "weft-control"
 version = "1.0.0"
 dependencies = [
+ "weft-types",
+]
+
+[[package]]
+name = "weft-controllers"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "weft-bin",
+ "weft-client",
+ "weft-impl",
+ "weft-server",
+ "weft-system",
+ "weft-testkit",
  "weft-types",
 ]
 

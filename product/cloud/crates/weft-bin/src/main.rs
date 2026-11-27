@@ -1,7 +1,7 @@
 //! `weft`: the control host binary.
 //!
 //! ```text
-//! weft --state <path> [--log <path>] [--port <n>] [--listen <address>]
+//! weft --state <path> [--log <path>] [--port <n>] [--listen <address>] [--tick-ms <n>]
 //! ```
 //!
 //! Serves the generated HTTP surfaces of `weft-api` and `weft-control` on loopback (default
@@ -15,6 +15,9 @@
 //!
 //! The same listener serves the node channel under `/node/` ([`node_channel`]): the node agent
 //! dials it.
+//!
+//! Every `--tick-ms` milliseconds (default 200, at least 1) the controllers run once
+//! ([`weft_bin::Host::tick`]) under the same lock as the requests.
 
 mod node_channel;
 
@@ -22,6 +25,7 @@ use std::io::Write;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 /// Whether this build trusts the caller header.
 const TRUST_CALLERS: bool = cfg!(feature = "test-callers");
@@ -31,6 +35,7 @@ struct Options {
     log: PathBuf,
     listen: String,
     port: u16,
+    tick: Duration,
 }
 
 fn options() -> Result<Options, String> {
@@ -38,6 +43,7 @@ fn options() -> Result<Options, String> {
     let mut log = None;
     let mut listen = "127.0.0.1".to_owned();
     let mut port = 0;
+    let mut tick_ms = 200;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or_else(|| format!("{name} needs a value"));
@@ -50,6 +56,14 @@ fn options() -> Result<Options, String> {
                 port = text
                     .parse()
                     .map_err(|_| format!("--port {text} is not a port"))?;
+            }
+            "--tick-ms" => {
+                let text = value("--tick-ms")?;
+                tick_ms = text
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|ms| *ms > 0)
+                    .ok_or_else(|| format!("--tick-ms {text} is not a positive number"))?;
             }
             other => return Err(format!("unknown argument {other}")),
         }
@@ -65,6 +79,7 @@ fn options() -> Result<Options, String> {
         log,
         listen,
         port,
+        tick: Duration::from_millis(tick_ms),
     })
 }
 
@@ -72,7 +87,7 @@ fn main() -> ExitCode {
     let options = match options() {
         Ok(options) => options,
         Err(error) => {
-            eprintln!("weft: {error}\nusage: weft --state <path> [--log <path>] [--port <n>] [--listen <address>]");
+            eprintln!("weft: {error}\nusage: weft --state <path> [--log <path>] [--port <n>] [--listen <address>] [--tick-ms <n>]");
             return ExitCode::from(2);
         }
     };
@@ -118,12 +133,19 @@ fn main() -> ExitCode {
     {
         return ExitCode::FAILURE;
     }
-    weft_bin::serve(&listener, |request| {
-        if request.path.starts_with(node_channel::PREFIX) {
-            node_channel::answer(&host, request)
-        } else {
-            host.handle(request, TRUST_CALLERS)
-        }
+    let host = &host;
+    std::thread::scope(|scope| {
+        scope.spawn(move || loop {
+            std::thread::sleep(options.tick);
+            host.tick();
+        });
+        weft_bin::serve(&listener, |request| {
+            if request.path.starts_with(node_channel::PREFIX) {
+                node_channel::answer(host, request)
+            } else {
+                host.handle(request, TRUST_CALLERS)
+            }
+        });
     });
     ExitCode::FAILURE
 }

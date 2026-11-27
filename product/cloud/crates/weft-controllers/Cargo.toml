@@ -1,0 +1,30 @@
+[package]
+name = "weft-controllers"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[dependencies]
+serde_json = "1"
+weft-impl = { path = "../weft-impl" }
+weft-server = { path = "../../../../target/generated/crates/weft-server" }
+weft-system = { path = "../../../../target/generated/crates/weft-system" }
+weft-types = { path = "../../../../target/generated/crates/weft-types" }
+
+[dev-dependencies]
+weft-bin = { path = "../weft-bin", features = ["test-callers"] }
+weft-client = { path = "../weft-client" }
+weft-testkit = { path = "../weft-testkit" }
+
+[lints]
+workspace = true
