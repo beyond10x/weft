@@ -17,7 +17,7 @@ tasks:
       - tools/run-hooks.sh tools/check.d
 
   test:
-    desc: Test the root workspace. Builds the test binaries first; then tools/test-step.sh checks rustc against rust-toolchain.toml, runs the hooks of tools/test-setup.d, the tests (a test over 60 s is killed, the step ends at 120 s with exit 124), the hooks of tools/test-teardown.d, and prints the ten slowest tests.
+    desc: Test the root workspace. Builds the test binaries first; then tools/test-step.sh checks rustc and cargo-nextest against their pins, runs the hooks of tools/test-setup.d and the tests (a test over 60 s is killed; setup and tests end at 120 s with exit 124), the hooks of tools/test-teardown.d, and prints the ten slowest tests.
     cmds:
       - cargo nextest run --workspace --no-run
       - tools/test-step.sh

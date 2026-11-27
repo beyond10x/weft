@@ -40,13 +40,16 @@ jobs:
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
 
-      - name: Pinned toolchain (rust-toolchain.toml)
+      - name: Pinned toolchain (rust-toolchain.toml) and cargo-nextest (nextest-version, .config/nextest.toml)
         id: toolchain
         if: steps.paths.outputs.skip != 'true'
         run: |
           channel=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' rust-toolchain.toml | head -n 1)
           if [ -z "$channel" ]; then echo "no channel in rust-toolchain.toml"; exit 1; fi
+          nextest=$(sed -n 's/^[[:space:]]*nextest-version[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' .config/nextest.toml | head -n 1)
+          if [ -z "$nextest" ]; then echo "no nextest-version in .config/nextest.toml"; exit 1; fi
           echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "nextest=$nextest" >> "$GITHUB_OUTPUT"
 
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         if: steps.paths.outputs.skip != 'true'
@@ -68,7 +71,7 @@ jobs:
       - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         if: steps.paths.outputs.skip != 'true'
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@${{ steps.toolchain.outputs.nextest }}
 
       - name: Install the ESS CLI this repository validates with (ess 0.99.2, release binary)
         if: steps.paths.outputs.skip != 'true'

@@ -12,5 +12,7 @@ Contract of a hook:
   the hook that needs it.
 - Writes its files under `target/`.
 - Is idempotent: a second run leaves the same state.
-- Its time does not count against the step limit (`WEFT_STEP_LIMIT`); keep it short.
+- Its time counts against the step limit (`WEFT_STEP_LIMIT`, at most 120 s) together with the
+  tests: a setup that runs past the limit is ended and the step exits 124. A download that does
+  not fit belongs in a CI or host preparation outside the step, not here.
 - POSIX sh or a Rust binary; no Python.
