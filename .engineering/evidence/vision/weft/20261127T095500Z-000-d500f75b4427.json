@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T09:55:00Z",
+  "actor": "human:operator",
+  "artifact": "vision:weft",
+  "kind": "vision",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the owner, via the host operator: A: approve"
+  }
+}

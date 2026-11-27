@@ -1,0 +1,78 @@
+# Builds the documentation site (website/) on every pull request and on main. Only a push to main
+# uploads the built site; b10x-docs-site.yml deploys that exact artifact. A pull request that
+# changes only planning or prose files outside website/ (tools/planning-only.sh --docs) passes
+# without building (~/beyond10x/AGENTS.md "Planning-only pull requests skip the tests").
+name: Documentation validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The changed paths
+        id: paths
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"
+            if tools/planning-only.sh --docs < "$RUNNER_TEMP/changed.txt"; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        if: steps.paths.outputs.skip != 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Build the Docusaurus site
+        if: steps.paths.outputs.skip != 'true'
+        run: npm --prefix website ci && npm --prefix website run build
+      - name: Typecheck the Docusaurus site
+        if: steps.paths.outputs.skip != 'true'
+        run: npm --prefix website run typecheck
+      - name: Declare what was built
+        if: steps.paths.outputs.skip != 'true'
+        env:
+          COMMIT: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          case "$COMMIT" in *[!0-9a-f]*|'') exit 1 ;; esac
+          test "${#COMMIT}" -eq 40
+          test -f website/build/index.html
+          mkdir -p website/build/.well-known
+          jq -n --arg commit "$COMMIT" \
+            '{schema: "b10x-project-site/v1", repository: "weft", commit: $commit, baseUrl: "/weft/"}' \
+            > website/build/.well-known/b10x-site.json
+          cat website/build/.well-known/b10x-site.json
+      - name: Upload the exact built site
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: b10x-project-site
+          path: website/build
+          include-hidden-files: true
+          retention-days: 30
+          if-no-files-found: error

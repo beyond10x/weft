@@ -4,7 +4,7 @@ id: design:protocol-ports
 kind: design
 status: draft
 title: Protocol ports from RFCs, adapters as managed products, sessions above
-revision: 3
+revision: 4
 ---
 ## Goal
 
@@ -79,6 +79,10 @@ lot conformance testing or even a more code-generation like approach".
 6. sipx-clstr conformance against the SIP port; then generation of the transaction layer.
 
 ## Decisions (the owner's)
+
+Decided 2026-11-27: the owner picked "A: all three A" (relayed by the host operator, 09:28 CET):
+D1 "ports" (with "adapters" and "sessions"), D2 `weft/protocols/rfc/`, D3 sipx-clstr conformance
+first. The options as they were put:
 
 - D1, name of layer 1:
   - A (recommended): "ports", with "adapters" for layer 2 and "sessions" for layer 3 (the ports-and-

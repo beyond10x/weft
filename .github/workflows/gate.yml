@@ -1,7 +1,8 @@
 # The weft gate: the same `task check` a session runs locally (`slot task check`), so the root
 # workspace tests run through tools/test-step.sh between the setup and teardown hooks here too.
-# A pull request that changes only planning or prose files (tools/planning-only.sh) passes without
-# building (~/beyond10x/AGENTS.md "Planning-only pull requests skip the tests").
+# A pull request that changes only planning or prose files, or only the docs site under website/
+# (tools/planning-only.sh), passes without building; pages.yml builds the docs site
+# (~/beyond10x/AGENTS.md "Planning-only pull requests skip the tests").
 name: Gate
 
 on:
