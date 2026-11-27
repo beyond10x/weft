@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:kpi-repository
 kind: story
-status: draft
+status: active
 title: task kpis prints every repository KPI with its command, and quality/ratchet.yaml holds them with accepted references and a fast consistency test
 relations:
 - decomposes: epic:kpi-ratchet
@@ -26,9 +26,12 @@ scope:
   path: tools/kpis.sh
 - confidence: cited
   path: tools/sim/tests/main.rs
-- confidence: inferred
-  path: tools/sim/tests/ratchet.rs
-revision: 7
+- confidence: cited
+  path: tools/sim/tests/ratchet/mod.rs
+revision: 12
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T13:14:20Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-11-27T13:14:20Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1,"review_outcome":2}}}
 ---
 ## Epic
 
@@ -97,7 +100,7 @@ Shape (taken here; later `kpi-` stories add to it without editing the task):
   that exist, every `merge` entry names a requirement, every measurement of an assessor declared in
   `quality/assessors/` names an output it declares, and every `accepted_value` requirement has its
   record under `ratchet/references/`. It reads files and measures nothing. It lives in weft-sim’s
-  test binary as a module (`tools/sim/tests/ratchet.rs`, one `mod` line in
+  test binary as a module (`tools/sim/tests/ratchet/mod.rs`, one `mod` line in
   `tools/sim/tests/main.rs`), so it runs in `task sim-test` inside `task check`. Its name is
   `ratchet::the_ratchet_file_is_consistent`.
 - Coverage tests in the same module, with helpers every later `kpi-` story calls with its own

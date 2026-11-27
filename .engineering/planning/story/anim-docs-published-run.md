@@ -38,7 +38,7 @@ scope:
   path: website/ux/baseline.json
 - confidence: inferred
   path: website/ux/published-search.spec.ts
-revision: 9
+revision: 10
 ---
 ## Epic
 
@@ -91,7 +91,7 @@ needs no server: `index.html` of a run, with the snapshot inlined (`tools/sim/sr
   `ratchet/references/`. `epic:search-animation` allows exactly that ("Not in this epic"); any
   other KPI or ratchet change stays in `epic:kpi-ratchet`. The tests that hold the rule for every
   experiment are those of `story:kpi-platform-gates` and `story:kpi-flat-searches` in
-  `tools/sim/tests/ratchet.rs`; they enumerate `sim/experiments/`, so they cover the new file
+  `tools/sim/tests/ratchet/mod.rs`; they enumerate `sim/experiments/`, so they cover the new file
   without a change.
 - `website/ux/baseline.json` gets the values of the new page `/docs/simulator/search` for every
   key the harness of `story:docs-ux-harness` measures, so its ratchet finds no missing value.

@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T13:16:00Z",
+  "actor": "human:operator",
+  "artifact": "story:kpi-repository",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the host operator: kpi-repository = A, start now beside wave 3"
+  }
+}

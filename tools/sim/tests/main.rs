@@ -11,6 +11,8 @@ use weft_sim::gen::Candidates;
 use weft_sim::rng::Rng;
 use weft_sim::walk::{bound_emits, Session};
 
+mod ratchet;
+
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixture")
 }

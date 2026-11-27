@@ -1,0 +1,17 @@
+format: ratchet-assessor/1
+name: command-timing
+version: "1"
+command: command-timing
+targets: [revision]
+inputs:
+  job_log: {type: path, required: false, local: true}
+conditions: [cache_profile]
+coverage_unit: test
+coverage: [executed, skipped]
+outputs:
+  duration:
+    value_type: number
+    kind: sampled
+    scopes: [test]
+    unit: s
+    boundaries: [run_time, queue_wait]
