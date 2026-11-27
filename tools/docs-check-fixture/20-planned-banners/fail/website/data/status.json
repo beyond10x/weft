@@ -1,0 +1,21 @@
+{
+  "asOf": "2026-11-27",
+  "format": "b10x-status/1",
+  "items": [
+    {
+      "href": "/docs/read#the-files",
+      "label": "Planned elsewhere on the page",
+      "status": "planned"
+    },
+    {
+      "href": "/docs/missing",
+      "label": "No page",
+      "status": "planned"
+    },
+    {
+      "href": "/docs/read#the-files",
+      "label": "Shipped needs no banner",
+      "status": "shipped"
+    }
+  ]
+}

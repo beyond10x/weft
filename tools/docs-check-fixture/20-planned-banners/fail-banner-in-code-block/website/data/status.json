@@ -1,0 +1,11 @@
+{
+  "asOf": "2026-11-27",
+  "format": "b10x-status/1",
+  "items": [
+    {
+      "href": "/docs/guide",
+      "label": "A banner shown as an example only",
+      "status": "planned"
+    }
+  ]
+}

@@ -5,12 +5,13 @@ tasks:
     cmds: [{task: check}]
 
   check:
-    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter and weft-sim, test the root workspace, self-test the test budget, then the hooks of tools/check.d.
+    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter, check the docs claims, test weft-sim, test the root workspace, self-test the test budget, then the hooks of tools/check.d.
     cmds:
       - task: spec
       - task: layers
       - task: stamped-time
       - task: ci-paths
+      - task: docs-check
       - task: sim-test
       - task: test
       - task: gate-budget
@@ -42,6 +43,12 @@ tasks:
     desc: Test the planning-only path filter of the CI gate on both sides.
     cmds:
       - tools/test-planning-only.sh
+
+  docs-check:
+    desc: Hold the docs claims KPIs at 0 (docs.dead-repo-links, docs.planned-without-banner, repo.agents-md-dead-paths). Self-tests the hooks of tools/docs-check.d on their fixture trees, then runs them on the tree (tools/check-docs.sh); no network, seconds.
+    cmds:
+      - tools/test-docs-check.sh
+      - tools/check-docs.sh
 
   spec:
     desc: Validate the ESS domain model.

@@ -1,7 +1,9 @@
 # Builds the documentation site (website/) on every pull request and on main. Only a push to main
 # uploads the built site; b10x-docs-site.yml deploys that exact artifact. A pull request that
 # changes only planning or prose files outside website/ (tools/planning-only.sh --docs) passes
-# without building (~/beyond10x/AGENTS.md "Planning-only pull requests skip the tests").
+# without building (~/beyond10x/AGENTS.md "Planning-only pull requests skip the tests"). The docs
+# claims check runs before that decision, on every run: it reads AGENTS.md, which a planning-only
+# change may edit.
 name: Documentation validation
 
 on:
@@ -27,6 +29,8 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Check the docs claims
+        run: tools/test-docs-check.sh && tools/check-docs.sh
       - name: The changed paths
         id: paths
         env:
