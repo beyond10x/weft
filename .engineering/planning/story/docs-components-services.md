@@ -27,7 +27,7 @@ scope:
   path: website/sidebars.ts
 - confidence: inferred
   path: website/ux/baseline.json
-revision: 13
+revision: 14
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 12, decided_on: {"recorded":{"approval":1,"review_outcome":7}}}
 - {from: "proposed", to: "active", at: "2026-11-27T19:03:23Z", actor: "human:operator", revision: 13, decided_on: {"recorded":{"approval":1,"review_outcome":7}}}
@@ -114,8 +114,10 @@ Shape (taken here):
    under the heading `### Offering or product` (`grep -n` prints it).
 9. Both pages carry the Planned banner: `grep -c ':::caution\[Planned\]'` prints 1 for each page,
    and the banner says "Specified, not built".
-10. Both pages say which parts run today: each holds a line starting `Runs today:` that says none
-    of the components serve and no offering provisions (`grep -n '^Runs today:'` prints it).
+10. Both pages say which parts run today: each holds a line starting `Runs today:` that says no
+    component serves a user and no offering provisions; the components page also names what the walking skeleton
+    under `product/cloud/` builds (the control host binary and the node agent)
+    (`grep -n '^Runs today:'` prints it).
 11. `tools/check-docs.sh` on the tree with both pages prints `docs.planned-without-banner 0`.
 12. `tools/check-docs.sh` on the tree with both pages prints `docs.status-claims-false 0` (the
     hook of `story:docs-status-proofs`, on which this story depends).
