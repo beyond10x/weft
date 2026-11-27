@@ -9,7 +9,9 @@
 //! control host log to `--log` (default: the state file's path with `.log` appended). Once it
 //! listens it prints one line, `listening <address> callers=<mode>`: `test-header` where the
 //! build trusts the `X-Weft-Caller` header (cargo feature `test-callers`), `none` otherwise, in
-//! which case every request is answered as no caller.
+//! which case every request is answered as no caller. The `test-header` build refuses a
+//! `--listen` that is not loopback (exit 2). A state file another control host holds is refused
+//! (exit 1); what opening repaired in the log is written to stderr.
 
 use std::io::Write;
 use std::net::TcpListener;
@@ -69,6 +71,13 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    let addresses = match weft_bin::listen_addresses(&options.listen, options.port, TRUST_CALLERS) {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            eprintln!("weft: {error}");
+            return ExitCode::from(2);
+        }
+    };
     let host = match weft_bin::Host::open(&options.state, &options.log) {
         Ok(host) => host,
         Err(error) => {
@@ -76,7 +85,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let listener = match TcpListener::bind((options.listen.as_str(), options.port)) {
+    for note in host.notes() {
+        eprintln!("weft: {note}");
+    }
+    let listener = match TcpListener::bind(&addresses[..]) {
         Ok(listener) => listener,
         Err(error) => {
             eprintln!(

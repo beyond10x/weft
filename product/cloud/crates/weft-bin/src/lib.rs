@@ -3,22 +3,27 @@
 //!
 //! The accept loop is this crate's, not the generated `serve`, which takes the system for good:
 //! the controllers and the node-channel endpoint of later stories share it. One writer: the
-//! system sits behind one lock and commands run one at a time. Each request is answered by the
-//! `dispatch_with_events` of the module whose route table holds its path, then logged with the
-//! events it published ([`weft_impl::log`]).
+//! state file is locked for the life of the host, the system sits behind one lock and commands
+//! run one at a time. Each request is answered by the `dispatch_with_events` of the module whose
+//! route table holds its path, and logged with the events it published ([`weft_impl::log`]) in
+//! the same transaction. `/openapi.json` and `/docs` are answered by the host ([`contract`]).
+
+pub mod contract;
 
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener, ToSocketAddrs};
 use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
+use contract::Contract;
 use serde_json::Value;
 use weft_impl::context::{CallerAttributes, Clock};
 use weft_impl::log::Log;
 use weft_impl::{Ports, System};
 use weft_server::http::{self, Request, Response};
 use weft_server::{weft_api, weft_control};
+use weft_system::SystemEvent;
 use weft_types::actor::{Actor, Caller};
 
 /// The request header that names the caller: `{"actor": "<qualified actor>", "caller": {...}}`.
@@ -43,6 +48,8 @@ pub struct Host {
     ports: Ports,
     log: Log,
     operations: HashMap<String, String>,
+    contract: Contract,
+    notes: Vec<String>,
 }
 
 impl Host {
@@ -63,14 +70,22 @@ impl Host {
     pub fn open_with_clock(state: &Path, log: &Path, clock: Clock) -> Result<Self, Error> {
         let ports =
             Ports::open_with_clock(state, clock).map_err(|error| Error(error.to_string()))?;
-        let log = Log::open(log)
+        let (log, notes) = Log::open(log, &ports)
             .map_err(|error| Error(format!("control host log {}: {error}", log.display())))?;
         Ok(Self {
             system: Mutex::new(weft_impl::system(&ports)),
             ports,
             log,
             operations: operations(),
+            contract: Contract::new().map_err(Error)?,
+            notes,
         })
+    }
+
+    /// What opening repaired, one note each (a cut-off log line dropped, lines the log file
+    /// lacked appended from the state file).
+    pub fn notes(&self) -> &[String] {
+        &self.notes
     }
 
     /// The system, for a caller in this process that runs it under the same lock.
@@ -86,29 +101,69 @@ impl Host {
     }
 
     /// Answers one request, as the caller [`authenticate`] finds with `trust_callers`, and logs
-    /// it: the request line, then one line per event it published.
+    /// it: the request line, then one line per event it published. The rows the request writes
+    /// and its log lines commit in one transaction of the state file; the log file gets the
+    /// lines after the commit.
     pub fn handle(&self, request: &Request, trust_callers: bool) -> Response {
         let (caller, attributes) = authenticate(request, trust_callers);
-        let mut system = self.system();
-        self.ports.set_caller(attributes);
-        let (answer, events) = if weft_api::ROUTES
-            .iter()
-            .any(|(_, path)| *path == request.path)
-        {
-            weft_api::dispatch_with_events(&mut *system, caller.as_ref(), request)
-        } else {
-            weft_control::dispatch_with_events(&mut *system, caller.as_ref(), request)
-        };
-        self.ports.set_caller(CallerAttributes::default());
-        self.log.request(
-            self.operations.get(&request.path).map(String::as_str),
-            caller.map(|caller| caller.actor.name()),
-            answer.status,
-        );
-        for event in &events {
-            self.log.event(event.name());
+        let actor = caller.as_ref().map(|caller| caller.actor.name());
+        if let Some(answer) = self.contract.answer(request) {
+            self.log.request(None, actor, answer.status);
+            return answer;
         }
+        let operation = self.operations.get(&request.path).map(String::as_str);
+        self.execute(operation, actor, |system| {
+            self.ports.set_caller(attributes);
+            let answer = if weft_api::ROUTES
+                .iter()
+                .any(|(_, path)| *path == request.path)
+            {
+                weft_api::dispatch_with_events(system, caller.as_ref(), request)
+            } else {
+                weft_control::dispatch_with_events(system, caller.as_ref(), request)
+            };
+            self.ports.set_caller(CallerAttributes::default());
+            answer
+        })
+    }
+
+    /// Runs `work` on the system as the request of `operation` sent by `actor`, in one
+    /// transaction of the state file with its log lines: the request line, then one line per
+    /// event `work` answers. The log file gets the lines after the commit.
+    ///
+    /// An answer that says `committed: false` (the `501` of an unmet obligation: "nothing was
+    /// written") commits nothing: what `work` wrote, and any line written during it, is rolled
+    /// back. Its request line is still logged, as every answered request is; it has no event
+    /// lines.
+    pub fn execute(
+        &self,
+        operation: Option<&str>,
+        actor: Option<&str>,
+        work: impl FnOnce(&mut System) -> (Response, Vec<SystemEvent>),
+    ) -> Response {
+        let mut system = self.system();
+        let (answer, committed) = self.ports.store().transaction(|| {
+            let (answer, events) = work(&mut system);
+            if uncommitted(&answer) {
+                self.log.discard();
+                return ((answer, false), false);
+            }
+            self.log.request(operation, actor, answer.status);
+            for event in &events {
+                self.log.event(event.name());
+            }
+            ((answer, true), true)
+        });
+        if !committed {
+            self.log.request(operation, actor, answer.status);
+        }
+        self.log.flush();
         answer
+    }
+
+    /// The ports of the system.
+    pub fn ports(&self) -> &Ports {
+        &self.ports
     }
 
     /// Serves `listener` one connection at a time, until the listener fails for good.
@@ -131,6 +186,44 @@ impl Host {
             }
         }
     }
+}
+
+/// Whether `answer` says its command committed nothing: a JSON body whose `committed` member is
+/// `false`.
+fn uncommitted(answer: &Response) -> bool {
+    answer.body.contains("\"committed\"")
+        && serde_json::from_str::<Value>(&answer.body)
+            .is_ok_and(|body| body["committed"] == Value::Bool(false))
+}
+
+/// The addresses `--listen <listen> --port <port>` names. Where the build trusts the caller
+/// header (`trust_callers`), anyone who reaches the port may name any actor, so every address
+/// must be loopback.
+///
+/// # Errors
+///
+/// An address that does not resolve, or with `trust_callers` one that is not loopback.
+pub fn listen_addresses(
+    listen: &str,
+    port: u16,
+    trust_callers: bool,
+) -> Result<Vec<SocketAddr>, String> {
+    let addresses: Vec<SocketAddr> = (listen, port)
+        .to_socket_addrs()
+        .map_err(|error| format!("--listen {listen}: {error}"))?
+        .collect();
+    if addresses.is_empty() {
+        return Err(format!("--listen {listen} names no address"));
+    }
+    if trust_callers {
+        if let Some(address) = addresses.iter().find(|address| !address.ip().is_loopback()) {
+            return Err(format!(
+                "--listen {listen}: this build trusts the {CALLER_HEADER} header (feature test-callers), so it listens on loopback only, not on {}",
+                address.ip()
+            ));
+        }
+    }
+    Ok(addresses)
 }
 
 /// Who sent `request`: with `trust_callers`, the actor and attributes its `X-Weft-Caller` header

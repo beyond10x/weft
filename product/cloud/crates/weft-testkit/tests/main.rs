@@ -325,4 +325,387 @@ mod control_host {
         assert_eq!(body["outcome"], json!("created"), "{body}");
         assert_eq!(rows(&host), 1);
     }
+
+    /// A control host in this process on the state file and log of `dir`.
+    fn open_host(dir: &weft_testkit::TempDir) -> weft_bin::Host {
+        weft_bin::Host::open(
+            &dir.path().join("state.db"),
+            &dir.path().join("control-host.log"),
+        )
+        .expect("the host opens")
+    }
+
+    /// Sends `CreateTenant` named `name` as the cluster operator, trusted.
+    fn create_tenant_in(host: &weft_bin::Host, name: &str) {
+        let caller = json!({"actor": "weft.actors.ClusterOperator", "caller": {}}).to_string();
+        let answer = host.handle(
+            &weft_server::http::Request {
+                method: "POST".to_owned(),
+                path: "/weft/commands/CreateTenant".to_owned(),
+                headers: vec![("x-weft-caller".to_owned(), caller)],
+                body: input::create_tenant(name).to_string().into_bytes(),
+                ..Default::default()
+            },
+            true,
+        );
+        assert_eq!(answer.status, 202, "{}", answer.body);
+    }
+
+    /// The `seq` of every line of the log file; each line must be a whole JSON line.
+    fn log_seqs(dir: &weft_testkit::TempDir) -> Vec<u64> {
+        let text =
+            std::fs::read_to_string(dir.path().join("control-host.log")).expect("the log reads");
+        assert!(
+            text.is_empty() || text.ends_with('\n'),
+            "a cut-off last line: {text:?}"
+        );
+        text.lines()
+            .map(|line| {
+                serde_json::from_str::<Value>(line).expect("a JSON line")["seq"]
+                    .as_u64()
+                    .expect("a seq")
+            })
+            .collect()
+    }
+
+    /// A command's rows and its log lines commit together in the state file; a log file that
+    /// lost lines after their commit (a crash before the file write) gets them back on start.
+    #[test]
+    fn log_lines_the_file_lost_after_their_commit_come_back_on_start() {
+        let dir = weft_testkit::TempDir::new();
+        let host = open_host(&dir);
+        create_tenant_in(&host, "one");
+        let written = log_seqs(&dir);
+        assert_eq!(
+            written,
+            vec![1, 2],
+            "the request line and the TenantCreated line"
+        );
+        drop(host);
+
+        std::fs::write(dir.path().join("control-host.log"), "").expect("the log is emptied");
+        let host = open_host(&dir);
+        assert!(
+            host.notes()
+                .iter()
+                .any(|note| note.contains("appended 2 line")),
+            "{:?}",
+            host.notes()
+        );
+        assert_eq!(log_seqs(&dir), written);
+        create_tenant_in(&host, "two");
+        assert_eq!(log_seqs(&dir), vec![1, 2, 3, 4]);
+    }
+
+    /// A last log line cut off in its write is dropped on start, with a note, and the log goes
+    /// on from the state file.
+    #[test]
+    fn a_cut_off_last_log_line_is_dropped_on_start_with_a_note() {
+        let dir = weft_testkit::TempDir::new();
+        let host = open_host(&dir);
+        create_tenant_in(&host, "one");
+        drop(host);
+        let path = dir.path().join("control-host.log");
+        let mut text = std::fs::read_to_string(&path).expect("the log reads");
+        text.push_str("{\"seq\":3,\"kind\":\"requ");
+        std::fs::write(&path, text).expect("the log is cut");
+
+        let host = open_host(&dir);
+        assert!(
+            host.notes()
+                .iter()
+                .any(|note| note.contains("dropped an incomplete last line")),
+            "{:?}",
+            host.notes()
+        );
+        assert_eq!(log_seqs(&dir), vec![1, 2]);
+        create_tenant_in(&host, "two");
+        assert_eq!(log_seqs(&dir), vec![1, 2, 3, 4]);
+    }
+
+    /// A refusal commits nothing: a request whose work writes a row and then answers `501`
+    /// `committed: false` (an unmet obligation) leaves no row and no event line; its request line
+    /// is logged, as every answered request is.
+    #[test]
+    fn a_request_that_writes_a_row_and_then_refuses_leaves_no_row() {
+        let dir = weft_testkit::TempDir::new();
+        let host = open_host(&dir);
+        let (tenant_id, tenant) = weft_testkit::tenant_row("written-then-refused");
+        let answer = host.execute(Some("weft.test.WritesThenRefuses"), None, |_| {
+            host.ports().clone().put_row(tenant);
+            (
+                weft_server::http::Response::unfinished(
+                    "unmet obligation: command behaviour `weft.test.WritesThenRefuses`",
+                    false,
+                ),
+                Vec::new(),
+            )
+        });
+        assert_eq!(answer.status, 501, "{}", answer.body);
+
+        let log =
+            weft_client::log_after(&dir.path().join("control-host.log"), 0).expect("the log reads");
+        assert_eq!(
+            log,
+            vec![json!({
+                "seq": 1,
+                "kind": "request",
+                "operation": "weft.test.WritesThenRefuses",
+                "actor": null,
+                "status": 501,
+            })]
+        );
+        let tenants = host.handle(
+            &weft_server::http::Request {
+                method: "GET".to_owned(),
+                path: "/weft/views/Tenants".to_owned(),
+                ..Default::default()
+            },
+            false,
+        );
+        let body: Value = serde_json::from_str(&tenants.body).expect("JSON");
+        assert!(
+            body["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .all(|row| row["tenant_id"] != json!(tenant_id)),
+            "the refused request's row was committed: {body}"
+        );
+    }
+
+    /// A state file held by a control host is refused to a second one in the same process too.
+    #[test]
+    fn a_held_state_file_is_refused() {
+        let dir = weft_testkit::TempDir::new();
+        let _held = open_host(&dir);
+        let refused =
+            weft_bin::Host::open(&dir.path().join("state.db"), &dir.path().join("other.log"))
+                .err()
+                .expect("the second open is refused");
+        assert!(
+            refused.to_string().contains("held by another control host"),
+            "{refused}"
+        );
+    }
+
+    /// Cases of the adversary pass on `story:skeleton-control-host`.
+    mod adversary {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::net::{SocketAddr, TcpStream};
+        use std::process::{Command, Stdio};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        use serde_json::{json, Value};
+        use weft_client::{Client, Expect};
+        use weft_testkit::steps;
+        use weft_testkit::ControlHost;
+
+        /// `src/storage/mod.rs` promises `list` "in key order, the order the generated memory
+        /// store keeps". The memory store sorts by `MemoryKey::Text(String)` (`memory.rs`,
+        /// `rows.sort_by(...)`); the SQLite store sorts the JSON text of the key, where the
+        /// closing quote (0x22) sorts above a space (0x20). Zone names are free text
+        /// (`weft.shared.ZoneName` is a newtype of `String`), so the Zones view of the control
+        /// host answers `a b` before `a`, and the memory store `a` before `a b`.
+        #[test]
+        fn zones_read_back_in_the_order_of_the_generated_memory_store() {
+            use weft_types::behaviour::ZoneStorage;
+            use weft_types::infrastructure::{ZoneData, ZoneSnapshot, ZoneState};
+
+            let host = ControlHost::start();
+            let client = host.client();
+            let cloud_id = steps::create_cloud(&client);
+            let names = ["a", "a b"];
+            for name in names {
+                steps::declare_zone(&client, &cloud_id, name);
+            }
+            let view = client.view("weft.infrastructure.Zones", &[]).ok_body(200);
+            let served: Vec<String> = view["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .map(|row| row["zone"].as_str().expect("a zone").to_owned())
+                .collect();
+
+            let mut memory = weft_server::memory::MemoryPorts::default();
+            for name in names.iter().rev() {
+                ZoneStorage::put(
+                    &mut memory,
+                    ZoneSnapshot {
+                        state: ZoneState::Declared,
+                        data: ZoneData {
+                            zone: weft_types::shared::ZoneName((*name).to_owned()),
+                            cloud_id: weft_types::shared::CloudId(weft_types::primitives::Uuid(
+                                cloud_id.clone(),
+                            )),
+                        },
+                    },
+                );
+            }
+            let kept: Vec<String> = ZoneStorage::list(&memory)
+                .into_iter()
+                .map(|row| row.data.zone.0)
+                .collect();
+            assert_eq!(kept, vec!["a".to_owned(), "a b".to_owned()]);
+            assert_eq!(served, kept, "the Zones view of the control host");
+        }
+
+        /// The log's `seq` "counts up from 1 over the life of the file", and the control host
+        /// is "one writer". A second `weft` started on the same state file and log either
+        /// refuses to start or the log's seqs stay unique; today it starts, and both processes
+        /// count from the same last line.
+        #[test]
+        fn a_second_control_host_on_the_same_state_file_does_not_duplicate_log_seqs() {
+            let host = ControlHost::start();
+            let mut second = Command::new(weft_testkit::control_host_binary())
+                .arg("--state")
+                .arg(host.state_path())
+                .arg("--log")
+                .arg(host.log_path())
+                .arg("--port")
+                .arg("0")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .expect("the binary starts");
+            let stdout = second.stdout.take().expect("stdout is piped");
+            let (lines, received) = mpsc::channel();
+            std::thread::spawn(move || {
+                let mut line = String::new();
+                let _ = BufReader::new(stdout).read_line(&mut line);
+                let _ = lines.send(line);
+            });
+            let line = received
+                .recv_timeout(Duration::from_secs(20))
+                .unwrap_or_default();
+            let Some(address) = line
+                .split_whitespace()
+                .nth(1)
+                .and_then(|address| address.parse::<SocketAddr>().ok())
+            else {
+                // The second host refused to start: the one writer holds.
+                let _ = second.kill();
+                let _ = second.wait();
+                return;
+            };
+            let other = Client::new(address);
+            steps::create_tenant(&host.client(), "one");
+            steps::create_tenant(&other, "two");
+            steps::create_tenant(&host.client(), "three");
+            let _ = second.kill();
+            let _ = second.wait();
+
+            let seqs: Vec<u64> = host
+                .log_after(0)
+                .iter()
+                .map(|line| line["seq"].as_u64().expect("a seq"))
+                .collect();
+            assert!(
+                seqs.windows(2).all(|pair| pair[0] < pair[1]),
+                "log seqs are not strictly increasing with two hosts on one state file: {seqs:?}"
+            );
+        }
+
+        /// One `GET` on the control host: the status and the JSON body.
+        fn get(address: SocketAddr, path: &str) -> (u16, Value) {
+            let mut stream = TcpStream::connect(address).expect("the control host accepts");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(20)))
+                .expect("a timeout");
+            write!(
+                stream,
+                "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+            )
+            .expect("the request is written");
+            let mut answer = Vec::new();
+            stream.read_to_end(&mut answer).expect("the answer reads");
+            let text = String::from_utf8_lossy(&answer).into_owned();
+            let (head, body) = text.split_once("\r\n\r\n").expect("a head and a body");
+            let status = head
+                .split(' ')
+                .nth(1)
+                .and_then(|code| code.parse().ok())
+                .expect("a status");
+            (status, serde_json::from_str(body).unwrap_or(Value::Null))
+        }
+
+        /// The control host serves `weft-api` and `weft-control` on one port (decision A3).
+        /// Both declare `GET /openapi.json`; the host answers it with the `weft-api` document
+        /// only, so the contract of every `weft-control` path it serves, `CreateCloud` among
+        /// them, cannot be read from it.
+        #[test]
+        fn the_served_contract_describes_every_command_path_the_host_answers() {
+            let host = ControlHost::start();
+            let client = host.client();
+            steps::create_cloud(&client);
+            let (status, contract) = get(host.address(), "/openapi.json");
+            assert_eq!(status, 200, "{contract}");
+            let paths = contract["paths"].as_object().expect("paths");
+            for path in ["/weft/commands/CreateTenant", "/weft/commands/CreateCloud"] {
+                assert!(
+                    paths.contains_key(path),
+                    "GET /openapi.json does not describe {path}, which the host answers"
+                );
+            }
+        }
+
+        /// E1 restored by hand: the join token is answered once and kept only as its SHA-256.
+        /// No existing case would fail if the raw token were stored and compared. Also: a used
+        /// token does not join again, and a token of another node or an empty one is invalid.
+        #[test]
+        fn the_join_token_is_kept_nowhere_and_joins_only_its_own_node_once() {
+            let host = ControlHost::start();
+            let client = host.client();
+            let cloud_id = steps::create_cloud(&client);
+            steps::declare_zone(&client, &cloud_id, "z1");
+            let pool = steps::create_node_pool(&client);
+            let first = steps::provision_pool_node(&client, &pool);
+            let second = steps::provision_pool_node(&client, &pool);
+
+            let outcome =
+                |node: &str, token: &str| steps::join_node(&client, node, token)["outcome"].clone();
+            assert_eq!(
+                outcome(&second.node_id, &first.join_token),
+                json!("token-invalid")
+            );
+            assert_eq!(outcome(&second.node_id, ""), json!("token-invalid"));
+            assert_eq!(outcome(&first.node_id, &first.join_token), json!("joined"));
+            assert_eq!(
+                outcome(&first.node_id, &first.join_token),
+                json!("token-used")
+            );
+
+            let dir = host.state_path();
+            let dir = dir.parent().expect("a directory");
+            for entry in std::fs::read_dir(dir).expect("the directory reads") {
+                let path = entry.expect("an entry").path();
+                let bytes = std::fs::read(&path).expect("the file reads");
+                let text = String::from_utf8_lossy(&bytes);
+                for token in [&first.join_token, &second.join_token] {
+                    assert!(
+                        !text.contains(token.as_str()),
+                        "{} holds a join token",
+                        path.display()
+                    );
+                }
+            }
+        }
+
+        /// A reopened log goes on from its last line; no existing case restarts and then reads
+        /// the log.
+        #[test]
+        fn the_log_seq_goes_on_after_a_restart() {
+            let host = ControlHost::start();
+            steps::create_tenant(&host.client(), "one");
+            let before = host.last_seq();
+            assert!(before > 0);
+            let host = host.restart();
+            steps::create_tenant(&host.client(), "two");
+            let after = host.log_after(before);
+            let first = after.first().expect("a line after the restart");
+            assert_eq!(first["seq"], json!(before + 1), "{after:?}");
+        }
+    }
 }

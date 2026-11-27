@@ -102,6 +102,15 @@ fn storages(memory: &str) -> Vec<Storage> {
         let identity = between(get, "identity: &", ") -> Option<");
         let snapshot = between(get, ") -> Option<", "> {");
         let field = between(get, "(&row.data.", ")");
+        let key = between(get, "let key = ", "(identity)");
+        let key_line = lines
+            .iter()
+            .find(|line| line.starts_with(&format!("fn {key}(")))
+            .unwrap_or_else(|| panic!("memory.rs declares no {key}"));
+        assert!(
+            key_line.contains("MemoryKey::Text("),
+            "the memory store orders the rows of {name} by a key that is not text ({key_line}); src/storage/mod.rs orders by the key's text, so it needs this key's order first"
+        );
         let list = lines[index + 1..]
             .iter()
             .take_while(|line| **line != "}")
