@@ -1993,6 +1993,19 @@ fn finish_one(
     result.map(|()| sim.kpis)
 }
 
+/// A recorded search point run once more at its walk, with its timeline recorded (`replay` of a
+/// `simulate` result): the experiment with the point applied, as the search evaluated it.
+pub fn rerun_point(
+    cat: &Catalog,
+    cov: &Coverage,
+    exp: &Experiment,
+    point: &BTreeMap<String, Value>,
+    walk: u64,
+) -> Result<Kpis, String> {
+    let at = apply_point(exp, point)?;
+    simulate_one(cat, cov, &Candidates::default(), &at, walk, true)
+}
+
 fn apply_point(exp: &Experiment, point: &BTreeMap<String, Value>) -> Result<Experiment, String> {
     let mut out = exp.clone();
     for m in &exp.mutations {

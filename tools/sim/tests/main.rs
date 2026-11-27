@@ -1347,6 +1347,249 @@ fn search_rows_do_not_depend_on_threads() {
     assert_eq!(seen[0], seen[1]);
 }
 
+// ---- replay of a search point ---------------------------------------------------------------
+
+/// `weft-sim` run in this crate's directory with relative paths, as the page's replay command
+/// names them.
+fn sim_here(args: &[&str]) -> std::process::Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_weft-sim"))
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// A fit run of the search fixture, with relative paths, written to `target/tmp/replay/<name>`:
+/// that directory, relative to this crate, and its `result.json`.
+fn relative_fit_run(name: &str) -> (String, serde_json::Value) {
+    let out = format!("target/tmp/replay/{name}");
+    let _ = std::fs::remove_dir_all(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&out));
+    let run = sim_here(&[
+        "simulate",
+        "--spec",
+        "tests/fixture-search",
+        "--experiment",
+        "tests/fixture-search/search.yaml",
+        "--out",
+        &out,
+        "--threads",
+        "2",
+    ]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(&out)
+            .join("result.json"),
+    )
+    .unwrap();
+    (out, serde_json::from_str(&text).unwrap())
+}
+
+fn read_result(dir: &str) -> serde_json::Value {
+    let text = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(dir)
+            .join("result.json"),
+    )
+    .unwrap();
+    serde_json::from_str(&text).unwrap()
+}
+
+/// Acceptance 1 and 2: `replay --walk K` on a `simulate` result reruns the search row of walk K
+/// (a rejected neighbour and a restart), prints each KPI of the rerun beside the recorded one,
+/// exits 0 when all are equal, and writes a result and a page whose timeline is that point's run.
+#[test]
+fn a_search_point_replays_at_its_walk_with_the_kpis_it_recorded() {
+    let (out, result) = relative_fit_run("fit");
+    assert_eq!(
+        result["run"]["spec"], "tests/fixture-search",
+        "the run names its spec as given"
+    );
+    assert_eq!(
+        result["run"]["out"],
+        out.as_str(),
+        "the run names its output as given"
+    );
+    let rows = result["search"].as_array().unwrap();
+    for decision in ["rejected", "restart"] {
+        let row = rows
+            .iter()
+            .find(|r| r["decision"] == decision && r["walk"] != r["seq"])
+            .or_else(|| rows.iter().find(|r| r["decision"] == decision))
+            .unwrap();
+        let walk = row["walk"].as_u64().unwrap().to_string();
+        let to = format!("{out}-walk-{walk}");
+        let trace = format!("{out}/result.json");
+        let run = sim_here(&[
+            "replay",
+            "--spec",
+            "tests/fixture-search",
+            "--trace",
+            &trace,
+            "--walk",
+            &walk,
+            "--out",
+            &to,
+        ]);
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert_eq!(
+            run.status.code(),
+            Some(0),
+            "{decision} walk {walk}: {stdout}{stderr}"
+        );
+        let kpis = row["kpis"].as_object().unwrap();
+        assert!(!kpis.is_empty());
+        for (key, value) in kpis {
+            let line = format!("  {key}: {value} (recorded {value})");
+            assert!(
+                stdout.lines().any(|l| l == line),
+                "{decision}: no line `{line}` in\n{stdout}"
+            );
+        }
+        assert!(
+            stdout.contains(&format!("walk {walk}: 0 of {} KPIs differ", kpis.len())),
+            "{stdout}"
+        );
+
+        let replayed = read_result(&to);
+        assert_eq!(
+            replayed["run"]["replay"]["walk"].as_u64(),
+            row["walk"].as_u64()
+        );
+        assert_eq!(replayed["run"]["replay"]["point"], row["point"]);
+        assert_eq!(replayed["run"]["result"]["kpis"], row["kpis"]);
+        // The timeline of that point: its setup sends `opens` opens and `closes` closes.
+        let timeline = replayed["timeline"].as_array().expect("a timeline");
+        let sends =
+            row["point"]["opens"].as_u64().unwrap() + row["point"]["closes"].as_u64().unwrap();
+        assert_eq!(
+            timeline.iter().filter(|t| t["phase"] == "setup").count() as u64,
+            sends,
+            "{timeline:?}"
+        );
+        let page = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(&to)
+                .join("index.html"),
+        )
+        .unwrap();
+        assert!(page.contains(r#"<section id="timeline-box""#));
+        assert_eq!(
+            inlined(&page, "SNAP")["timeline"],
+            replayed["timeline"],
+            "the page shows that timeline"
+        );
+    }
+}
+
+/// Acceptance 3, and a rerun that differs: a walk no search row and no trace holds is refused,
+/// naming the walk and the file, with exit status 2; a recorded KPI that the rerun does not meet
+/// is printed as differing and the replay exits 2. The `explore` path of `replay` is unchanged.
+#[test]
+fn replay_refuses_an_unknown_walk_and_fails_on_a_kpi_that_differs() {
+    let (out, result) = relative_fit_run("refuse");
+    let trace = format!("{out}/result.json");
+    let unknown = sim_here(&[
+        "replay",
+        "--spec",
+        "tests/fixture-search",
+        "--trace",
+        &trace,
+        "--walk",
+        "999",
+    ]);
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert_eq!(unknown.status.code(), Some(2), "{stderr}");
+    assert!(
+        stderr.contains("walk 999") && stderr.contains(&trace),
+        "{stderr}"
+    );
+
+    let mut tampered = result.clone();
+    let row = tampered["search"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|r| r["decision"] == "rejected")
+        .unwrap();
+    let walk = row["walk"].as_u64().unwrap().to_string();
+    let steps = row["kpis"]["steps"].as_u64().unwrap();
+    row["kpis"]["steps"] = serde_json::json!(steps + 1);
+    let file = format!("{out}/tampered.json");
+    std::fs::write(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&file),
+        tampered.to_string(),
+    )
+    .unwrap();
+    let run = sim_here(&[
+        "replay",
+        "--spec",
+        "tests/fixture-search",
+        "--trace",
+        &file,
+        "--walk",
+        &walk,
+        "--out",
+        &format!("{out}-tampered"),
+    ]);
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert_eq!(run.status.code(), Some(2), "{stdout}");
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l == format!("  steps: {steps} (recorded {}) differs", steps + 1)),
+        "{stdout}"
+    );
+    assert!(stdout.contains(&format!("walk {walk}: 1 of ")), "{stdout}");
+
+    let explore = format!("{out}-explore");
+    let run = sim_here(&[
+        "explore",
+        "--spec",
+        "tests/fixture",
+        "--walks",
+        "2",
+        "--steps",
+        "3",
+        "--threads",
+        "1",
+        "--out",
+        &explore,
+    ]);
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // The first walk the explore result keeps a trace of.
+    let traced = read_result(&explore)["traces"][0]["walk"]
+        .as_u64()
+        .expect("a traced walk")
+        .to_string();
+    let replay = sim_here(&[
+        "replay",
+        "--spec",
+        "tests/fixture",
+        "--trace",
+        &format!("{explore}/result.json"),
+        "--walk",
+        &traced,
+    ]);
+    let stdout = String::from_utf8_lossy(&replay.stdout);
+    assert_eq!(
+        replay.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert!(stdout.contains("0 answers differ"), "{stdout}");
+}
+
 // ---- the page's search player -----------------------------------------------------------------
 
 /// The command that writes the fixture pages again (`website/ux/fixtures/sim-player*.html`), named by
@@ -1355,8 +1598,8 @@ const WRITE_PLAYER_FIXTURE: &str =
     "cd tools/sim && WEFT_SIM_WRITE_PLAYER_FIXTURE=1 cargo nextest run the_player_page";
 
 /// The snapshot the fixture page inlines: the counters, hits and search of a fit run of the search
-/// fixture. Times, the command line and the file paths of the gaps vary by host and run, so they
-/// are left out.
+/// fixture, and the spec and output paths it was given (relative). Times, the command line and the
+/// file paths of the gaps vary by host and run, so they are left out.
 fn player_snapshot(result: &serde_json::Value) -> serde_json::Value {
     let mut snap = serde_json::Map::new();
     for key in [
@@ -1383,6 +1626,11 @@ fn player_snapshot(result: &serde_json::Value) -> serde_json::Value {
         snap.insert(key.to_owned(), result[key].clone());
     }
     snap.insert("info".to_owned(), serde_json::json!({"experiment": result["info"]["experiment"], "search": result["info"]["search"]}));
+    // The paths the run was given, relative to this crate: the page names them in its replay command.
+    snap.insert(
+        "run".to_owned(),
+        serde_json::json!({"spec": result["run"]["spec"], "out": result["run"]["out"]}),
+    );
     serde_json::Value::Object(snap)
 }
 
@@ -1435,7 +1683,8 @@ fn hold_fixture(name: &str, page: &str) {
 /// each snapshot of `/events` to `window.weftPlayer.receive`.
 #[test]
 fn the_player_page_of_the_fixture_search_is_the_committed_fixture() {
-    let (rows, result) = search_rows("player-page", &[]);
+    let (_, result) = relative_fit_run("player-page");
+    let rows = result["search"].as_array().unwrap().clone();
     assert!(
         rows.iter().any(|r| r["decision"] == "restart"),
         "the fixture run holds a restart"
@@ -1446,6 +1695,11 @@ fn the_player_page_of_the_fixture_search_is_the_committed_fixture() {
         page.contains(r#"<div id="player""#),
         "the page has the player"
     );
+    assert!(
+        page.contains("data-replay-command"),
+        "the player names the replay of the selected point"
+    );
+    assert_eq!(snap["run"]["spec"], "tests/fixture-search");
     assert_eq!(
         inlined(&page, "SNAP"),
         snap,
@@ -1475,7 +1729,7 @@ fn the_player_page_of_the_fixture_search_is_the_committed_fixture() {
 fn the_player_page_inlines_markup_in_recorded_values_as_data() {
     const AXIS_VALUE: &str = "<!--<script>";
     const KPI: &str = "</script><!--<script>";
-    let (_, result) = search_rows("player-markup", &[]);
+    let (_, result) = relative_fit_run("player-markup");
     let mut snap = player_snapshot(&result);
     snap["info"]["search"]["axes"][0]["values"][3] = serde_json::json!(AXIS_VALUE);
     for row in snap["search"].as_array_mut().unwrap() {

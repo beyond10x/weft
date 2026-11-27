@@ -112,6 +112,27 @@ setup again first.
 
 When explore finds a violation, it prints the replay command for the first walk of each kind.
 
+### Replay a search point
+
+A `simulate` run with a search keeps no trace of its points, but each row of `search` names the
+walk its point ran as. Replay reruns that point by its walk number, from the same directory as
+the run:
+
+```shell-session
+$ weft-sim replay --spec ess --trace sim/out/simulate/result.json --walk 14
+```
+
+It loads the experiment the result names (`run.experiment`), applies the row's point, and runs
+it once at walk 14 with its timeline recorded. It prints each KPI of the rerun beside the recorded
+one, such as `steps: 6 (recorded 6)`, and a summary such as `walk 14: 0 of 20 KPIs differ`. It
+exits 0 when every KPI is equal and 2 when one differs. It writes `result.json` and `index.html`
+to `--out` (default `sim/out/replay-14`); the page's Experiment timeline shows the setup, traffic,
+faults and controller ticks of that point. A walk number that no search row and no trace of the
+result holds is refused with exit status 2.
+
+On the page of the run, the player shows the walk of the selected point and this command: the
+point of the current frame, or the one whose cell or path mark you click.
+
 ## Describe
 
 ```shell-session
@@ -125,7 +146,7 @@ fields and its outcomes; with no prefix, or `--prefix bindings`, also every bind
 
 | Status | Meaning |
 |---|---|
-| 0 | the run ended with no violation; for `replay`, every answer as recorded |
+| 0 | the run ended with no violation; for `replay`, every answer (or every KPI of a search point) as recorded |
 | 1 | an invariant was violated |
-| 2 | a usage error or a specification that does not load; for `replay`, an answer differs from the recording |
+| 2 | a usage error or a specification that does not load; for `replay`, an answer or a KPI differs from the recording, or no trace and no search row has the walk |
 | 3 | a setup step was not accepted as declared (its `expect`, or an accepting outcome without one); with `--from` this stops the run before any walk |
