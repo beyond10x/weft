@@ -260,6 +260,24 @@ test('result without a climb', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+// `fixtures/sim-player-markup.html`: the same run with `<!--<script>` as the fourth value of the
+// first axis and `</script><!--<script>` in a KPI of every row, inlined by weft-sim (its Rust test
+// `the_player_page_inlines_markup_in_recorded_values_as_data` holds the page). No `-->` follows,
+// which would end the parser state the texts open. The page must still parse, run its script and
+// show both texts as text.
+test('markup in recorded values stays text', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.clock.install();
+  await page.goto(`${ORIGIN}/__ux/fixtures/sim-player-markup.html`);
+  await expect(player(page)).toHaveAttribute('data-frame', String(LAST.seq));
+  await expect(page.locator('script')).toHaveCount(1);
+  await expect(page.locator('[data-axis-label="x"][data-value-index="3"]')).toHaveText('<!--<script>');
+  await expect(page.locator('#search td', { hasText: '</script><!--<script>' })).toHaveCount(ROWS.length);
+  await expect(page.locator('[data-path-step]')).toHaveCount(ROWS.length);
+  expect(errors).toEqual([]);
+});
+
 // The page as a reader sees it: every control in view, the axes in value order, the points table
 // in its own scroll box with rows of one height, and a landscape large enough to read.
 
@@ -355,3 +373,27 @@ for (const viewport of GATING) {
     expect(errors).toEqual([]);
   });
 }
+
+test('a landscape wider than the screen scrolls in its own box at 390x844, the page does not', async ({ page }) => {
+  await prepare(page, GATING.find((v) => v.width === 390)!, THEMES[0]!);
+  const errors = await open(page);
+  const axes = [
+    { name: 'replicas', values: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] },
+    { name: 'closes', values: [0, 1] },
+  ];
+  const rows = [
+    { seq: 1, round: 1, decision: 'start', parent: null, index: [0, 0], point: { replicas: 1, closes: 0 }, kpis: {}, fitness: 1, feasible: true, best: 1, walk: 1 },
+    { seq: 2, round: 2, decision: 'accepted', parent: 1, index: [9, 0], point: { replicas: 10, closes: 0 }, kpis: {}, fitness: 2, feasible: true, best: 2, walk: 2 },
+  ];
+  await receive(page, { ...SNAP, info: { ...SNAP.info, search: { ...SNAP.info.search, axes } }, search: rows });
+  await expect(page.locator('[data-cell]')).toHaveCount(20);
+  const sizes = await page.locator('[data-cell]').evaluateAll((all) => all.map((e) => e.getBoundingClientRect()).map((r) => Math.min(r.width, r.height)));
+  expect(Math.round(Math.min(...sizes)), 'the smallest cell, px').toBeGreaterThanOrEqual(44);
+  const box = await page.locator('#p-land').evaluate((svg) => ({ scroll: svg.parentElement!.scrollWidth, client: svg.parentElement!.clientWidth }));
+  expect(box.scroll, 'the landscape is wider than its box and scrolls in it').toBeGreaterThan(box.client);
+  await page.locator('#player').scrollIntoViewIfNeeded();
+  expect(await layoutFailures(page)).toEqual([]);
+  await page.locator('[data-cell="9,0"]').scrollIntoViewIfNeeded();
+  expect(await visibilityFailures(page, [{ name: 'the last column', selector: '[data-cell="9,0"]' }])).toEqual([]);
+  expect(errors).toEqual([]);
+});

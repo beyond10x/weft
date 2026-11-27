@@ -59,7 +59,9 @@ input#filter { padding:4px 8px; border:1px solid var(--line); border-radius:4px;
 #player button, #player select, #player input { font: inherit; color: var(--fg); background: var(--bg); border:1px solid var(--line); border-radius:4px; padding:2px 8px; }
 #player .plots { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start; }
 #player .plots svg { max-width:100%; height:auto; }
-#player figure { margin:0; max-width:100%; }
+#player figure { margin:0; max-width:100%; min-width:0; }
+#player .landbox { overflow-x:auto; max-width:100%; }
+#player .plots .landbox svg { max-width:none; }
 #player figcaption { max-width:34em; margin-bottom:4px; }
 #p-land text { font-size:13px; }
 svg text.an { fill: var(--mute); }
@@ -99,7 +101,7 @@ svg text.an { fill: var(--mute); }
     </div>
     <p id="p-caption" class="mute"></p>
     <div class="plots">
-      <figure><figcaption class="mute">Landscape: one cell per pair of values of the two axes, the other axes at the best point so far. Ring: start, line: accepted step, cross: rejected neighbour, dashed arc and diamond: restart; faded marks lie off this slice.</figcaption><svg id="p-land" width="200" height="100"></svg></figure>
+      <figure><figcaption class="mute">Landscape: one cell per pair of values of the two axes, the other axes at the best point so far. Ring: start, line: accepted step, cross: rejected neighbour, dashed arc and diamond: restart; faded marks lie off this slice.</figcaption><div class="landbox"><svg id="p-land" width="200" height="100"></svg></div></figure>
       <figure><figcaption class="mute">Best feasible fitness so far, over the rows</figcaption><svg id="p-curve" width="420" height="240" viewBox="0 0 420 240"></svg></figure>
     </div>
   </div>
@@ -431,8 +433,13 @@ function landscape(shown) {
   const nx = xa.values.length, ny = ya ? ya.values.length : 1;
   const C = 64, T = 8;
   const xr = ranks(xa.values), yr = ya ? ranks(ya.values) : [0];
-  const L = 30 + 7 * Math.min(24, ya ? Math.max(...ya.values.map(v => valueText(v).length)) : 0);
-  const width = L + nx * C + 8, height = T + ny * C + 48;
+  // Label widths as drawn; estimated from the text while the player is not shown.
+  const measure = (v) => { const t = el('text', { x: 0, y: -100 }, svg); t.textContent = valueText(v); const w = t.getComputedTextLength(); t.remove(); return w > 0 ? w : valueText(v).length * 8; };
+  const xw = Math.max(...xa.values.map(measure)), yw = ya ? Math.max(...ya.values.map(measure)) : 0;
+  // An x label wider than its column stands upright in it, so no two labels overlap.
+  const upright = xw > C - 10, xh = upright ? Math.ceil(xw) + 10 : 20;
+  const L = 34 + Math.ceil(yw);
+  const width = L + nx * C + 8, height = T + ny * C + xh + 30;
   const left = (i) => L + xr[i] * C, top = (j) => T + (ny - 1 - yr[j]) * C;
   svg.setAttribute('width', width); svg.setAttribute('height', height); svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   const fixed = fixedIndex(shown);
@@ -452,9 +459,14 @@ function landscape(shown) {
     if (r) { const tt = el('title', {}, cell); tt.textContent = `${JSON.stringify(r.point)}: ${state}${state === 'feasible' ? ' ' + r.fitness : ''}`; }
     if (state === 'feasible') { const tx = el('text', { x: left(i) + C - 6, y: top(j) + C - 7, 'text-anchor': 'end', class: 'ct' }, svg); tx.textContent = fmt(r.fitness); }
   }
-  xa.values.forEach((v, i) => { const t = el('text', { x: cx(i), y: T + ny * C + 18, 'text-anchor': 'middle', 'data-axis-label': 'x', 'data-value-index': i }, svg); t.textContent = valueText(v); });
+  xa.values.forEach((v, i) => {
+    const [ax, ay] = upright ? [cx(i) + 5, T + ny * C + 8] : [cx(i), T + ny * C + 18];
+    const attrs = { x: ax, y: ay, 'text-anchor': upright ? 'end' : 'middle', 'data-axis-label': 'x', 'data-value-index': i };
+    if (upright) attrs.transform = `rotate(-90 ${ax} ${ay})`;
+    const t = el('text', attrs, svg); t.textContent = valueText(v);
+  });
   if (ya) ya.values.forEach((v, j) => { const t = el('text', { x: L - 8, y: cy(j) + 5, 'text-anchor': 'end', 'data-axis-label': 'y', 'data-value-index': j }, svg); t.textContent = valueText(v); });
-  const xn = el('text', { x: L + nx * C / 2, y: T + ny * C + 40, 'text-anchor': 'middle', class: 'an' }, svg); xn.textContent = xa.name;
+  const xn = el('text', { x: L + nx * C / 2, y: T + ny * C + xh + 22, 'text-anchor': 'middle', class: 'an' }, svg); xn.textContent = xa.name;
   if (ya) { const ym = T + ny * C / 2; const yn = el('text', { x: 14, y: ym, 'text-anchor': 'middle', transform: `rotate(-90 14 ${ym})`, class: 'an' }, svg); yn.textContent = ya.name; }
   // The climber's path up to the frame.
   const bySeq = new Map(P.rows.map(r => [r.seq, r]));

@@ -265,7 +265,10 @@ pub fn gaps(cat: &Catalog, snap: &Value, loc: &Locator, attempts: &Attempts) -> 
 }
 
 pub fn page(model: &Value, snap: &Value, live: bool) -> String {
-    let safe = |v: &Value| v.to_string().replace("</", "<\\/");
+    // Inlined into a <script>: no `<` at all, so no `</script`, `<!--` or `<script` in a recorded
+    // value can end the script or move the HTML parser into an escaped state. `<` only occurs
+    // inside JSON strings, where its escape (backslash, u003c) reads back as the same character.
+    let safe = |v: &Value| v.to_string().replace('<', "\\u003c");
     PAGE.replace("/*__MODEL__*/null", &safe(model))
         .replace("/*__SNAP__*/null", &safe(snap))
         .replace("/*__LIVE__*/false", if live { "true" } else { "false" })

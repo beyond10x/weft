@@ -23,6 +23,11 @@ expect 1 "" Taskfile.yml
 expect 1 "" ""
 expect 0 "" website/docs/index.md website/docusaurus.config.ts README.md
 expect 1 "" website/docs/index.md tools/planning-only.sh
+# The fixture page of weft-sim's player is held byte for byte only by a weft-sim test of the gate
+# (`task sim-test`): a change to it alone must run the gate.
+expect 1 "" website/ux/fixtures/sim-player.html
+expect 1 "" website/docs/index.md website/ux/fixtures/sim-player-markup.html
+expect 0 "" website/ux/fixtures/overflow.html website/ux/sim-player.spec.ts
 expect 0 --docs .engineering/project.yaml README.md docs/hardening/pass-2.md
 expect 1 --docs website/docs/index.md
 expect 1 --docs README.md website/package.json

@@ -939,12 +939,8 @@ fn search_rows_do_not_depend_on_threads() {
 
 // ---- the page's search player -----------------------------------------------------------------
 
-/// The committed page the browser checks of the player read (`website/ux/sim-player.spec.ts`).
-fn player_fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../website/ux/fixtures/sim-player.html")
-}
-
-/// The command that writes the fixture page again, named by the test that compares it.
+/// The command that writes the fixture pages again (`website/ux/fixtures/sim-player*.html`), named by
+/// the tests that compare them; the browser checks of the player read them.
 const WRITE_PLAYER_FIXTURE: &str =
     "cd tools/sim && WEFT_SIM_WRITE_PLAYER_FIXTURE=1 cargo nextest run the_player_page";
 
@@ -980,6 +976,50 @@ fn player_snapshot(result: &serde_json::Value) -> serde_json::Value {
     serde_json::Value::Object(snap)
 }
 
+/// The page of the fixture search's fit run, rendered from `snap`, with the fixture's model.
+fn player_page(snap: &serde_json::Value) -> String {
+    let cat = Catalog::new(weft_sim::spec::load(&fixture_search()).expect("the fixture compiles"));
+    weft_sim::report::page(&cat.model_json(), snap, false)
+}
+
+/// The value a page inlines on its line `let <name> = …;`, read back as JSON.
+fn inlined(page: &str, name: &str) -> serde_json::Value {
+    let prefix = format!("let {name} = ");
+    let line = page
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix(&prefix)
+                .or_else(|| l.strip_prefix(&format!("const {name} = ")))
+        })
+        .unwrap_or_else(|| panic!("no line inlining {name}"));
+    serde_json::from_str(line.strip_suffix(';').expect("ends with ;"))
+        .expect("the inlined value is JSON")
+}
+
+/// Writes `page` to the committed fixture `name` under `website/ux/fixtures/` when asked, else
+/// compares it byte for byte.
+fn hold_fixture(name: &str, page: &str) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../website/ux/fixtures")
+        .join(name);
+    if std::env::var_os("WEFT_SIM_WRITE_PLAYER_FIXTURE").is_some() {
+        std::fs::write(&path, page).unwrap();
+    }
+    let committed = std::fs::read_to_string(&path).unwrap_or_default();
+    if committed != page {
+        let at = committed
+            .bytes()
+            .zip(page.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        panic!(
+            "website/ux/fixtures/{name} differs from the page rendered from the fixture search at byte {at} ({} bytes committed, {} rendered); write it again with: {WRITE_PLAYER_FIXTURE}",
+            committed.len(),
+            page.len()
+        );
+    }
+}
+
 /// Acceptance 11 and 14 of the player: the page rendered from the fixture search holds the player
 /// and the inlined rows, equals the committed fixture page byte for byte, and its live mode passes
 /// each snapshot of `/events` to `window.weftPlayer.receive`.
@@ -991,20 +1031,14 @@ fn the_player_page_of_the_fixture_search_is_the_committed_fixture() {
         "the fixture run holds a restart"
     );
     let snap = player_snapshot(&result);
-    let cat = Catalog::new(weft_sim::spec::load(&fixture_search()).expect("the fixture compiles"));
-    let model = cat.model_json();
-    let page = weft_sim::report::page(&model, &snap, false);
-    let path = player_fixture();
-    if std::env::var_os("WEFT_SIM_WRITE_PLAYER_FIXTURE").is_some() {
-        std::fs::write(&path, &page).unwrap();
-    }
+    let page = player_page(&snap);
     assert!(
         page.contains(r#"<div id="player""#),
         "the page has the player"
     );
-    let inlined = format!("let SNAP = {};", snap.to_string().replace("</", "<\\/"));
-    assert!(
-        page.contains(&inlined),
+    assert_eq!(
+        inlined(&page, "SNAP"),
+        snap,
         "the page inlines the snapshot and its rows"
     );
     assert!(
@@ -1012,26 +1046,54 @@ fn the_player_page_of_the_fixture_search_is_the_committed_fixture() {
         "no path of this host"
     );
 
-    let live = weft_sim::report::page(&model, &serde_json::Value::Null, true);
+    let cat = Catalog::new(weft_sim::spec::load(&fixture_search()).expect("the fixture compiles"));
+    let live = weft_sim::report::page(&cat.model_json(), &serde_json::Value::Null, true);
     assert!(live.contains("const LIVE = true;"));
     assert!(
         live.contains("source.onmessage = (ev) => { const s = JSON.parse(ev.data); window.weftPlayer.receive(s);"),
         "the live page passes each snapshot of /events to the player"
     );
+    hold_fixture("sim-player.html", &page);
+}
 
-    let committed = std::fs::read_to_string(&path).unwrap_or_default();
-    if committed != page {
-        let at = committed
-            .bytes()
-            .zip(page.bytes())
-            .take_while(|(a, b)| a == b)
-            .count();
-        panic!(
-            "website/ux/fixtures/sim-player.html differs from the page rendered from the fixture search at byte {at} ({} bytes committed, {} rendered); write it again with: {WRITE_PLAYER_FIXTURE}",
-            committed.len(),
-            page.len()
-        );
+/// Markup in a recorded value. The text a KPI or an axis value carries goes into the page's
+/// script: `<!--<script` there would put the HTML parser into the double-escaped script state, and
+/// the page's own `</script>` would no longer end the script. The inlined values hold no comment
+/// opener or script tag, read back unchanged, and the committed page
+/// `website/ux/fixtures/sim-player-markup.html` shows them as text (`sim-player.spec.ts`).
+#[test]
+fn the_player_page_inlines_markup_in_recorded_values_as_data() {
+    const AXIS_VALUE: &str = "<!--<script>";
+    const KPI: &str = "</script><!--<script>";
+    let (_, result) = search_rows("player-markup", &[]);
+    let mut snap = player_snapshot(&result);
+    snap["info"]["search"]["axes"][0]["values"][3] = serde_json::json!(AXIS_VALUE);
+    for row in snap["search"].as_array_mut().unwrap() {
+        if row["index"][0] == 3 {
+            row["point"]["opens"] = serde_json::json!(AXIS_VALUE);
+        }
+        row["kpis"]["chain_stop"] = serde_json::json!(KPI);
     }
+    let page = player_page(&snap);
+    hold_fixture("sim-player-markup.html", &page);
+    for name in ["MODEL", "SNAP"] {
+        let line = page
+            .lines()
+            .find(|l| {
+                l.starts_with(&format!("let {name} = "))
+                    || l.starts_with(&format!("const {name} = "))
+            })
+            .unwrap()
+            .to_ascii_lowercase();
+        for opener in ["<!--", "<script", "</script"] {
+            assert!(!line.contains(opener), "{name} inlines `{opener}`");
+        }
+    }
+    assert_eq!(
+        inlined(&page, "SNAP"),
+        snap,
+        "the values read back unchanged"
+    );
 }
 
 /// A weight that is not a finite number makes every fitness infinite or NaN, so no climb step
