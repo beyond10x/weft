@@ -116,6 +116,17 @@ pub struct Exited {
     pub truncated: bool,
 }
 
+/// The class of a refusal of the place (`{class, code, message, retriable}`,
+/// `docs/platform-ports.md` § 3.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RefusalClass {
+    Refused,
+    Conflict,
+    Unserved,
+    Exhausted,
+    Failed,
+}
+
 /// The refusals of [`Exec::run`] (`docs/platform-ports.md` § 5 N1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecError {
@@ -130,8 +141,15 @@ pub enum ExecError {
     },
     /// No `exited` within the exec's timeout and a grace.
     NoExit(Duration),
-    /// The place refused the request with its own code, such as `exec.sandbox-unavailable`.
-    Refused { code: String, message: String },
+    /// The place refused the request with its own code, such as `exec.sandbox-unavailable`,
+    /// carried as the place states it (`docs/platform-ports.md` § 3.4).
+    Refused {
+        class: RefusalClass,
+        code: String,
+        message: String,
+        /// The place says the same request may succeed later.
+        retriable: bool,
+    },
     /// A refusal every port shares: the place did not answer (`Unavailable`), or an input broke
     /// a bound it states (`Invalid`).
     Shared(Refusal),
@@ -150,7 +168,15 @@ impl fmt::Display for ExecError {
                 }
             }
             Self::NoExit(after) => write!(f, "no exec.exited after {after:?}"),
-            Self::Refused { code, message } => write!(f, "refused {code}: {message}"),
+            Self::Refused {
+                class,
+                code,
+                message,
+                retriable,
+            } => {
+                let again = if *retriable { ", retriable" } else { "" };
+                write!(f, "refused {code} ({class:?}{again}): {message}")
+            }
             Self::Shared(refusal) => write!(f, "{refusal}"),
         }
     }
@@ -168,8 +194,9 @@ impl From<Refusal> for ExecError {
 pub trait Exec {
     /// Runs `process` as one exec of the place and returns its end once the place reports it
     /// `exited`. `on_state` gets each state the place records for the exec, in their order, once
-    /// per change; `accepted` comes first. One call is one operation of the place: a start that
-    /// is not answered is refused `Unavailable`, never started again.
+    /// per change; `accepted` comes first. `on_state` runs on the caller's thread and may call
+    /// the same adapter again. One call is one operation of the place: a start that is not
+    /// answered is refused `Unavailable`, never started again.
     ///
     /// # Errors
     ///

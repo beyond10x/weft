@@ -342,6 +342,79 @@ mod join {
         );
     }
 
+    /// Adversary (weft#29): a fact the port answers present and `false` is reported `false`.
+    /// The case above pins absent -> `false` and `true` -> `true` only, so `fact.is_some()` in
+    /// place of `fact.unwrap_or(false)` (`isolation_facts` in `agent.rs`) passes the whole suite
+    /// and reports a GPU passed through on every node the local adapter observes (it answers
+    /// `gpu_passthrough: Some(false)`, and `kvm_present: Some(false)` on a host without KVM).
+    #[test]
+    fn a_fact_the_port_answers_false_is_reported_false() {
+        use weft_platform::node::{
+            Capacity, Exec, ExecError, ExecState, Exited, Facts, Isolation, IsolationLevel,
+            NodeFacts, Process,
+        };
+        use weft_platform::Refusal;
+
+        struct Stub;
+        impl NodeFacts for Stub {
+            fn observe(&self) -> Result<Facts, Refusal> {
+                Ok(Facts {
+                    capacity: vec![Capacity {
+                        resource_class: "cpu".to_owned(),
+                        amount: 1,
+                    }],
+                    isolation: Isolation {
+                        levels: vec![IsolationLevel::Container],
+                        cgroups_delegated: Some(false),
+                        egress_denied: Some(false),
+                        kvm_present: Some(false),
+                        gpu_passthrough: Some(false),
+                    },
+                })
+            }
+        }
+        impl Exec for Stub {
+            fn run(&self, _: &Process, _: &mut dyn FnMut(ExecState)) -> Result<Exited, ExecError> {
+                Err(Refusal::NotServed {
+                    operation: "run".to_owned(),
+                }
+                .into())
+            }
+        }
+
+        let (control, _, observations) = stand_in(|_| Some((409, json!({"published": []}))));
+        let report = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("observation-false-{}.jsonl", std::process::id()));
+        let options = weft_agent::agent::Options::parse([
+            "--control".to_owned(),
+            format!("http://{control}"),
+            "--node-id".to_owned(),
+            "node-1".to_owned(),
+            "--join-token".to_owned(),
+            "token".to_owned(),
+            "--substrate".to_owned(),
+            "/nonexistent/substrate.sock".to_owned(),
+            "--report".to_owned(),
+            report.to_string_lossy().into_owned(),
+        ])
+        .expect("the arguments parse");
+        let ended = weft_agent::agent::run(&options, &Stub, &Stub);
+        let _ = std::fs::remove_file(&report);
+        assert!(ended.is_err(), "the refused hello ends the run: {ended:?}");
+        let observations = observations.lock().expect("the observations lock").clone();
+        assert_eq!(observations.len(), 1, "{observations:?}");
+        assert_eq!(
+            observations[0]["isolation_facts"],
+            json!({
+                "levels": ["Container"],
+                "cgroups_delegated": false,
+                "egress_denied": false,
+                "kvm_present": false,
+                "gpu_passthrough": false,
+            })
+        );
+    }
+
     /// A refused `hello` is reported with its status and ends the agent with a failure
     /// (`session-refused`: the node closes and does not dial again).
     #[test]

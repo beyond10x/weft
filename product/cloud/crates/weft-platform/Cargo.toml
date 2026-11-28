@@ -23,7 +23,7 @@ path = "tests/main.rs"
 [dependencies]
 b10x-substrate-sdk = { git = "https://github.com/beyond10x/substrate", rev = "1a10a30d6856e6b4e20d55104638d26d37a1b992" }
 serde_json = "1"
-tokio = { version = "1", features = ["rt", "time"] }
+tokio = { version = "1", features = ["rt", "sync", "time"] }
 
 [lints]
 workspace = true
