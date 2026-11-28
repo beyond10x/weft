@@ -24,36 +24,36 @@
       {"file": "protocols/exec-channel.yaml"},
       {"command": "grep -lx 'format: ess-protospec/1' protocols/node-channel.yaml protocols/exec-channel.yaml", "expect": "protocols/node-channel.yaml\nprotocols/exec-channel.yaml"}
     ],
-    "weft-sim explore": [
-      {"file": "tools/sim/src/explore.rs"},
-      {"command": "grep -cx '        \"explore\" => explore_cmd(&args),' tools/sim/src/main.rs", "expect": "1"},
-      {"command": "grep -c '^fn explore_reaches_every_outcome_of_the_fixture()' tools/sim/tests/main.rs", "expect": "1"},
-      {"command": "grep -c '^fn no_double_placement_is_checked_inside_explore_walks_and_replays()' tools/sim/tests/main.rs", "expect": "1"}
+    "cloudspec-sim explore": [
+      {"command": "grep -cE '^  CLOUDSPEC_REV: [0-9a-f]{40}$' Taskfile.yml", "expect": "1"},
+      {"command": "grep -cF -- '- cargo install --git https://github.com/beyond10x/cloudspec --rev {{.CLOUDSPEC_REV}} cloudspec-sim --locked --root target/cloudspec-sim' Taskfile.yml", "expect": "1"},
+      {"command": "grep -cF -- \"- '{{.CLOUDSPEC_SIM}} explore --spec ess \" Taskfile.yml", "expect": "3"},
+      {"file": "sim/experiments/full-setup.yaml"}
     ],
-    "weft-sim simulate": [
-      {"file": "tools/sim/src/simulate.rs"},
-      {"file": "tools/sim/src/experiment.rs"},
-      {"command": "grep -cx '        \"simulate\" => simulate_cmd(&args),' tools/sim/src/main.rs", "expect": "1"},
-      {"command": "grep -cE '^    pub (setup|traffic|faults|controllers): Vec<' tools/sim/src/experiment.rs", "expect": "4"},
-      {"command": "grep -c '^fn a_setup_step_not_accepted_as_declared_fails_the_run()' tools/sim/tests/main.rs", "expect": "1"}
+    "cloudspec-sim simulate": [
+      {"command": "grep -cE '^  CLOUDSPEC_REV: [0-9a-f]{40}$' Taskfile.yml", "expect": "1"},
+      {"command": "grep -cF '{{.CLOUDSPEC_SIM}} simulate --spec ess --experiment \"$f\"' Taskfile.yml", "expect": "1"},
+      {"command": "awk 'FNR == 1 && $0 != \"format: weft-sim-experiment/1\" {n++} END {print n+0}' sim/experiments/*.yaml", "expect": "0"},
+      {"file": "sim/experiments/full-setup.yaml"},
+      {"file": "sim/experiments/node-loss.yaml"}
     ],
-    "weft-sim replay": [
-      {"command": "grep -cx '        \"replay\" => replay_cmd(&args),' tools/sim/src/main.rs", "expect": "1"},
-      {"command": "grep -c '^fn no_double_placement_is_checked_inside_explore_walks_and_replays()' tools/sim/tests/main.rs", "expect": "1"}
+    "cloudspec-sim replay": [
+      {"command": "grep -cE '^  CLOUDSPEC_REV: [0-9a-f]{40}$' Taskfile.yml", "expect": "1"},
+      {"command": "grep -c 'textContent = `cloudspec-sim replay --spec ' website/ux/fixtures/sim-player.html", "expect": "1"}
     ],
     "task check": [
       {"file": "Taskfile.yml"},
-      {"command": "awk '/^  check:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/^      - task: /{t[$3]=1} END{exit !(t[\"spec\"]&&t[\"layers\"]&&t[\"stamped-time\"]&&t[\"ci-paths\"]&&t[\"sim-test\"])}' Taskfile.yml"},
+      {"command": "awk '/^  check:$/{f=1;next} /^  [a-z-]+:$/{f=0} f&&/^      - task: /{t[$3]=1} END{exit !(t[\"spec\"]&&t[\"layers\"]&&t[\"stamped-time\"]&&t[\"ci-paths\"]&&t[\"docs-check\"]&&t[\"test\"])}' Taskfile.yml"},
       {"command": "grep -cx '        run: task check' .github/workflows/gate.yml", "expect": "1"}
     ]
   },
   "features": {
-    "weft-sim": [
-      {"file": "tools/sim/src/report.rs"},
-      {"command": "grep -cx '        \"explore\" => explore_cmd(&args),' tools/sim/src/main.rs", "expect": "1"},
-      {"command": "grep -cx '        \"simulate\" => simulate_cmd(&args),' tools/sim/src/main.rs", "expect": "1"},
-      {"command": "grep -cx 'pub struct Locator {' tools/sim/src/report.rs", "expect": "1"},
-      {"command": "grep -cE '^    std::fs::write\\(out\\.join\\(\"(result\\.json|index\\.html)\"\\), ' tools/sim/src/report.rs", "expect": "2"}
+    "cloudspec-sim": [
+      {"command": "grep -cE '^  CLOUDSPEC_REV: [0-9a-f]{40}$' Taskfile.yml", "expect": "1"},
+      {"command": "grep -cF -- '- cargo install --git https://github.com/beyond10x/cloudspec --rev {{.CLOUDSPEC_REV}} cloudspec-sim --locked --root target/cloudspec-sim' Taskfile.yml", "expect": "1"},
+      {"command": "grep -cF -- \"- '{{.CLOUDSPEC_SIM}} explore --spec ess \" Taskfile.yml", "expect": "3"},
+      {"command": "grep -cF '{{.CLOUDSPEC_SIM}} simulate --spec ess --experiment \"$f\"' Taskfile.yml", "expect": "1"},
+      {"command": "grep -cx '<title>cloudspec-sim</title>' website/ux/fixtures/sim-player.html", "expect": "1"}
     ]
   },
   "counts": {

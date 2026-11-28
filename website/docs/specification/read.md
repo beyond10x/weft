@@ -102,10 +102,10 @@ and emits `TenantCreated`. Which outcome answers a request is fixed by ESS: see 
 section "Which branch answers".
 
 To see a command's inputs, outcomes and actors without reading YAML, use
-`weft-sim describe` ([install weft-sim](../simulator/install.md)):
+`cloudspec-sim describe` ([install cloudspec-sim](../simulator/install.md)):
 
 ```shell-session
-$ weft-sim describe --spec ess --prefix weft.accounts.CreateTenant
+$ cloudspec-sim describe --spec ess --prefix weft.accounts.CreateTenant
 ```
 
 ## Actors

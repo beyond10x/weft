@@ -1,6 +1,6 @@
 ---
 title: Read the results
-description: What weft-sim writes - the summary line, result.json and the index.html page - and how to turn a gap into a line of the specification.
+description: What cloudspec-sim writes - the summary line, result.json and the index.html page - and how to turn a gap into a line of the specification.
 ---
 
 Each `explore` and `simulate` run writes two files to its `--out` directory:
@@ -15,12 +15,12 @@ With `--serve`, the same page is served live while the run goes on.
 ## The summary line
 
 ```text
-weft-sim explore: 64 walks, 3865 steps in 0.3 s (12836 steps/s, 212.5 walks/s, 4 threads); outcomes 664/2525, states 76/328, transitions 37/221, abstract states 1145, branch points 26, violations 0; commands never accepted 339 (blocked-by 2)
+cloudspec-sim explore: 64 walks, 3860 steps in 0.3 s (12783 steps/s, 212.0 walks/s, 4 threads); outcomes 643/2533, states 70/328, transitions 33/221, abstract states 1146, branch points 29, violations 0; commands never accepted 346 (blocked-by 2)
 ```
 
 | Field | Meaning |
 |---|---|
-| outcomes 664/2525 | outcomes some step answered, of all outcomes declared |
+| outcomes 643/2533 | outcomes some step answered, of all outcomes declared |
 | states, transitions | lifecycle states held and transitions taken, of all declared |
 | abstract states | distinct model states seen, counting per entity, state and the fields guards read whether there is one row or many |
 | branch points | a command at an abstract state where it answered two or more different outcomes |
@@ -135,7 +135,7 @@ The full lists are in `gaps.commands_never_accepted`, `gaps.entities_never_held`
 ## From a gap to a fix
 
 1. Open the file and line the gap names.
-2. For a violation, replay the walk ([run weft-sim](run.md#replay)) to see the step where it
+2. For a violation, replay the walk ([run cloudspec-sim](run.md#replay)) to see the step where it
    starts.
 3. Change the specification, validate it, and run the same seed again: the gap is gone or has
    moved.

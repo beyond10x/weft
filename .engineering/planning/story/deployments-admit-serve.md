@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:agent-workloads
 - serves: vision:weft
 - depends_on: story:deployments-admit
-revision: 1
+revision: 2
 ---
 ## Epic
 
@@ -24,7 +24,7 @@ Decomposes `epic:agent-workloads`. Serves the dry-run admission specified by
   host's routes are generated per command from the specification (`weft-bin/src/lib.rs`), so this
   story writes the handler behind the generated route and the answer it computes.
 - Admission reads the formation, the binding and the placement's served ports
-  (`docs/platform-ports.md`), and writes nothing.
+  (`cloudspec@2ed72c2:docs/platform-ports.md`), and writes nothing.
 
 ## Scope
 

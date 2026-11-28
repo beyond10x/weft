@@ -1,5 +1,13 @@
 # weft hardening pass 2: state-space exploration with weft-sim (2026-11-26)
 
+> weft-sim moved to cloudspec on 2026-11-28 as
+> [cloudspec-sim](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim).
+> This record keeps the names and paths of its time: `weft-sim` is the binary then, and
+> `tools/sim/...` a path of weft at the revision the record cites (`crates/cloudspec-sim/...` of
+> cloudspec now). To rerun a command below, install cloudspec-sim with `task sim-install` (it pins
+> the revision) and call `target/cloudspec-sim/bin/cloudspec-sim` with the same arguments, `--spec
+> ess` included. `task sim-build` and `task sim-test` no longer exist; cloudspec tests the tool.
+
 Technique: random command sequences and experiments on the in-memory interpreted model
 (`ess:hardening` "random command sequences", "model-based check"), with `tools/sim` (`weft-sim`,
 design:simulation-and-kpis stage 1). ESS engine: beyond10x/ess main `c0b5f560`, crate

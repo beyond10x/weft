@@ -157,6 +157,8 @@ real_tree() { # real_tree <dir>
   done
   cp -R "$root/website/data" "$root/website/docs" "$1/website/"
   cp "$root/website/product.json" "$1/website/"
+  mkdir -p "$1/website/ux"
+  cp -R "$root/website/ux/fixtures" "$1/website/ux/"
   cp -R "$root/ess" "$1/ess"
   cp "$root/Taskfile.yml" "$1/Taskfile.yml"
 }
@@ -169,10 +171,10 @@ real_case() { # real_case <case> <want> <tree>
 t=$gitdir/40-real-baseline
 real_tree "$t"
 real_case baseline 0 "$t"
-# "files" is no noun of the specification alone: weft-sim's two output files are not 25.
+# "files" is no noun of the specification alone: cloudspec-sim's two output files are not 25.
 t=$gitdir/40-real-other-files
 real_tree "$t"
-printf '%s\n' '# Results' '' 'weft-sim writes 2 files: result.json and index.html.' > "$t/website/docs/zz-results.md"
+printf '%s\n' '# Results' '' 'cloudspec-sim writes 2 files: result.json and index.html.' > "$t/website/docs/zz-results.md"
 real_case other-files 0 "$t"
 # The gate no longer validates the specification: "The domain model" says it does.
 t=$gitdir/40-real-spec-commented

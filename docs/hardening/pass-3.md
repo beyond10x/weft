@@ -1,5 +1,13 @@
 # weft hardening pass 3: spec diff, mutation, determinism, metamorphic relations (2026-11-27)
 
+> weft-sim moved to cloudspec on 2026-11-28 as
+> [cloudspec-sim](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim).
+> This record keeps the names and paths of its time: `weft-sim` is the binary then, and
+> `tools/sim/...` a path of weft at the revision the record cites (`crates/cloudspec-sim/...` of
+> cloudspec now). To rerun a command below, install cloudspec-sim with `task sim-install` (it pins
+> the revision) and call `target/cloudspec-sim/bin/cloudspec-sim` with the same arguments, `--spec
+> ess` included. `task sim-build` and `task sim-test` no longer exist; cloudspec tests the tool.
+
 Ordered by the owner on 2026-11-27 about 11:48 CET. Techniques of `ess:hardening` not run before,
 in the skill's order: 7 (spec diff in the gate), 1 (mutation audit), 4 (determinism), 5
 (metamorphic relations). Not run: 3 (caller replay), see the end. "Pass 3" here is the third

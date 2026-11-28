@@ -31,7 +31,7 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'weft-sim',
+      label: 'cloudspec-sim',
       collapsed: false,
       items: ['simulator/install', 'simulator/run', 'simulator/results'],
     },

@@ -35,12 +35,12 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/main.rs
 - confidence: cited
   path: quality/spec-diff-acknowledgements.json
-revision: 3
+revision: 4
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, acceptance 3: with placement `local`, a node pool's node is made
-by the machines port and joins on its own. Design: `docs/platform-ports.md` § 6 C1 (steps
+by the machines port and joins on its own. Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 6 C1 (steps
 `pool-scale`, `pool-machines`), § 9 S2 and § 12.4. Depends on `story:ports-local-machines`.
 
 ## Context

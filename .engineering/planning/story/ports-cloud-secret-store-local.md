@@ -13,12 +13,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/cloud.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/local
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other ports designed, not built". Design:
-`docs/platform-ports.md` § 6 C6 (`secret-store`), § 8 (`local`: `ClusterStore`, an encrypted file
+`cloudspec@2ed72c2:docs/platform-ports.md` § 6 C6 (`secret-store`), § 8 (`local`: `ClusterStore`, an encrypted file
 in the state directory of the control host). Depends on `story:ports-spec-port-names` (the
 `port secret-store:` texts of the three branches).
 

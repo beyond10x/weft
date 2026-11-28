@@ -11,8 +11,11 @@
 //! 1. `weft.workloads.RecordArtifactVerified` as the NodeAgent, with the instance's own
 //!    `artifact_digest`: `Scheduled` -> `Starting` under its guards. The skeleton fetches no
 //!    artifact and checks no signature: the snippet is the command of the instance's process.
-//!    An answer `501` with `committed: true` took effect as well (a generated binding of an event
-//!    it published is not implemented yet); only `starting` publishes, so it is `starting`.
+//!    Its answer is `starting`, whose `InstanceHealthStarting` the hand-run binding
+//!    `edge-backend-restarting` delivers (`RecordBackendNotReady`, `not-ready` dropped on a first
+//!    start). An answer `501` with `committed: true` is taken as `starting` too: it took effect,
+//!    and a generated binding of an event it published reached a command no behaviour implements;
+//!    only `starting` publishes.
 //! 2. `{"started": <instance_id>, "pass": <n>}` in the report file.
 //! 3. Each process through the `exec` port ([`Exec::run`]), on a thread of its own: `run` blocks
 //!    until the exec ends, and the passes over the work list go on meanwhile. The limits of a
@@ -526,7 +529,7 @@ fn rows(answer: Answer, view: &str) -> Result<Vec<Value>, String> {
 /// snippet's invocation, a job's task) runs to its end under the port's default limits.
 ///
 /// An exec is not a long-lived workload: substrate has none on the host driver (substrate gap 1,
-/// `docs/platform-ports.md` § 10), so a replica still ends after 24 hours. Running it until it is
+/// cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 10), so a replica still ends after 24 hours. Running it until it is
 /// stopped is `story:ports-node-workloads-local` (the `workloads` port).
 fn limits(instance: &Value) -> Limits {
     if instance["service_id"].is_null() {

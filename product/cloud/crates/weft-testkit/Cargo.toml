@@ -23,6 +23,7 @@ weft-impl = { path = "../weft-impl" }
 weft-types = { path = "../../../../target/generated/crates/weft-types" }
 
 [dev-dependencies]
+serde_norway = "0.9"
 weft-bin = { path = "../weft-bin", features = ["test-callers"] }
 weft-probe-api = { path = "../../../../tests/fixtures/generated-probe/crates/weft-probe-api" }
 weft-server = { path = "../../../../target/generated/crates/weft-server" }

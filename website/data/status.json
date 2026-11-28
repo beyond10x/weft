@@ -42,26 +42,26 @@
       "area": "Simulator",
       "detail": "Random command sequences over the whole specification, with system invariants checked after each step.",
       "href": "/docs/simulator/run#explore",
-      "label": "weft-sim explore",
+      "label": "cloudspec-sim explore",
       "status": "shipped"
     },
     {
       "area": "Simulator",
       "detail": "Experiments with a setup, traffic, faults and controllers driven as the reconciliation loops would.",
       "href": "/docs/simulator/run#simulate",
-      "label": "weft-sim simulate",
+      "label": "cloudspec-sim simulate",
       "status": "shipped"
     },
     {
       "area": "Simulator",
       "detail": "Replays one recorded walk and checks the invariants after every step.",
       "href": "/docs/simulator/run#replay",
-      "label": "weft-sim replay",
+      "label": "cloudspec-sim replay",
       "status": "shipped"
     },
     {
       "area": "Gate",
-      "detail": "task check: validation, layers, stamped time, the CI path filter and the simulator's tests, locally and in CI.",
+      "detail": "task check: validation, layers, stamped time, the CI path filter, the docs claims and the tests of the root workspace, locally and in CI.",
       "href": "/docs/operate/troubleshoot#the-gate",
       "label": "task check",
       "status": "shipped"

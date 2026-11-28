@@ -10,12 +10,12 @@ relations:
 scope:
 - confidence: cited
   path: docs/ess-gaps.md
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "what the specification declares for them". Design:
-`docs/platform-ports.md` § 9, "ESS gaps", gaps 26-29. Depends on none.
+`cloudspec@2ed72c2:docs/platform-ports.md` § 9, "ESS gaps", gaps 26-29. Depends on none.
 
 ## Context
 

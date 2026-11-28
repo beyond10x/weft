@@ -95,7 +95,7 @@ reaction is an ESS binding in
 | R4 | a placement bound | send the assignment to the node |
 | R8 | a wake requested; a wake deadline missed | schedule an instance; a named failure |
 
-weft-sim drives these loops in its experiments ([run weft-sim](../simulator/run.md)).
+cloudspec-sim drives these loops in its experiments ([run cloudspec-sim](../simulator/run.md)).
 
 ## Clusters
 

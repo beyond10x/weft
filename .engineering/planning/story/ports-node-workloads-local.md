@@ -16,12 +16,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/local/substrate.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/node.rs
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other ports designed, not built". Design:
-`docs/platform-ports.md` § 5 N3 (`workloads`), § 8 (column `local`), § 10 gap 1. Depends on
+`cloudspec@2ed72c2:docs/platform-ports.md` § 5 N3 (`workloads`), § 8 (column `local`), § 10 gap 1. Depends on
 `story:ports-node-exec-facts`. Outside the first build (design § 12): it starts when substrate
 serves gap 1 (a long-lived, supervised process from a root filesystem on the host driver).
 

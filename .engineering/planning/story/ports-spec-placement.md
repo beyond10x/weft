@@ -21,12 +21,12 @@ scope:
   path: product/cloud/crates/weft-impl/src/context/decider.rs
 - confidence: cited
   path: quality/spec-diff-acknowledgements.json
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, design rule 3.5 (one adapter per port per control host, chosen
-from the placement it serves). Design: `docs/platform-ports.md` § 9, spec change S1. Depends on
+from the placement it serves). Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 9, spec change S1. Depends on
 `story:ports-local-pool-node`, whose `Local` constant this story replaces.
 
 ## Context

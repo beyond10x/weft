@@ -1,4 +1,4 @@
-//! The local adapter of the node-layer ports [`Exec`] and [`NodeFacts`] (`docs/platform-ports.md`
+//! The local adapter of the node-layer ports [`Exec`] and [`NodeFacts`] (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md)
 //! § 12.2): one `substrate-daemon` on this host, reached on its Unix socket through
 //! `b10x-substrate-sdk`. This is the only source file of weft that names the SDK.
 //!

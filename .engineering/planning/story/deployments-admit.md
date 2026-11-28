@@ -7,7 +7,7 @@ title: 'Spec: a dry-run admit in deployments answering a plan or every violation
 relations:
 - decomposes: epic:platform-ports
 - serves: vision:weft
-revision: 1
+revision: 2
 ---
 ## Epic
 
@@ -23,7 +23,7 @@ feasibility (isolation level, accelerators), the account's secret and egress pol
   (`ess/6-delivery/deployments.yaml:1567`) needs a translation, and its `Simulation` (lines
   273-280) checks placement, policy and reachability with the violations of `ViolationName`
   (lines 233-245). It does not check the ports the placement serves.
-- The ports a placement serves: `docs/platform-ports.md` § 8.
+- The ports a placement serves: `cloudspec@2ed72c2:docs/platform-ports.md` § 8.
 
 ## The specification change
 
