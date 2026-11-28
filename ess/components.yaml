@@ -598,6 +598,7 @@ components:
         - weft.workloads.CreateSchedule
         - weft.workloads.CreateTrigger
         - weft.workloads.CreateWarmPool
+        - weft.workloads.DeclareRuntimeInputs
         - weft.workloads.DefineService
         - weft.workloads.DefineWorkload
         - weft.workloads.DeleteSchedule

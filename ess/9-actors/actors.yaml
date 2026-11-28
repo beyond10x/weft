@@ -91,6 +91,8 @@ actors:
       # workloads
       - weft.workloads.RegisterRuntime
       - weft.workloads.RetireRuntime
+      # story:workload-environment-and-args: what a runtime delivers to its processes.
+      - weft.workloads.DeclareRuntimeInputs
       # nodes
       - weft.nodes.Drain
       - weft.nodes.CancelDrain
