@@ -5,8 +5,9 @@
 //! For each pending request, the candidates in order: each isolation level the request admits,
 //! from its minimum up to `MicroVm` (the weakest first, so a stronger level is not taken where a
 //! weaker one serves), and for each level every `Ready` node, in the view's order, whose
-//! isolation facts offer it. The input carries the request's tenant, account and cluster, the
-//! node's zone and pool, no bindings, no topology (the default cluster has none) and
+//! isolation facts offer it. The input carries the request's scope and formation, the cluster
+//! the formation is pinned to and the tenant of the account that holds the scope ([`ties`]),
+//! the node's zone and pool, no bindings, no topology (the default cluster has none) and
 //! `decided_at` from the controller clock ([`Context::now`](crate::Context)). The step stops at
 //! the first `placed`; a refusal of the node or level tries the next candidate, a refusal of the
 //! request itself ([`REQUEST_REFUSALS`]) ends the request's attempt.
@@ -17,16 +18,21 @@
 //! - A gang member is skipped: a gang is placed and bound whole (`weft.scheduling.BindGang`),
 //!   which this step does not do.
 //! - A request whose attempt placed nothing waits before its next attempt ([`crate::waits`]),
-//!   from one tick doubling up to 32; a request with no candidate sends nothing and does not
-//!   wait.
+//!   from one tick doubling up to 32; a request with no candidate, or without its ties (a
+//!   formation not pinned to a cluster yet, a scope no account records), sends nothing and does
+//!   not wait.
 
 use serde_json::{json, Value};
 use weft_impl::context::timestamp;
 use weft_impl::System;
 use weft_system::SystemEvent;
+use weft_types::accounts::AccountSnapshot;
 use weft_types::actor::Actor;
+use weft_types::behaviour::AccountStorage;
+use weft_types::cluster::{ClusterState, Clusters};
 use weft_types::infrastructure::NodeState;
-use weft_types::shared::IsolationLevel;
+use weft_types::scheduling::{PendingRequests, SchedulingRequests};
+use weft_types::shared::{ClusterId, FormationId, IsolationLevel, TenantId};
 
 use crate::waits::Waits;
 use crate::{outcome, send, Context, Sent};
@@ -47,6 +53,7 @@ pub const REQUEST_REFUSALS: &[&str] = &[
     "already-reserved",
     "other-tenant",
     "other-account",
+    "other-formation",
     "other-cluster",
     "quota-exceeded",
 ];
@@ -78,6 +85,51 @@ fn level_name(level: IsolationLevel) -> &'static str {
     }
 }
 
+/// What `PlaceInstance` ties a request to besides its scope.
+struct Ties {
+    /// The tenant of the account that holds the request's scope.
+    tenant_id: TenantId,
+    /// The request's formation.
+    formation_id: FormationId,
+    /// The cluster that runs the formation.
+    cluster_id: ClusterId,
+}
+
+/// The ties of the pending request `row`: its formation (`weft.scheduling.SchedulingRequests`),
+/// the cluster not deleted whose `formations` list it (`weft.cluster.Clusters`, the pin of
+/// `weft.cluster.PinFormation`) and the tenant of the account that holds its scope. `None`
+/// where one is missing: a formation not pinned yet, a scope no account records.
+fn ties(
+    row: &PendingRequests,
+    requests: &[SchedulingRequests],
+    clusters: &[Clusters],
+    accounts: &[AccountSnapshot],
+) -> Option<Ties> {
+    let formation_id = requests
+        .iter()
+        .find(|request| request.request_id == row.request_id)?
+        .formation_id
+        .clone();
+    let cluster_id = clusters
+        .iter()
+        .find(|cluster| {
+            cluster.state != ClusterState::Deleted && cluster.formations.contains(&formation_id)
+        })?
+        .cluster_id
+        .clone();
+    let tenant_id = accounts
+        .iter()
+        .find(|account| account.data.scope_id.as_ref() == Some(&row.scope_id))?
+        .data
+        .tenant_id
+        .clone();
+    Some(Ties {
+        tenant_id,
+        formation_id,
+        cluster_id,
+    })
+}
+
 /// One attempt per pending request that is due: the commands sent. A view the system cannot
 /// read sends nothing.
 pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
@@ -87,6 +139,15 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
     let Ok(nodes) = system.weft_control.nodes() else {
         return Vec::new();
     };
+    let Ok(all_requests) = system.weft_control.scheduling_requests() else {
+        return Vec::new();
+    };
+    let Ok(clusters) = system.weft_control.clusters() else {
+        return Vec::new();
+    };
+    // The account rows, read through the storage port: no view names the scope an account
+    // holds (`weft.accounts.AccountTree` has no `scope_id`).
+    let accounts = AccountStorage::list(context.ports);
     let subjects: Vec<String> = requests
         .iter()
         .map(|row| row.request_id.0 .0.clone())
@@ -104,6 +165,9 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
         if in_flight || !waits.due(subject) {
             continue;
         }
+        let Some(of) = ties(row, &all_requests, &clusters, &accounts) else {
+            continue;
+        };
         let candidates: Vec<_> = admitted(row.min_isolation)
             .iter()
             .flat_map(|level| {
@@ -127,9 +191,10 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
         for (level, node) in candidates {
             let input = json!({
                 "request_id": row.request_id.0 .0,
-                "tenant_id": row.tenant_id.0 .0,
-                "account_id": row.account_id.0 .0,
-                "cluster_id": row.cluster_id.0 .0,
+                "tenant_id": of.tenant_id.0 .0,
+                "scope_id": row.scope_id.0 .0,
+                "cluster_id": of.cluster_id.0 .0,
+                "formation_id": of.formation_id.0 .0,
                 "node_id": node.node_id.0 .0,
                 "node_pool_id": node.node_pool_id.as_ref().map(|pool| Value::from(pool.0 .0.clone())),
                 "zone": node.zone.0,

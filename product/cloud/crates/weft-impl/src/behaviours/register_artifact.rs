@@ -1,15 +1,15 @@
-//! `weft.artifacts.RegisterArtifact` (`PLAN.md` § Obligations, `ess/3-resources/artifacts.yaml`),
+//! `weft.artifacts.RegisterArtifact` (`PLAN.md` § Obligations, `ess/cloud/4-resources/artifacts.yaml`),
 //! in declaration order:
 //!
-//! - `not-callers-account` (a caller acting in no account counts as another account's),
+//! - `not-callers-scope` (a caller acting in no scope counts as another scope's),
 //!   `unsigned`, `negative-size`;
 //! - `bad-signature`, decided externally before any row: "the signature does not verify against
-//!   a signing key the account trusts". Which keys an account trusts is OPEN in the
+//!   a signing key the scope trusts". Which keys a scope trusts is OPEN in the
 //!   specification (no trust record exists yet), so this file cannot decide it and, like every
 //!   external branch the decider table does not list (`crate::context::decider`), does not
 //!   take it: the signature is kept as sent, and the node checks it again before start;
 //! - `built-from-missing` (only when `built_from` names an artifact), `built-from-foreign`;
-//! - `exists` (an artifact with the digest, of any account: one digest per cluster, OPEN D8 in
+//! - `exists` (an artifact with the digest, of any scope: one digest per cluster, OPEN D8 in
 //!   the specification);
 //! - `registered` otherwise.
 
@@ -28,8 +28,8 @@ impl RegisterArtifactBehavior for Ports {
         &mut self,
         input: RegisterArtifact,
     ) -> Result<RegisterArtifactOutcome, UnmetObligation> {
-        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(RegisterArtifactOutcome::NotCallersAccount { error: NotFound });
+        if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
+            return Ok(RegisterArtifactOutcome::NotCallersScope { error: NotFound });
         }
         if input.signature.is_empty() {
             return Ok(RegisterArtifactOutcome::Unsigned {
@@ -45,7 +45,7 @@ impl RegisterArtifactBehavior for Ports {
             let Some(recipe) = ArtifactStorage::get(self, built_from) else {
                 return Ok(RegisterArtifactOutcome::BuiltFromMissing { error: NotFound });
             };
-            if recipe.data.account_id != input.account_id {
+            if recipe.data.scope_id != input.scope_id {
                 return Ok(RegisterArtifactOutcome::BuiltFromForeign { error: NotFound });
             }
         }
@@ -63,7 +63,7 @@ impl RegisterArtifactBehavior for Ports {
                 state: ArtifactState::Registered,
                 data: ArtifactData {
                     artifact_digest: input.artifact_digest.clone(),
-                    account_id: input.account_id.clone(),
+                    scope_id: input.scope_id.clone(),
                     kind: input.kind,
                     size_bytes: input.size_bytes,
                     signature: input.signature,
@@ -75,7 +75,7 @@ impl RegisterArtifactBehavior for Ports {
         Ok(RegisterArtifactOutcome::Registered {
             artifact_registered: ArtifactRegistered {
                 artifact_digest: input.artifact_digest,
-                account_id: input.account_id,
+                scope_id: input.scope_id,
                 kind: input.kind,
                 signer_key_id: input.signer_key_id,
             },

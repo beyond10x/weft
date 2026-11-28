@@ -1,14 +1,15 @@
 //! `weft.infrastructure.CreateNodePool` (`PLAN.md` § Obligations,
-//! `ess/1-infrastructure/infrastructure.yaml`), in declaration order: `negative-size`,
-//! `min-above-max`, `unknown-zone`, `zone-retired`, `already-requested` (a pool made for the
-//! same `requested_for`), `created` otherwise, in the zone's cloud with its minimum as desired
-//! size.
+//! `ess/cloud/2-infrastructure/infrastructure.yaml`), in declaration order: `negative-size`,
+//! `min-above-max`, `unknown-zone`, `zone-retired`, `created` otherwise, in the zone's cloud
+//! with its minimum as desired size. The blocks keep no `requested_for`: a second delivery of
+//! one `ClusterNodePoolRequested` makes a second pool (OPEN at the binding
+//! `cluster-create-node-pool`).
 
 use weft_types::behaviour::{NodePoolStorage, ZoneStorage};
 use weft_types::infrastructure::obligations::CreateNodePoolBehavior;
 use weft_types::infrastructure::{
     CreateNodePool, CreateNodePoolOutcome, InvalidPoolSize, NodePoolCreated, NodePoolData,
-    NodePoolSnapshot, NodePoolState, PoolAlreadyRequested, UnknownZone, ZoneState,
+    NodePoolSnapshot, NodePoolState, UnknownZone, ZoneState,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -38,15 +39,6 @@ impl CreateNodePoolBehavior for Ports {
         if zone.state == ZoneState::Retired {
             return Ok(CreateNodePoolOutcome::ZoneRetired { error: UnknownZone });
         }
-        if input.requested_for.is_some()
-            && NodePoolStorage::list(self)
-                .iter()
-                .any(|row| row.data.requested_for == input.requested_for)
-        {
-            return Ok(CreateNodePoolOutcome::AlreadyRequested {
-                error: PoolAlreadyRequested,
-            });
-        }
         let node_pool_id = NodePoolId(Uuid(mint()));
         let cloud_id = zone.data.cloud_id;
         NodePoolStorage::put(
@@ -63,7 +55,6 @@ impl CreateNodePoolBehavior for Ports {
                     min_size: input.min_size,
                     max_size: input.max_size,
                     desired_size: input.min_size,
-                    requested_for: input.requested_for.clone(),
                 },
             },
         );
@@ -77,7 +68,6 @@ impl CreateNodePoolBehavior for Ports {
                 image: input.image,
                 min_size: input.min_size,
                 max_size: input.max_size,
-                requested_for: input.requested_for,
             },
         })
     }

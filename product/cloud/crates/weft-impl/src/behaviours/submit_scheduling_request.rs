@@ -1,21 +1,23 @@
 //! `weft.scheduling.SubmitSchedulingRequest` (`PLAN.md` § Obligations,
-//! `ess/5-runtime/scheduling.yaml`), in the selection precedence of its contract:
+//! `ess/cloud/6-platform/scheduling.yaml`), in the selection precedence of its contract:
 //!
 //! 1. the input guard `no-claims`;
-//! 2. every existence check before every predicate, in declaration order: `unknown-account`,
-//!    `unknown-instance`, `unknown-formation`, `unknown-priority`, and `unknown-gang` where a
-//!    gang is named;
-//! 3. the predicates in declaration order: `instance-of-other-account`,
-//!    `formation-of-other-account`, `formation-not-instances` (the instance's workload runs in
-//!    another formation), `retired-priority`, `already-requested` (a `Pending` or
-//!    `Unschedulable` request of the instance), `gang-closed` (not `Forming`),
-//!    `gang-of-other-tenant` (the gang's tenant is not the account's);
-//! 4. `requested`: a `Pending` request with the account's tenant, the formation's cluster, the
-//!    priority class's value, preemption and grace, and `requested_at` from the clock.
+//! 2. every existence check before every predicate, in declaration order: `unknown-scope` (no
+//!    `weft.scope.Scope` of the identity, in any state), `unknown-formation`,
+//!    `unknown-priority`, and `unknown-gang` where a gang is named;
+//! 3. the predicates in declaration order: `formation-of-other-scope`, `retired-priority`,
+//!    `already-requested` (a `Pending` or `Unschedulable` request of the instance),
+//!    `gang-closed` (not `Forming`), `gang-of-other-scope`;
+//! 4. `requested`: a `Pending` request in the scope, with the priority class's value,
+//!    preemption and grace, and `requested_at` from the clock.
+//!
+//! The blocks dropped the checks of the instance (it exists, it is the scope's, its workload
+//! runs in the formation) and the request's tenant and cluster: `weft.scheduling.PlaceInstance`
+//! ties the request to its tenant and its cluster when the scheduler places it.
 
 use weft_types::behaviour::{
-    AccountStorage, Context, FormationStorage, GangStorage, InstanceStorage, PriorityClassStorage,
-    SchedulingRequestStorage, WorkloadStorage,
+    Context, FormationStorage, GangStorage, PriorityClassStorage, SchedulingRequestStorage,
+    ScopeStorage,
 };
 use weft_types::infrastructure::PriorityClassState;
 use weft_types::obligation::UnmetObligation;
@@ -41,12 +43,9 @@ impl SubmitSchedulingRequestBehavior for Ports {
             return Ok(SubmitSchedulingRequestOutcome::NoClaims { error: NoClaims });
         }
 
-        let Some(account) = AccountStorage::get(self, &input.account_id) else {
-            return Ok(SubmitSchedulingRequestOutcome::UnknownAccount { error: NotFound });
-        };
-        let Some(instance) = InstanceStorage::get(self, &input.instance_id) else {
-            return Ok(SubmitSchedulingRequestOutcome::UnknownInstance { error: NotFound });
-        };
+        if ScopeStorage::get(self, &input.scope_id).is_none() {
+            return Ok(SubmitSchedulingRequestOutcome::UnknownScope { error: NotFound });
+        }
         let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
             return Ok(SubmitSchedulingRequestOutcome::UnknownFormation { error: NotFound });
         };
@@ -65,18 +64,8 @@ impl SubmitSchedulingRequestBehavior for Ports {
             None => None,
         };
 
-        if instance.data.account_id != input.account_id {
-            return Ok(SubmitSchedulingRequestOutcome::InstanceOfOtherAccount { error: NotFound });
-        }
-        if formation.data.account_id != input.account_id {
-            return Ok(SubmitSchedulingRequestOutcome::FormationOfOtherAccount { error: NotFound });
-        }
-        if WorkloadStorage::get(self, &instance.data.workload_id)
-            .is_none_or(|workload| workload.data.formation_id != input.formation_id)
-        {
-            return Ok(SubmitSchedulingRequestOutcome::FormationNotInstances {
-                error: RequestMismatch,
-            });
+        if formation.data.scope_id != input.scope_id {
+            return Ok(SubmitSchedulingRequestOutcome::FormationOfOtherScope { error: NotFound });
         }
         if class.state == PriorityClassState::Retired {
             return Ok(SubmitSchedulingRequestOutcome::RetiredPriority {
@@ -102,9 +91,9 @@ impl SubmitSchedulingRequestBehavior for Ports {
         }
         if gang
             .as_ref()
-            .is_some_and(|gang| gang.data.tenant_id != account.data.tenant_id)
+            .is_some_and(|gang| gang.data.scope_id != input.scope_id)
         {
-            return Ok(SubmitSchedulingRequestOutcome::GangOfOtherTenant {
+            return Ok(SubmitSchedulingRequestOutcome::GangOfOtherScope {
                 error: RequestMismatch,
             });
         }
@@ -113,8 +102,7 @@ impl SubmitSchedulingRequestBehavior for Ports {
         let requested = SchedulingRequested {
             request_id: request_id.clone(),
             instance_id: input.instance_id.clone(),
-            tenant_id: account.data.tenant_id.clone(),
-            cluster_id: formation.data.cluster_id.clone(),
+            scope_id: input.scope_id.clone(),
             min_isolation: input.min_isolation,
             priority: input.priority.clone(),
         };
@@ -126,10 +114,8 @@ impl SubmitSchedulingRequestBehavior for Ports {
                 data: SchedulingRequestData {
                     request_id,
                     instance_id: input.instance_id,
-                    tenant_id: account.data.tenant_id,
-                    account_id: input.account_id,
+                    scope_id: input.scope_id,
                     formation_id: input.formation_id,
-                    cluster_id: formation.data.cluster_id,
                     claims: input.claims,
                     min_isolation: input.min_isolation,
                     zones: input.zones,
