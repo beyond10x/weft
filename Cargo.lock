@@ -1447,6 +1447,7 @@ name = "weft-bin"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "weft-cloudspec",
  "weft-controllers",
  "weft-impl",
  "weft-server",
