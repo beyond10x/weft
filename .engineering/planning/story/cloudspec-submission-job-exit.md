@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-job-exit
 kind: story
-status: draft
+status: active
 title: A job instance that exits 0 is recorded Exited, its task succeeds, and the Job reads Succeeded (D-C2)
 relations:
 - decomposes: epic:cloudspec-submission
@@ -31,7 +31,10 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/job_run.rs
 - confidence: cited
   path: tools/synth-input.sh
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T14:50:35Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T14:50:35Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

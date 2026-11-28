@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T14:50:35Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-job-exit",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the operator's order relayed from the owner: epic cloudspec-submission first; the owner's pick D-C2 = A defines the chain; story cloudspec-submission-job-run merged on integration/2026-11-28-7 (79d894d)"
+  }
+}
