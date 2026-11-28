@@ -30,7 +30,7 @@ export function RecordView({ node, scope, report }: { node: Obj; scope: Scope; r
   const read = useRead(node.reads, scope);
   const fields: Field[] = node.fields ?? [];
   const groups: Obj[] = node.groups ?? [];
-  const labels = useLabelMaps([...fields, ...groups.flatMap((g) => g.fields as Field[])]);
+  const labels = useLabelMaps([...fields, ...groups.flatMap((g) => g.fields as Field[])], scope.params);
   useEffect(() => { report?.({ status: read.status, rows: read.rows, total: read.total }); }, [read.status, read.rows, read.total, report]);
   return (
     <ReadStates read={read} states={node.states} scope={scope}>

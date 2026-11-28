@@ -1,8 +1,10 @@
 // The app shell (`shells.app`): navigation from `navigation.sections`, the account menu with the
 // shell's actions (theme), the page outlet, the notification region and the confirm dialog. On a
-// narrow screen the navigation is a drawer behind a menu button.
+// narrow screen the navigation is a drawer behind a menu button. Pages the actor's grants do not
+// allow are left out of the menu and answered with "Not permitted" (grants.ts).
 
 import { useEffect, useRef, useState } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { App, useApp, useAppRuntime } from './runtime.tsx';
 import type { HostComponent } from './runtime.tsx';
 import { href } from './route.ts';
@@ -34,7 +36,11 @@ function usePrefersDark(): boolean {
 
 function Nav({ route, onNavigate, brand }: { route: Route; onNavigate: () => void; brand: Brand }) {
   const app = useApp();
-  const sections: Obj[] = app.doc.navigation.sections ?? [];
+  // `navigation.visibility: by_actor_grants` (the default): a page the actor's grants do not allow is
+  // left out, and a group left with no page with it.
+  const sections: Obj[] = (app.doc.navigation.sections ?? [])
+    .map((s: Obj) => ({ ...s, pages: (s.pages ?? []).filter((p: string) => app.pageAllowed(p)) }))
+    .filter((s: Obj) => s.pages.length > 0);
   const isOn = (p: string) => route.page === p || route.page.startsWith(`${p}.`);
   return (
     <nav className="nav-links" aria-label="Main">
@@ -98,7 +104,7 @@ function AccountMenu() {
     <Menu
       label={`Account: ${display}`}
       items={items}
-      text={<><span className="avatar" aria-hidden="true">{initials}</span><span className="account-name">{display}</span><Icon name="chevron_down" size={15} /></>}
+      text={<><span className="avatar" aria-hidden="true">{initials}</span><span className="account-name" title={display}>{display}</span><Icon name="chevron_down" size={15} /></>}
     />
   );
 }
@@ -112,10 +118,14 @@ function Mark() {
   );
 }
 
+const FOCUSABLE = 'a[href], button:not([disabled]), input, select, textarea, [tabindex="0"]';
+
 function ShellFrame({ brand }: { brand: Brand }) {
   const app = useApp();
   const [navOpen, setNavOpen] = useState(false);
   const main = useRef<HTMLElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
+  const toggle = useRef<HTMLButtonElement>(null);
   const first = useRef(true);
   const routeKey = `${app.route.page}|${JSON.stringify(app.route.params)}`;
   useEffect(() => {
@@ -125,27 +135,62 @@ function ShellFrame({ brand }: { brand: Brand }) {
     main.current?.scrollTo?.(0, 0);
     window.scrollTo(0, 0);
   }, [routeKey]);
+  // The drawer (narrow screens): focus moves into it when it opens, Tab stays inside, Escape closes
+  // it. Closing it without navigating (Escape, the close button, the scrim) gives focus back to the
+  // toggle; a link that navigates gives it to the new page's title (above).
+  const giveBack = useRef(false);
+  useEffect(() => {
+    if (!navOpen) {
+      // After the commit that drops `inert` from the frame, so the toggle can take focus.
+      if (giveBack.current) { giveBack.current = false; toggle.current?.focus(); }
+      return;
+    }
+    const el = sidebar.current;
+    const current = el?.querySelector<HTMLElement>('.nav-link[aria-current="page"]');
+    const target = () => current ?? el?.querySelector<HTMLElement>(FOCUSABLE);
+    target()?.focus();
+    // Should the drawer not take focus yet (still hidden in this frame), once more on the next frame.
+    const id = requestAnimationFrame(() => { if (!el?.contains(document.activeElement)) target()?.focus(); });
+    // A window grown past the drawer breakpoint shows the sidebar in place: no drawer to keep open.
+    const wide = window.matchMedia?.('(min-width: 901px)');
+    const onWide = () => { if (wide?.matches) setNavOpen(false); };
+    wide?.addEventListener('change', onWide);
+    return () => { cancelAnimationFrame(id); wide?.removeEventListener('change', onWide); };
+  }, [navOpen]);
+  const closeNav = () => { giveBack.current = true; setNavOpen(false); };
+  const onDrawerKey = (e: ReactKeyboardEvent) => {
+    if (!navOpen) return;
+    if (e.key === 'Escape') { e.preventDefault(); closeNav(); return; }
+    if (e.key !== 'Tab' || !sidebar.current) return;
+    const f = Array.from(sidebar.current.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((x) => x.offsetParent !== null);
+    if (!f.length) return;
+    const head = f[0];
+    const tail = f[f.length - 1];
+    if (e.shiftKey && (document.activeElement === head || !sidebar.current.contains(document.activeElement))) { e.preventDefault(); tail.focus(); }
+    else if (!e.shiftKey && (document.activeElement === tail || !sidebar.current.contains(document.activeElement))) { e.preventDefault(); head.focus(); }
+  };
   const page = app.doc.pages[app.route.page];
+  const allowed = page ? app.pageAllowed(page.name) : false;
   return (
     <div className={`shell${navOpen ? ' nav-open' : ''}`}>
       <a className="skip-link" href="#main" onClick={(e) => { e.preventDefault(); document.getElementById('page-title')?.focus(); }}>Skip to content</a>
-      <aside className="sidebar" aria-label="Navigation">
+      <aside ref={sidebar} className="sidebar" aria-label="Navigation" onKeyDown={onDrawerKey}>
         <div className="brand">
           <Mark />
           <div className="brand-text">
             <span className="brand-product">weft</span>
             <span className="brand-console">{brand.name}</span>
           </div>
-          <button type="button" className="btn btn-ghost btn-icon nav-close" aria-label="Close navigation" onClick={() => setNavOpen(false)}>
+          <button type="button" className="btn btn-ghost btn-icon nav-close" aria-label="Close navigation" onClick={closeNav}>
             <Icon name="close" />
           </button>
         </div>
         <Nav route={app.route} onNavigate={() => setNavOpen(false)} brand={brand} />
       </aside>
-      <div className="nav-scrim" aria-hidden="true" onClick={() => setNavOpen(false)} />
-      <div className="frame">
+      <div className="nav-scrim" aria-hidden="true" onClick={closeNav} />
+      <div className="frame" inert={navOpen || undefined}>
         <header className="topbar">
-          <button type="button" className="btn btn-ghost btn-icon nav-toggle" aria-label="Open navigation" aria-expanded={navOpen} onClick={() => setNavOpen(true)}>
+          <button ref={toggle} type="button" className="btn btn-ghost btn-icon nav-toggle" aria-label="Open navigation" aria-expanded={navOpen} onClick={() => setNavOpen(true)}>
             <Icon name="menu" />
           </button>
           <span className="topbar-brand"><Mark /><span>{brand.name}</span></span>
@@ -153,8 +198,13 @@ function ShellFrame({ brand }: { brand: Brand }) {
           <div className="topbar-end"><AccountMenu /></div>
         </header>
         <main id="main" ref={main} className="main">
-          {page ? (
+          {page && allowed ? (
             <PageView key={routeKey} page={page} params={app.route.params} query={app.route.query} />
+          ) : page ? (
+            <div className="page">
+              <header className="page-head"><h1 id="page-title" tabIndex={-1}>{page.title ?? page.name}</h1></header>
+              <EmptyState title="Not permitted" message="Your roles do not include this page." action={<a className="btn btn-primary" href={href(app.doc, String(app.doc.navigation.home))}>Go to {app.doc.pages[String(app.doc.navigation.home)]?.title}</a>} />
+            </div>
           ) : (
             <div className="page">
               <header className="page-head"><h1 id="page-title" tabIndex={-1}>Page not found</h1></header>

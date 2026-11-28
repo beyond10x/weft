@@ -124,6 +124,8 @@ export interface ModelMeta {
   enums: Record<string, string[]>;
   commands: Record<string, { inputs: ModelInput[] }>;
   views: Record<string, { params: string[]; fields: string[] }>;
+  /** Every actor of the model: its wire name (the role a principal holds), its grants, its attributes. */
+  actors: Record<string, { wire: string; may: string[]; attributes: string[] }>;
 }
 
 export interface Bundle {
@@ -132,4 +134,6 @@ export interface Bundle {
   actor: Obj;
   hosts: Record<string, Json>;
   model: ModelMeta;
+  /** Other fixture actors (`actors/<name>.yaml` beside `actor.yaml`), chosen with `?actor=<name>`. */
+  actors: Record<string, Obj>;
 }

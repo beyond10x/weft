@@ -87,7 +87,7 @@ function Bars({ rows, x, series, title }: { rows: Json[]; x?: string; series: st
       <ul className="bars" aria-hidden="true">
         {data.map(([k, v]) => (
           <li key={k} className="bar-row">
-            <span className="bar-label">{k}</span>
+            <span className="bar-label" title={k}>{k}</span>
             <span className="bar-track"><span className="bar-fill" style={{ width: `${(v / max) * 100}%` }} /></span>
             <span className="bar-value num">{fmt.number(Math.round(v * 100) / 100)}</span>
           </li>

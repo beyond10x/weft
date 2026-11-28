@@ -3,7 +3,7 @@
 
 import type { ReactNode } from 'react';
 import { EmptyState, ErrorState, Skeleton, Button } from '../../ui/kit.tsx';
-import { actionLabel, useRunAction } from './actions.tsx';
+import { actionLabel, useRunAction, visibleActions } from './actions.tsx';
 import type { ReadState } from '../runtime.tsx';
 import type { Scope } from '../expr.ts';
 import type { Obj } from '../types.ts';
@@ -11,7 +11,7 @@ import type { Obj } from '../types.ts';
 export function EmptyAction({ states, scope }: { states?: Obj; scope: Scope }) {
   const run = useRunAction();
   const a = states?.empty?.action;
-  if (!a) return null;
+  if (!a || !visibleActions([a], scope).length) return null;
   return <Button kind="primary" onClick={() => void run(a, scope)}>{actionLabel(a)}</Button>;
 }
 

@@ -56,7 +56,9 @@ $ npm --prefix product/console run dev
 Open `http://127.0.0.1:4416/` and choose a console: `/operator/` or `/account/`. The page
 switches between light and dark with the system setting. The account menu at the top right can
 fix it to one of them. Add `?latency=0` before the `#` to answer reads without the simulated
-delay.
+delay. The account console signs in with the roles `deployer` and `account_admin`; add
+`?actor=deployer` to sign in with `deployer` only. The menu and the pages then leave out what that
+role is not granted, such as the formations list and "New formation".
 
 To serve a production build instead:
 
@@ -79,7 +81,15 @@ The build goes to `target/console/dist`. `preview` serves it on port 4417.
   forms. It then draws each section kind (collection, record, metric, chart, filter bar, form)
   with its own components. The two apps share the renderer and the component library. Each has
   its own accent color from its document's tokens.
+- **The signed-in actor.** Its roles name actors of the specification. A page shows when the actor
+  holds the page's actor; an action shows when its command is granted. An input the caller owns,
+  such as `account_id`, is always the actor's own. Every read of the account console that the
+  specification can scope to one account binds `account_id` to the actor's account. The reads it
+  cannot scope yet are listed in `product/console/test/unscoped-reads.txt`, and that list may only
+  shrink.
 - **The checks.** `task check` runs `tools/check.d/40-console.sh`. That script checks both
   documents and their host components, then runs the type check and the unit tests, builds once,
   and runs Playwright. Playwright loads every page of both apps. It fails on any axe violation
-  (WCAG 2.1 A and AA) and on horizontal overflow at 390 px wide.
+  (WCAG 2.1 A and AA) and on horizontal overflow at 390 px wide. At 1280 px it fails on content
+  that is cut off, and on a table that scrolls sideways without a shadow on the hidden side or
+  without keyboard focus.

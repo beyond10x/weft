@@ -49,6 +49,7 @@ views:
   weft.metering.Budgets: metering.yaml
   weft.metering.Statements: metering.yaml
   weft.observability.Alerts: metering.yaml
+  weft.observability.AlertRules: metering.yaml
 derived:
   weft.catalog.FormationServiceBindings:
     same_as: weft.catalog.ServiceBindingList

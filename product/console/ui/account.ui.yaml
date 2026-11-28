@@ -185,7 +185,7 @@ pages:
         reads: {view: weft.observability.Alerts, key: alert_id, params: {account_id: actor.account_id}}
         sort: {by: fired_at, dir: desc, mode: client}
         columns:
-          - {field: alert_rule_id, label: Rule}
+          - {field: alert_rule_id, label: Rule, host: AlertRuleName, reason: "ess-ui/1 label_from reads its view without params; AlertRules takes account_id", stands_in_for: none, reads: {view: weft.observability.AlertRules, params: {account_id: actor.account_id}}}
           - {field: value, as: number}
           - {field: fired_at, label: Fired, as: timestamp}
           - {field: state, as: badge, tone_by: alert_state}
@@ -861,17 +861,20 @@ pages:
         - {name: side, sections: [summary], width: narrow}
         - {name: main, sections: [bindings, backups, restores], width: wide}
     sections:
+      # ServiceInstanceList(account_id), not ServiceInstanceDetail(service_instance_id): only the list
+      # is scoped to the account (as formations.detail reads Formations). It has no degraded_reason:
+      # shown again once the model scopes ServiceInstanceDetail by account_id.
       - name: summary
-        component: record
+        component: collection
         title: Service
-        reads: {view: weft.catalog.ServiceInstanceDetail, params: {service_instance_id: params.service_instance_id}}
-        fields:
-          - name
+        style: list
+        reads: {view: weft.catalog.ServiceInstanceList, key: service_instance_id, params: {account_id: actor.account_id}, filter: "row.service_instance_id == params.service_instance_id"}
+        columns:
+          - {field: name, label: Service}
           - {field: kind, as: badge, tone: info}
           - {field: plan_id, label: Plan}
           - {field: durability}
           - {field: sleep_policy, label: Sleep, as: map}
-          - {field: degraded_reason, label: Degraded because}
           - {field: state, as: badge, tone_by: service_instance}
       - name: bindings
         component: collection

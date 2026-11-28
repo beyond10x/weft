@@ -8,7 +8,9 @@ import { FixtureServer, NoFixture } from './fixtures.ts';
 import type { ReadResult } from './fixtures.ts';
 import { values } from './expr.ts';
 import type { Scope } from './expr.ts';
-import type { Bundle, Doc, Json, Obj, Page, Reads, Tone } from './types.ts';
+import { grantsOf, pageAllowed as allowedPage } from './grants.ts';
+import type { Grants } from './grants.ts';
+import type { Bundle, Doc, Json, ModelMeta, Obj, Page, Reads, Tone } from './types.ts';
 import type { Route } from './route.ts';
 
 export interface HostProps {
@@ -53,6 +55,18 @@ export interface AppCtx {
   hosts: Record<string, HostComponent>;
   readView: (view: string, params: Record<string, Json>) => Promise<ReadResult>;
   peekView: (view: string, params: Record<string, Json>) => ReadResult | undefined;
+  /** The model actors the signed-in actor holds and the commands they grant (grants.ts). */
+  grants: Grants;
+  /** `actor.may(<command>)`. */
+  may: (command: string) => boolean;
+  /** A page shows for this actor (`navigation.visibility: by_actor_grants`). */
+  pageAllowed: (page: string) => boolean;
+}
+
+/** The signed-in actor of fixture mode: `actor.yaml`, or `actors/<name>.yaml` chosen with `?actor=<name>`. */
+export function fixtureActor(bundle: Bundle, search: string): Obj {
+  const name = new URLSearchParams(search).get('actor');
+  return (name && bundle.actors?.[name]) || bundle.actor;
 }
 
 export const App = createContext<AppCtx | null>(null);
@@ -161,17 +175,35 @@ export function useRead(r: Reads | undefined, scope: Scope): ReadState {
   return { status: cur.status, rows: cur.rows, total: cur.total, error: cur.error, retry, view, params: params ?? {} };
 }
 
-/** `label_from`: the rows of a view read once, without params, as a map key → label. */
-export function useLabelMap(spec: { view: string; field: string; key?: string } | undefined): Map<string, string> | undefined {
+/**
+ * The params of a `label_from` read. ess-ui/1 reads a `label_from` view without params (gap 7 of
+ * the pull request: it cannot pass them); this renderer's convention binds each param the model
+ * gives the view by name, from the signed-in actor first (AlertRules(account_id) reads the actor's
+ * account), then from the page params. `undefined` when a param has no value: the map is not read.
+ */
+export function labelFromParams(model: ModelMeta, view: string, actor: Obj | undefined, params: Record<string, Json> | undefined): Record<string, Json> | undefined {
+  const out: Record<string, Json> = {};
+  for (const p of model.views[view]?.params ?? []) {
+    const v = missing(actor?.[p]) ? params?.[p] : actor![p];
+    if (missing(v)) return undefined;
+    out[p] = v;
+  }
+  return out;
+}
+
+/** `label_from`: the rows of a view read once, with the params `labelFromParams` binds, as a map key → label. */
+export function useLabelMap(spec: { view: string; field: string; key?: string } | undefined, pageParams?: Record<string, Json>): Map<string, string> | undefined {
   const app = useApp();
-  const [map, setMap] = useState<Map<string, string> | undefined>(() => (spec ? toMap(app.peekView(spec.view, {})?.rows, spec) : undefined));
+  const params = spec ? labelFromParams(app.bundle.model, spec.view, app.actor, pageParams) : undefined;
+  const [map, setMap] = useState<Map<string, string> | undefined>(() => (spec && params ? toMap(app.peekView(spec.view, params)?.rows, spec) : undefined));
+  const sig = JSON.stringify(params);
   useEffect(() => {
-    if (!spec) return;
+    if (!spec || !params) return;
     let live = true;
-    app.readView(spec.view, {}).then((r) => live && setMap(toMap(r.rows, spec)), () => undefined);
+    app.readView(spec.view, params).then((r) => live && setMap(toMap(r.rows, spec)), () => undefined);
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec?.view, spec?.field, spec?.key]);
+  }, [spec?.view, spec?.field, spec?.key, sig]);
   return map;
 }
 
@@ -250,8 +282,13 @@ export function useAppRuntime(bundle: Bundle, route: Route, go: (h: string) => v
   const [confirmState, setConfirm] = useState<(ConfirmOptions & { resolve: (ok: boolean) => void }) | null>(null);
   const confirm = useCallback((o: ConfirmOptions) => new Promise<boolean>((resolve) => setConfirm({ ...o, resolve })), []);
 
+  const actor = useMemo(() => fixtureActor(bundle, window.location.search), [bundle]);
+  const grants = useMemo(() => grantsOf(bundle.model, actor), [bundle, actor]);
+  const may = useCallback((c: string) => grants.commands.has(c), [grants]);
+  const pageAllowed = useCallback((p: string) => allowedPage(bundle.doc, p, grants), [bundle, grants]);
+
   const app: AppCtx = {
-    bundle, doc: bundle.doc, server, actor: bundle.actor, route, go, setQuery, shell, setShell, notify, runCommand, confirm, hosts, readView, peekView,
+    bundle, doc: bundle.doc, server, actor, route, go, setQuery, shell, setShell, notify, runCommand, confirm, hosts, readView, peekView, grants, may, pageAllowed,
   };
   return { app, toasts, dismiss, confirmState, closeConfirm: (ok: boolean) => { confirmState?.resolve(ok); setConfirm(null); } };
 }

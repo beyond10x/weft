@@ -1,10 +1,12 @@
 // The host components of the two consoles: what the documents' host slots (`host: <Name>`) stand
 // in for, because ess-ui/1 has no node for them. Meters draw a value against its limit; LogTail
-// draws the lines of an instance's log streams (fixture mode: recorded lines).
+// draws the lines of an instance's log streams (fixture mode: recorded lines); AlertRuleName names
+// an alert rule (a label_from with a param).
 
 import { useMemo, useState } from 'react';
+import { useLabelMap } from '../renderer/runtime.tsx';
 import type { HostComponent, HostProps } from '../renderer/runtime.tsx';
-import { Meter, EmptyState } from '../ui/kit.tsx';
+import { EmptyState, IdText, Meter } from '../ui/kit.tsx';
 import { Icon } from '../ui/Icon.tsx';
 import * as fmt from '../renderer/format.ts';
 import type { Json } from '../renderer/types.ts';
@@ -50,6 +52,20 @@ const BudgetMeter: HostComponent = (p) => {
   const amount = n(r.amount);
   const spent = n(r.spent);
   return <Meter value={spent} max={amount} label={`Spent of the ${fmt.words(String(r.measure ?? ''))} budget`} text={`${fmt.number(spent)} of ${fmt.number(amount)}`} />;
+};
+
+/**
+ * The name of an alert rule for its id: what `label_from` would draw, but AlertRules takes
+ * account_id and ess-ui/1 reads a `label_from` view without params. The slot names the scoped read
+ * (`reads: AlertRules(account_id: actor.account_id)`); useLabelMap (runtime.tsx) binds the param
+ * from the signed-in actor. The id, as an id, until the name is known.
+ */
+const AlertRuleName: HostComponent = (p) => {
+  const names = useLabelMap({ view: p.slot.reads?.view ?? 'weft.observability.AlertRules', field: 'name', key: 'alert_rule_id' });
+  const id = p.value === null || p.value === undefined ? '' : String(p.value);
+  const name = names?.get(id);
+  if (!id) return <span className="muted">—</span>;
+  return name ? <span className="label-from" title={id}>{name}</span> : <IdText value={id} />;
 };
 
 interface Line { at: string; stream: string; text: string }
@@ -118,4 +134,5 @@ export const accountHosts: Record<string, HostComponent> = {
   StepMeter,
   BudgetMeter,
   LogTail,
+  AlertRuleName,
 };

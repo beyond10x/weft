@@ -15,7 +15,8 @@ import type { RowsReport } from './nodes/Collection.tsx';
 import { windowValue } from './nodes/FilterBar.tsx';
 import { ActionBar } from './nodes/actions.tsx';
 import { Badge, Card, EmptyState, Modal } from '../ui/kit.tsx';
-import type { Json, Obj, Page, Section } from './types.ts';
+import { actionAllowed } from './grants.ts';
+import type { Action, Json, Obj, Page, Section } from './types.ts';
 
 function parseQuery(v: string | undefined): Json {
   if (v === undefined) return undefined;
@@ -53,16 +54,16 @@ function Header({ page, scope, store, sectionFor }: { page: Page; scope: Scope; 
   const badgeTone = h.badge?.tone_by ? toneOf(badgeText, app.doc.tone_maps?.[h.badge.tone_by], 'neutral') : toneOf(badgeText, undefined, h.badge?.tone ?? 'neutral');
   const crumbParent = page.name.includes('.') ? page.name.split('.')[0] : undefined;
   const parent = crumbParent && app.doc.pages[crumbParent] ? app.doc.pages[crumbParent] : undefined;
-  const sw: string[] = Array.isArray(h.switch) ? h.switch : [];
+  const sw: string[] = (Array.isArray(h.switch) ? h.switch : []).filter((p: string) => app.pageAllowed(p));
   const h1 = useRef<HTMLHeadingElement>(null);
   useEffect(() => { document.title = `${title} · ${app.doc.title ?? app.doc.app}`; }, [title, app.doc]);
   return (
     <header className="page-head">
       {parent && (
         <nav aria-label="Breadcrumb" className="crumbs">
-          <a href={href(app.doc, parent.name)}>{parent.nav?.label ?? parent.title}</a>
+          {app.pageAllowed(parent.name) ? <a href={href(app.doc, parent.name)}>{parent.nav?.label ?? parent.title}</a> : <span>{parent.nav?.label ?? parent.title}</span>}
           <span aria-hidden="true">/</span>
-          <span aria-current="page">{fromTitle ? title : page.title}</span>
+          <span aria-current="page" title={fromTitle ? title : page.title}>{fromTitle ? title : page.title}</span>
         </nav>
       )}
       <div className="page-title-row">
@@ -209,8 +210,9 @@ export function PageView({ page, params, query }: { page: Page; params: Record<s
       const r = store.get(n);
       return r ? { row: r.rows[0], selection: r.selection } : undefined;
     },
-    may: () => true,
-  }), [state, params, app.actor, app.shell, query, store]);
+    may: app.may,
+    allows: (a: Action) => actionAllowed(app.doc, page, a, app.grants),
+  }), [state, params, app.actor, app.shell, query, store, app.may, app.doc, app.grants, page]);
 
   const ctx: PageCtx = { page, params, state, setState, sections: store, openOverlay, scope };
   const byName = new Map(page.sections.map((s) => [s.name, s]));

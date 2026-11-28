@@ -56,7 +56,7 @@ describe('short forms', () => {
 });
 
 describe('enums by name', () => {
-  const model: ModelMeta = { system: 'm', enums: { 'm.infra.NodeRole': ['Control', 'Worker'], 'm.x.Kind': ['A'], 'm.y.Kind': ['B'] }, commands: {}, views: {} };
+  const model: ModelMeta = { system: 'm', enums: { 'm.infra.NodeRole': ['Control', 'Worker'], 'm.x.Kind': ['A'], 'm.y.Kind': ['B'] }, commands: {}, views: {}, actors: {} };
   it('qualified, by unique suffix, and not when the suffix is ambiguous', () => {
     const d = normalize(doc({ p: { kind: 'detail_page', title: 'P', sections: [] } }));
     expect(findEnum(model, d, 'm.infra.NodeRole')).toEqual(['Control', 'Worker']);

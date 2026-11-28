@@ -156,6 +156,8 @@ export interface Scope {
   section?: (name: string) => { row?: Json; selection?: Json } | undefined;
   /** `actor.may(<command>)`. */
   may?: (command: string) => boolean;
+  /** Whether the actor's grants allow an action (grants.ts `actionAllowed`); absent allows every action. */
+  allows?: (action: Json) => boolean;
 }
 
 export function get(obj: Json, path: string[]): Json {

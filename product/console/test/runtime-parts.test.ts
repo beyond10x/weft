@@ -103,6 +103,27 @@ describe('window, form input, metrics', () => {
       .toEqual({ node_id: 'n1', reason: 'maintenance', account_id: 'acc' });
   });
 
+  it('a hidden input the caller owns takes the actor value over a handed row or param', () => {
+    const inputs = [
+      { name: 'formation_id', type: 'FormationId', optional: false },
+      { name: 'account_id', type: 'AccountId', optional: false },
+      { name: 'tenant_id', type: 'TenantId', optional: false },
+      { name: 'principal_id', type: 'PrincipalId', optional: true },
+    ];
+    const actor = { account_id: 'acc', tenant_id: 'ten', principal_id: 'me' };
+    const handed = { formation_id: 'f1', account_id: 'other-acc', tenant_id: 'other-ten', principal_id: 'someone' };
+    expect(commandInput(inputs, {}, new Set(), handed, actor, {}, new Set(['account_id', 'tenant_id', 'principal_id'])))
+      .toEqual({ formation_id: 'f1', account_id: 'acc', tenant_id: 'ten', principal_id: 'me' });
+    // Without a list, account_id and tenant_id are the caller's.
+    expect(commandInput(inputs, {}, new Set(), handed, actor, {}))
+      .toEqual({ formation_id: 'f1', account_id: 'acc', tenant_id: 'ten', principal_id: 'someone' });
+    // An actor that carries no value (the operator acts on a tenant's row) leaves the handed one.
+    expect(commandInput(inputs, {}, new Set(), { tenant_id: 'row-ten' }, { tenant_id: null, account_id: null }, {}))
+      .toEqual({ tenant_id: 'row-ten' });
+    // `bind` written in the document still wins.
+    expect(commandInput(inputs, {}, new Set(), handed, actor, { account_id: 'bound' }).account_id).toBe('bound');
+  });
+
   it('a control follows `as`, then the input type', () => {
     const e = (t: string) => (t === 'Role' ? ['A'] : undefined);
     expect(controlOf({ field: 'x', name: 'x', as: 'json' }, undefined, e)).toBe('json');

@@ -4,17 +4,24 @@
 
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { useApp } from '../runtime.tsx';
+import { labelFromParams, useApp } from '../runtime.tsx';
 import { Badge, IdText } from '../../ui/kit.tsx';
 import * as fmt from '../format.ts';
 import type { Field, Json, Tone } from '../types.ts';
 
 export type LabelMaps = Record<string, Map<string, string>>;
 
-/** The `label_from` maps of a list of fields, keyed by field name; each view read once without params. */
-export function useLabelMaps(fields: Field[]): LabelMaps {
+/**
+ * The `label_from` maps of a list of fields, keyed by field name; each view read once, with the
+ * params the renderer binds from the actor and the page (`labelFromParams`, a convention: ess-ui/1
+ * reads it without params). A view whose params have no value gets no map.
+ */
+export function useLabelMaps(fields: Field[], pageParams?: Record<string, Json>): LabelMaps {
   const app = useApp();
-  const specs = fields.filter((f) => f.label_from).map((f) => ({ name: f.name, ...f.label_from! }));
+  const specs = fields
+    .filter((f) => f.label_from)
+    .map((f) => ({ name: f.name, ...f.label_from!, params: labelFromParams(app.bundle.model, f.label_from!.view, app.actor, pageParams) }))
+    .filter((s) => s.params !== undefined) as { name: string; view: string; field: string; key?: string; params: Record<string, Json> }[];
   const sig = JSON.stringify(specs);
   const build = (rowsOf: (v: string) => Json[] | undefined): LabelMaps => {
     const out: LabelMaps = {};
@@ -24,11 +31,14 @@ export function useLabelMaps(fields: Field[]): LabelMaps {
     }
     return out;
   };
-  const [maps, setMaps] = useState<LabelMaps>(() => build((v) => app.peekView(v, {})?.rows));
+  const [maps, setMaps] = useState<LabelMaps>(() => {
+    const peeked = new Map(specs.map((s) => [s.view, app.peekView(s.view, s.params)?.rows] as const));
+    return build((v) => peeked.get(v));
+  });
   useEffect(() => {
     if (!specs.length) return;
     let live = true;
-    Promise.all(specs.map((s) => app.readView(s.view, {}).then((r) => [s.view, r.rows] as const, () => [s.view, undefined] as const))).then((all) => {
+    Promise.all(specs.map((s) => app.readView(s.view, s.params).then((r) => [s.view, r.rows] as const, () => [s.view, undefined] as const))).then((all) => {
       if (!live) return;
       const by = new Map(all);
       setMaps(build((v) => by.get(v)));

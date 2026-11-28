@@ -139,6 +139,38 @@ export function Card({ title, count, actions, children, className, id, busy, hea
   );
 }
 
+/**
+ * A box that scrolls sideways when its content is wider (a table): a keyboard-reachable region with
+ * a label. While content is hidden on a side, the box carries `data-overflow` (`start`, `end` or
+ * both) and its frame draws an edge shadow on that side; the attribute is kept on scroll and resize
+ * and is absent when nothing is hidden.
+ */
+export function ScrollRegion({ label, className, children }: { label: string; className: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      const max = el.scrollWidth - el.clientWidth;
+      const at = Math.abs(el.scrollLeft);
+      const sides = max > 1 ? [at > 1 ? 'start' : '', at < max - 1 ? 'end' : ''].filter(Boolean).join(' ') : '';
+      if (sides) el.dataset.overflow = sides;
+      else delete el.dataset.overflow;
+    };
+    update();
+    el.addEventListener('scroll', update, { passive: true });
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(update) : undefined;
+    ro?.observe(el);
+    if (el.firstElementChild) ro?.observe(el.firstElementChild);
+    return () => { el.removeEventListener('scroll', update); ro?.disconnect(); };
+  }, []);
+  return (
+    <div className="scroll-frame">
+      <div ref={ref} className={className} role="region" aria-label={label} tabIndex={0}>{children}</div>
+    </div>
+  );
+}
+
 export interface MenuItem {
   key: string;
   label: string;

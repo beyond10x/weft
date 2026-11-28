@@ -72,8 +72,9 @@ export function useRunAction() {
   }, [app, page]);
 }
 
+/** The actions whose `visible` holds and that the actor's grants allow (`scope.allows`). */
 export function visibleActions(actions: Action[] | undefined, scope: Scope): Action[] {
-  return (actions ?? []).filter((a) => holds(a.visible, scope));
+  return (actions ?? []).filter((a) => holds(a.visible, scope) && (scope.allows?.(a) ?? true));
 }
 
 /** A row of action buttons; the first is primary when `primary` is set. */

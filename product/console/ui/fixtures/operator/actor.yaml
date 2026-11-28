@@ -1,5 +1,6 @@
 # The signed-in actor of the operator console in fixture mode (read by product/console, not part of ess-ui/1).
 # Invented sample data for product/console (fixture mode); no real person, company or host.
+# `roles` are wire names of weft.actors actors (ess/9-actors/actors.yaml, `naming.wire`).
 principal_id: 5ae6e7f9-27ac-49de-b278-4e6c8ff33f98
 tenant_id: null
 account_id: null

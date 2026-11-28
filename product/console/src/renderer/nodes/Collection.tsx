@@ -16,7 +16,7 @@ import type { LabelMaps } from './Value.tsx';
 import { ActionBar, RowMenu, visibleActions } from './actions.tsx';
 import { ReadStates } from './states.tsx';
 import { NodeView } from './NodeView.tsx';
-import { Badge, EmptyState } from '../../ui/kit.tsx';
+import { Badge, EmptyState, ScrollRegion } from '../../ui/kit.tsx';
 import { Icon } from '../../ui/Icon.tsx';
 import type { Action, Field, Json, Obj } from '../types.ts';
 
@@ -53,7 +53,7 @@ export function Collection({ node, scope, title, report }: { node: Obj; scope: S
   const read = useRead(node.reads, scope);
   const columns: Field[] = Array.isArray(node.columns) ? node.columns : [];
   const shownCols = columns.filter((c) => !c.visible || c.visible.includes('row.') || holds(c.visible, scope));
-  const labels = useLabelMaps(columns);
+  const labels = useLabelMaps(columns, scope.params);
   const filtered = useMemo(
     () => (node.reads?.filter ? read.rows.filter((row) => holds(node.reads.filter, { ...scope, row })) : read.rows),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -150,7 +150,7 @@ function useRowLink(node: Obj, scope: Scope) {
   return (row: Json): string | undefined => {
     if (!open?.navigate) return undefined;
     const s = { ...scope, row };
-    if (!holds(open.visible, s)) return undefined;
+    if (!visibleActions([open], s).length) return undefined;
     return href(app.doc, open.navigate.to, values(open.navigate.params, s));
   };
 }
@@ -226,7 +226,7 @@ function Table({ node, scope, rows, columns, labels, title, sort, setSort, tree 
             )}
             {columns.map((f, i) => {
               const raw = row?.[f.field];
-              const prose = !f.as && typeof raw === 'string' && raw.length > 32 && !/^\S+$/.test(raw);
+              const prose = !f.as && typeof raw === 'string' && raw.length > 24 && !/^\S+$/.test(raw);
               const cls = [cellClass(f), prose ? 'cell-prose' : undefined].filter(Boolean).join(' ') || undefined;
               const content = cellValue(f, row, labels, scope, i === 0 && !!to);
               return i === 0 ? (
@@ -251,7 +251,7 @@ function Table({ node, scope, rows, columns, labels, title, sort, setSort, tree 
   };
 
   return (
-    <div className="table-wrap" role="region" aria-label={title ?? 'Rows'} tabIndex={0}>
+    <ScrollRegion className="table-wrap" label={title ?? 'Rows'}>
       <table className="table">
         {title && <caption className="sr-only">{title}</caption>}
         <thead>
@@ -288,7 +288,7 @@ function Table({ node, scope, rows, columns, labels, title, sort, setSort, tree 
           </tbody>
         ))}
       </table>
-    </div>
+    </ScrollRegion>
   );
 }
 

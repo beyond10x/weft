@@ -1,5 +1,6 @@
 // Reads one console's ess-ui/1 document and everything it runs on: the fixtures its `fixtures:`
-// index names, the fixture-mode actor (`actor.yaml`) and host data (`hosts/*.yaml`) beside them,
+// index names, the fixture-mode actor (`actor.yaml`), the other actors a test may sign in as
+// (`actors/*.yaml`, `?actor=<name>`) and host data (`hosts/*.yaml`) beside them,
 // and the part of the ESS model it names (`ess specify compile`). The Vite plugin
 // (`ess-ui-plugin.ts`) turns the result into a module; the unit tests call it directly.
 
@@ -73,15 +74,20 @@ export function loadBundle(app: string, files: string[] = [], ir?: Obj): Bundle 
   const fxDir = raw.fixtures?.dir ? join(UI, raw.fixtures.dir) : UI;
   const actorPath = join(fxDir, 'actor.yaml');
   const actor = existsSync(actorPath) ? (files.push(actorPath), yaml(actorPath)) : {};
-  const hosts: Record<string, Json> = {};
-  const hostDir = join(fxDir, 'hosts');
-  if (existsSync(hostDir)) {
-    for (const f of readdirSync(hostDir).sort()) {
-      if (extname(f) !== '.yaml') continue;
-      files.push(join(hostDir, f));
-      hosts[basename(f, '.yaml')] = yaml(join(hostDir, f));
-    }
-  }
+  const hosts = yamlDir(join(fxDir, 'hosts'), files);
+  const actors = yamlDir(join(fxDir, 'actors'), files);
   const model = modelMeta(ir ?? compileModel(), raw);
-  return { doc, fixtures, actor, hosts, model };
+  return { doc, fixtures, actor, actors, hosts, model };
+}
+
+/** Every `<name>.yaml` of a directory, keyed by name; empty when the directory does not exist. */
+function yamlDir(dir: string, files: string[]): Record<string, Json> {
+  const out: Record<string, Json> = {};
+  if (!existsSync(dir)) return out;
+  for (const f of readdirSync(dir).sort()) {
+    if (extname(f) !== '.yaml') continue;
+    files.push(join(dir, f));
+    out[basename(f, '.yaml')] = yaml(join(dir, f));
+  }
+  return out;
 }

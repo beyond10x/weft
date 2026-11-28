@@ -254,7 +254,11 @@ export function modelMeta(ir: Obj, doc: Json): ModelMeta {
     if (!names.has(name)) continue;
     views[name] = { params: (v.params ?? []).map((p: Obj) => p.name), fields: (v.fields ?? []).map((f: Obj) => f.name) };
   }
-  return { system: ir.system?.name ?? ir.system ?? '', enums, commands, views };
+  const actors: ModelMeta['actors'] = {};
+  for (const [name, a] of Object.entries<Obj>(ir.actors ?? {})) {
+    actors[name] = { wire: a.naming?.wire ?? name, may: a.may ?? [], attributes: (a.attributes ?? []).map((x: Obj) => x.name) };
+  }
+  return { system: ir.system?.name ?? ir.system ?? '', enums, commands, views, actors };
 }
 
 /** An enum by the name a choice gives it: qualified, or the last segments only one enum ends with. */

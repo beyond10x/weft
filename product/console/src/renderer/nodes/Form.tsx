@@ -1,6 +1,7 @@
 // `form`: the fields a person fills for one command (`does`). Each control comes from the field's
 // `as` and the command's input type in the model; an input the form does not show is taken from
-// what the opener handed (a row, the page params), then from the signed-in actor, by name.
+// what the opener handed (a row, the page params), then from the signed-in actor, by name; an input
+// the caller owns (account_id, tenant_id, the actor's attributes) from the actor first.
 
 import { useId, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -8,6 +9,7 @@ import { useApp } from '../runtime.tsx';
 import type { Scope } from '../expr.ts';
 import { holds, values } from '../expr.ts';
 import { findEnum } from '../load.ts';
+import { callerOwned } from '../grants.ts';
 import { useChoiceOptions } from './FilterBar.tsx';
 import { fieldLabel } from './Collection.tsx';
 import { Button } from '../../ui/kit.tsx';
@@ -30,8 +32,15 @@ export function controlOf(f: Field, input: ModelInput | undefined, enumOf: (t: s
   return 'text';
 }
 
-/** The input of a command: shown fields from the draft, the rest by name from what was handed or the actor. */
-export function commandInput(inputs: ModelInput[] | undefined, draft: Draft, shown: Set<string>, handed: Draft, actor: Obj, bound: Draft): Draft {
+const CALLER_OWNED = new Set(['account_id', 'tenant_id']);
+
+/**
+ * The input of a command: `bind` first, shown fields from the draft, the rest by name from what was
+ * handed or the actor. An input the caller owns (`owned`: account_id, tenant_id and the attributes of
+ * the actor) takes the actor's value over a handed row or param, so a row of another account cannot
+ * send its account_id; an actor that carries no value for it leaves the handed one.
+ */
+export function commandInput(inputs: ModelInput[] | undefined, draft: Draft, shown: Set<string>, handed: Draft, actor: Obj, bound: Draft, owned: Set<string> = CALLER_OWNED): Draft {
   const out: Draft = { ...bound };
   if (!inputs) {
     for (const [k, v] of Object.entries(draft)) if (!blank(v)) out[k] = v;
@@ -39,7 +48,8 @@ export function commandInput(inputs: ModelInput[] | undefined, draft: Draft, sho
   }
   for (const i of inputs) {
     if (i.name in out) continue;
-    const v = shown.has(i.name) ? draft[i.name] : handed[i.name] ?? actor?.[i.name];
+    const mine = owned.has(i.name) && !blank(actor?.[i.name]) ? actor[i.name] : undefined;
+    const v = shown.has(i.name) ? draft[i.name] : mine ?? handed[i.name] ?? actor?.[i.name];
     if (!blank(v)) out[i.name] = v;
   }
   return out;
@@ -126,7 +136,7 @@ export function FormView({ node, scope, onDone }: { node: Obj; scope: Scope; onD
     for (const f of fields) if (f.as === 'json' && !blank(d[f.field])) d[f.field] = JSON.parse(String(d[f.field]));
     const shown = new Set(fields.map((f) => f.field));
     const bound = values(node.bind, scope);
-    if (node.does) app.runCommand(node.does, commandInput(inputs, d, shown, handed, app.actor, bound));
+    if (node.does) app.runCommand(node.does, commandInput(inputs, d, shown, handed, app.actor, bound, callerOwned(app.bundle.model, app.actor)));
     onDone?.();
   };
 
