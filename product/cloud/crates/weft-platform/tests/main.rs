@@ -1406,3 +1406,326 @@ mod ports_classes {
         }
     }
 }
+
+/// `workloads`: the N3 port, a long-lived supervised workload, driven through the in-memory stub
+/// adapter of `local::stub`. No place is reached: these cases need no daemon.
+mod workloads {
+    use std::time::Duration;
+
+    use weft_platform::local::stub::{StubEvent, StubWorkloads};
+    use weft_platform::node::{
+        KillScope, Observation, PrestartStep, ProcessExit, RestartMode, RestartRule, StartFailure,
+        StopEnd, StopRule, WorkloadError, WorkloadKey, WorkloadSpec, WorkloadState, Workloads,
+    };
+    use weft_platform::Refusal;
+
+    fn key() -> WorkloadKey {
+        WorkloadKey::new("assignment-1", "main")
+    }
+
+    fn observe(port: &dyn Workloads) -> Observation {
+        port.observe(&key()).expect("the stub knows the workload")
+    }
+
+    /// The acceptance of the port: start, running, an exit with code 3, a restart, and a stop
+    /// whose grace runs out so the kill scope is applied, each state read through the port.
+    #[test]
+    fn a_workload_starts_runs_exits_3_restarts_and_a_stop_past_its_grace_kills_its_scope() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        let spec = WorkloadSpec::new(["/usr/local/bin/slot", "serve"])
+            .env("HOME", "/var/lib/slot-build")
+            .working_dir("/srv/slot")
+            .run_as("build")
+            .prestart(PrestartStep::new(["/bin/true"]))
+            .stop(StopRule::new(Duration::from_secs(2), KillScope::Group));
+
+        let started = port.start(&key(), &spec).expect("the start is accepted");
+        assert_eq!(started.state, WorkloadState::Starting, "{started:?}");
+        let running = observe(port);
+        assert_eq!(running.state, WorkloadState::Running, "{running:?}");
+        assert_eq!(running.restarts, 0, "{running:?}");
+
+        stub.exit(&key(), ProcessExit::Code(3));
+        let exited = observe(port);
+        assert_eq!(exited.state, WorkloadState::Exited, "{exited:?}");
+        assert_eq!(exited.last_exit, Some(ProcessExit::Code(3)), "{exited:?}");
+
+        let restarting = port.restart(&key()).expect("the restart is accepted");
+        assert_eq!(
+            restarting.state,
+            WorkloadState::Restarting,
+            "{restarting:?}"
+        );
+        let running = observe(port);
+        assert_eq!(running.state, WorkloadState::Running, "{running:?}");
+        assert_eq!(running.restarts, 1, "{running:?}");
+
+        stub.exceed_grace(&key());
+        let rule = StopRule::new(Duration::from_secs(2), KillScope::Group);
+        let stopped = port.stop(&key(), &rule).expect("the stop is accepted");
+        assert_eq!(stopped.state, WorkloadState::Stopped, "{stopped:?}");
+        assert_eq!(
+            stopped.stopped,
+            Some(StopEnd::Killed(KillScope::Group)),
+            "{stopped:?}"
+        );
+        assert_eq!(observe(port), stopped);
+
+        let commands = stub
+            .events()
+            .into_iter()
+            .filter(|event| matches!(event, StubEvent::Command { .. }))
+            .count();
+        assert_eq!(
+            commands, 2,
+            "the command ran once and once more after the restart"
+        );
+        assert!(
+            stub.events().contains(&StubEvent::Stopped {
+                key: key(),
+                rule,
+                end: StopEnd::Killed(KillScope::Group),
+            }),
+            "the stop reached the stub with its grace and kill scope: {:?}",
+            stub.events()
+        );
+    }
+
+    /// A stop that the process answers within its grace ends without the kill.
+    #[test]
+    fn a_stop_within_the_grace_applies_no_kill() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        port.start(&key(), &WorkloadSpec::new(["sleep", "infinity"]))
+            .expect("the start is accepted");
+        let rule = StopRule::new(Duration::from_secs(5), KillScope::Mixed);
+        let stopped = port.stop(&key(), &rule).expect("the stop is accepted");
+        assert_eq!(stopped.state, WorkloadState::Stopped, "{stopped:?}");
+        assert_eq!(stopped.stopped, Some(StopEnd::WithinGrace), "{stopped:?}");
+    }
+
+    /// The spec's restart rule: `OnFailure` restarts after exit 3, not after exit 0; `Always`
+    /// keeps the process down on an exit code it names in `keep_down_on_exit`.
+    #[test]
+    fn the_restart_rule_of_the_spec_restarts_by_policy_and_keeps_down_on_a_named_code() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        let on_failure = WorkloadSpec::new(["daemon"])
+            .restart(RestartRule::new(RestartMode::OnFailure, Duration::ZERO));
+        port.start(&key(), &on_failure)
+            .expect("the start is accepted");
+        observe(port);
+        stub.exit(&key(), ProcessExit::Code(3));
+        let restarting = observe(port);
+        assert_eq!(
+            restarting.state,
+            WorkloadState::Restarting,
+            "{restarting:?}"
+        );
+        assert_eq!(
+            restarting.last_exit,
+            Some(ProcessExit::Code(3)),
+            "{restarting:?}"
+        );
+        let running = observe(port);
+        assert_eq!(running.state, WorkloadState::Running, "{running:?}");
+        assert_eq!(running.restarts, 1, "{running:?}");
+        stub.exit(&key(), ProcessExit::Code(0));
+        assert_eq!(observe(port).state, WorkloadState::Exited);
+
+        let other = WorkloadKey::new("assignment-1", "refresh");
+        let always = WorkloadSpec::new(["refresh"])
+            .restart(RestartRule::new(RestartMode::Always, Duration::ZERO).keep_down_on_exit([2]));
+        port.start(&other, &always).expect("the start is accepted");
+        port.observe(&other).expect("known");
+        stub.exit(&other, ProcessExit::Code(2));
+        let down = port.observe(&other).expect("known");
+        assert_eq!(down.state, WorkloadState::Exited, "{down:?}");
+        assert_eq!(down.last_exit, Some(ProcessExit::Code(2)), "{down:?}");
+    }
+
+    /// A restart waits the rule's delay: `Restarting` until it passed.
+    #[test]
+    fn a_restart_by_the_rule_waits_its_delay() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        let delay = Duration::from_millis(200);
+        let spec =
+            WorkloadSpec::new(["daemon"]).restart(RestartRule::new(RestartMode::Always, delay));
+        port.start(&key(), &spec).expect("the start is accepted");
+        observe(port);
+        stub.exit(&key(), ProcessExit::Code(1));
+        assert_eq!(observe(port).state, WorkloadState::Restarting);
+        assert_eq!(observe(port).state, WorkloadState::Restarting);
+        std::thread::sleep(delay);
+        assert_eq!(observe(port).state, WorkloadState::Running);
+    }
+
+    /// Prestart steps run in list order before the command; a step that exits non-zero ends the
+    /// start: the command never runs and the workload does not reach `Running`.
+    #[test]
+    fn a_prestart_step_that_fails_keeps_the_workload_from_running() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        let spec = WorkloadSpec::new(["daemon"])
+            .prestart(PrestartStep::new(["first"]))
+            .prestart(PrestartStep::new(["second"]))
+            .prestart(PrestartStep::new(["third"]));
+        let failure = StartFailure::Prestart {
+            step: 1,
+            exit: ProcessExit::Code(4),
+        };
+        stub.fail_start(&key(), failure.clone());
+        port.start(&key(), &spec).expect("the start is accepted");
+        let failed = observe(port);
+        assert_eq!(failed.state, WorkloadState::Failed, "{failed:?}");
+        assert_eq!(failed.failure, Some(failure), "{failed:?}");
+        assert_eq!(observe(port).state, WorkloadState::Failed);
+        let ran: Vec<_> = stub
+            .events()
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StubEvent::Prestart { .. } | StubEvent::Command { .. }
+                )
+            })
+            .collect();
+        assert_eq!(
+            ran,
+            vec![
+                StubEvent::Prestart {
+                    key: key(),
+                    step: 0,
+                    privileged: false,
+                },
+                StubEvent::Prestart {
+                    key: key(),
+                    step: 1,
+                    privileged: false,
+                },
+            ]
+        );
+    }
+
+    /// The hooks that make a start fail: a refusal of the place, and a command that does not
+    /// start.
+    #[test]
+    fn a_start_can_be_refused_or_fail_to_start_its_command() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        let refusal = WorkloadError::Shared(Refusal::Unavailable {
+            detail: "the supervisor did not answer".to_owned(),
+        });
+        stub.refuse_start(&key(), refusal.clone());
+        assert_eq!(
+            port.start(&key(), &WorkloadSpec::new(["daemon"])),
+            Err(refusal)
+        );
+        assert_eq!(
+            port.observe(&key()),
+            Err(WorkloadError::UnknownWorkload(key()))
+        );
+
+        let failure = StartFailure::Command {
+            reason: "no such file: daemon".to_owned(),
+        };
+        stub.fail_start(&key(), failure.clone());
+        port.start(&key(), &WorkloadSpec::new(["daemon"]))
+            .expect("the start is accepted");
+        let failed = observe(port);
+        assert_eq!(failed.state, WorkloadState::Failed, "{failed:?}");
+        assert_eq!(failed.failure, Some(failure), "{failed:?}");
+    }
+
+    /// A privileged prestart step is passed as such; an adapter that cannot run it refuses
+    /// `NotServed` by name, before anything runs.
+    #[test]
+    fn a_privileged_prestart_step_is_refused_not_served_where_the_adapter_cannot_run_it() {
+        let step = PrestartStep::new(["/bin/sh", "provision.sh", "start-pre"]).privileged(true);
+        let spec = WorkloadSpec::new(["daemon"]).prestart(step);
+
+        let serving = StubWorkloads::new();
+        serving.start(&key(), &spec).expect("the start is accepted");
+        assert!(serving.events().contains(&StubEvent::Prestart {
+            key: key(),
+            step: 0,
+            privileged: true,
+        }));
+
+        let unprivileged = StubWorkloads::without_privileged();
+        assert_eq!(
+            unprivileged.start(&key(), &spec),
+            Err(WorkloadError::Shared(Refusal::NotServed {
+                operation: "prestart.privileged".to_owned(),
+            }))
+        );
+        assert!(
+            unprivileged.events().is_empty(),
+            "{:?}",
+            unprivileged.events()
+        );
+    }
+
+    /// A second start of a running key answers its observation and starts nothing.
+    #[test]
+    fn a_second_start_of_a_running_key_answers_its_observation() {
+        let stub = StubWorkloads::new();
+        let port: &dyn Workloads = &stub;
+        let spec = WorkloadSpec::new(["daemon"]);
+        port.start(&key(), &spec).expect("the start is accepted");
+        let running = observe(port);
+        assert_eq!(port.start(&key(), &spec), Ok(running));
+        let commands = stub
+            .events()
+            .into_iter()
+            .filter(|event| matches!(event, StubEvent::Command { .. }))
+            .count();
+        assert_eq!(commands, 1);
+    }
+
+    /// A spec without a command, or with a prestart step without one, is refused `Invalid`.
+    #[test]
+    fn a_spec_without_a_command_is_refused_invalid() {
+        let stub = StubWorkloads::new();
+        let empty: [&str; 0] = [];
+        assert!(matches!(
+            stub.start(&key(), &WorkloadSpec::new(empty)),
+            Err(WorkloadError::Shared(Refusal::Invalid { field, .. })) if field == "argv"
+        ));
+        let spec = WorkloadSpec::new(["daemon"]).prestart(PrestartStep::new(empty));
+        assert!(matches!(
+            stub.start(&key(), &spec),
+            Err(WorkloadError::Shared(Refusal::Invalid { field, .. })) if field == "prestart[0].argv"
+        ));
+        assert!(stub.events().is_empty(), "{:?}", stub.events());
+    }
+
+    /// `RestartRule::restarts_after`, the rule an adapter or the agent applies after an exit.
+    #[test]
+    fn the_restart_rule_decides_each_exit() {
+        let never = RestartRule::default();
+        let on_failure = RestartRule::new(RestartMode::OnFailure, Duration::ZERO);
+        let always = RestartRule::new(RestartMode::Always, Duration::ZERO).keep_down_on_exit([2]);
+        let cases = [
+            (&never, ProcessExit::Code(1), false),
+            (&never, ProcessExit::Signal, false),
+            (&on_failure, ProcessExit::Code(0), false),
+            (&on_failure, ProcessExit::Code(1), true),
+            (&on_failure, ProcessExit::Signal, true),
+            (&always, ProcessExit::Code(0), true),
+            (&always, ProcessExit::Code(1), true),
+            (&always, ProcessExit::Code(2), false),
+            (&always, ProcessExit::Signal, true),
+        ];
+        for (rule, exit, restarts) in cases {
+            assert_eq!(
+                rule.restarts_after(exit),
+                restarts,
+                "{rule:?} after {exit:?}"
+            );
+        }
+        assert_eq!(never.policy, RestartMode::Never);
+    }
+}
