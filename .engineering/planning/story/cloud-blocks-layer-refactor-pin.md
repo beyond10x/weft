@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-layer-refactor-pin
 kind: story
-status: draft
+status: active
 title: The pin moves to cloudspec's layer refactor and scope-isolation guard (59129eb)
 relations:
 - decomposes: epic:cloud-blocks
@@ -23,7 +23,10 @@ scope:
   path: tests/fixtures
 - confidence: cited
   path: website
-revision: 8
+revision: 10
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T11:56:16Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T11:56:16Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
