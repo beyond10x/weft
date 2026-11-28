@@ -8,28 +8,39 @@ relations:
 - decomposes: epic:cloud-blocks
 - serves: vision:weft
 - depends_on: story:cloud-blocks-account-scope
-revision: 1
+- depends_on: story:cloud-blocks-cluster-pinning
+- depends_on: story:cloud-blocks-runtime-fields
+scope:
+- confidence: cited
+  path: ess/6-delivery/deployments.yaml
+- confidence: cited
+  path: ess/components.yaml
+revision: 3
 ---
 ## Epic
 
-Decomposes `epic:cloud-blocks`: policies, owners and grants after the move; the spec validates.
+Decomposes `epic:cloud-blocks`: policies and owners after the move; the combined spec validates.
 
 ## Outcome
 
-1. `components.yaml`: the 5 bindings that name moved commands follow them; owners of the domains
-   `architecture`, `scope`, `topology`, `limits` and `services`; the edge accepts.
-2. `6-delivery/deployments.yaml` keeps `rollback_of`.
-3. `OpenScope` and `CloseScope` are granted to weft's actors.
+1. `components.yaml`: the 5 binding policies the blocks left empty (`already-requested`,
+   `already-counted` cut) get a policy again; owners of the domains `architecture`, `scope`,
+   `topology`, `limits` and `services`; the edge accepts.
+2. `6-delivery/deployments.yaml`: `RollbackPlanned` stops setting `rollback_of`, which D7 dropped
+   from `Plan`.
 
 ## Scope
 
-`ess/components.yaml` (all but `cluster-create-node-pool`), `ess/6-delivery/deployments.yaml`,
-`ess/9-actors/actors.yaml` (grants of OpenScope and CloseScope only).
+`ess/components.yaml` (all but the binding `cluster-create-node-pool`, its conversion and the
+`AccountCreated -> OpenScope` binding), `ess/6-delivery/deployments.yaml`.
 
 ## Acceptance
 
 1. `ess specify validate --path ess --strict-requires` exits 0.
 2. `tools/check-stamped-time.sh` exits 0.
+3. The compiled model (`ess specify compile --path ess --format json`) names an owning component
+   for each of `weft.architecture`, `weft.scope`, `weft.topology`, `weft.limits` and
+   `weft.services`.
 
 ## Rules for this work
 

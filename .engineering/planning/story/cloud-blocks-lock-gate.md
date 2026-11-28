@@ -7,7 +7,25 @@ title: The gate refuses a vendored cloudspec copy that differs from its lock or 
 relations:
 - decomposes: epic:cloud-blocks
 - serves: vision:weft
-revision: 1
+- depends_on: story:cloud-blocks-vendor
+scope:
+- confidence: cited
+  path: .github/workflows/gate.yml
+- confidence: cited
+  path: AGENTS.md
+- confidence: cited
+  path: Taskfile.yml
+- confidence: cited
+  path: tools/check-vendor-lock.sh
+- confidence: cited
+  path: tools/check.d/15-vendor-lock.sh
+- confidence: cited
+  path: tools/fixtures/vendor-lock
+- confidence: cited
+  path: tools/slow.d/20-vendor-fresh.sh
+- confidence: cited
+  path: tools/test-vendor-lock.sh
+revision: 3
 ---
 ## Epic
 
@@ -16,28 +34,38 @@ Decomposes `epic:cloud-blocks`: the vendored copy cannot drift from its pin unno
 ## Outcome
 
 1. `tools/check-vendor-lock.sh` (POSIX sh, no git, no network) checks `ess/cloud/cloud.lock`: its
-   format and `system weft`; its `commit` equals `CLOUDSPEC_REV` in `Taskfile.yml`; every
-   `output` digest matches the file; no YAML under `ess/cloud/` that the lock does not list.
+   format is `cloudspec-vendor/2` (with `exclude` lines) and its system `weft`; its `commit`
+   equals `CLOUDSPEC_REV` in `Taskfile.yml`; every `output` digest matches the file; no YAML
+   under `ess/cloud/` that the lock does not list; every `output` is listed in
+   `ess/ess-inputs.yaml`.
 2. It runs in `task check` (`tools/check.d/15-vendor-lock.sh`) with a test of each refusal
    (`tools/test-vendor-lock.sh` and a fixture).
 3. The slow lane (`tools/slow.d/20-vendor-fresh.sh`) fetches cloudspec at `CLOUDSPEC_REV` into
    the build directory and runs its `scripts/vendor.sh --check ess/cloud`; it runs when
    `ess/cloud/**` or `CLOUDSPEC_REV` changed. CI job `vendor-fresh` in `gate.yml` does the same.
 4. `task vendor-update REV=<sha>` fetches, runs `vendor.sh --ref <sha> weft ess/cloud` with the
-   excludes of D-a, and sets `CLOUDSPEC_REV`.
+   excludes of D-a, and sets `CLOUDSPEC_REV`. This story adds the task; it does not change the
+   pin (`story:cloud-blocks-vendor` sets it).
 
 ## Scope
 
 `tools/check-vendor-lock.sh`, `tools/check.d/15-vendor-lock.sh`, `tools/test-vendor-lock.sh`,
-`tools/fixtures/vendor-lock/`, `tools/slow.d/20-vendor-fresh.sh`, `Taskfile.yml`,
-`.github/workflows/gate.yml`, `AGENTS.md`.
+`tools/fixtures/vendor-lock/`, `tools/slow.d/20-vendor-fresh.sh`, `Taskfile.yml` (task
+`vendor-update` only), `.github/workflows/gate.yml`, `AGENTS.md` (a new section "Vendored
+blocks"; `story:cloud-blocks-layers` edits the layer section after this story).
 
 ## Acceptance
 
-1. `tools/test-vendor-lock.sh` passes and shows the check refusing each of: one changed byte in a
-   listed file, an unlisted YAML file, a lock `commit` that differs from `CLOUDSPEC_REV`.
-2. `tools/check-vendor-lock.sh` exits 0 on the vendored tree with networking off
-   (`unshare -rn`).
+1. `tools/test-vendor-lock.sh` exits 0 and shows the check exiting 1 on each of: a format other
+   than `cloudspec-vendor/2`, a system other than `weft`, a lock `commit` that differs from
+   `CLOUDSPEC_REV`, one changed byte in a listed file, an unlisted YAML file, an `output` missing
+   from `ess-inputs.yaml`.
+2. `tools/check-vendor-lock.sh` exits 0 on the tree of `story:cloud-blocks-vendor` with
+   networking off (`unshare -rn`).
+3. `tools/slow.d/20-vendor-fresh.sh` exits 0 on that tree, and 1 after one byte of an
+   `ess/cloud/` file changes.
+4. `task vendor-update REV=<CLOUDSPEC_REV>` exits 0 and leaves `git diff --exit-code ess/cloud
+   Taskfile.yml` clean.
 
 ## Rules for this work
 

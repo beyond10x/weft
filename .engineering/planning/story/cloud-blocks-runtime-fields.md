@@ -8,7 +8,12 @@ relations:
 - decomposes: epic:cloud-blocks
 - serves: vision:weft
 - depends_on: story:cloud-blocks-account-scope
-revision: 1
+scope:
+- confidence: cited
+  path: ess/1-infrastructure/infrastructure.yaml
+- confidence: cited
+  path: ess/2-tenancy/access.yaml
+revision: 3
 ---
 ## Epic
 
@@ -26,8 +31,12 @@ Decomposes `epic:cloud-blocks`: the run-time fields the blocks dropped get a wef
 ## Acceptance
 
 1. `ess specify validate --path ess --strict-requires` reports nothing in either file.
-2. The conformance scenario of `ConfigureAccess` followed by `CloudAccessOf` returns the
-   configured `access_mode`.
+2. `slot --timeout 30m tools/synth-domain.sh access` reports 0 failed scenarios of
+   `weft.access`, and its suite holds a passing scenario of `ConfigureAccess` whose outcome sets
+   `access_mode`.
+3. `slot --timeout 30m tools/synth-domain.sh infrastructure` reports 0 failed scenarios, and its
+   suite holds a passing scenario of `ScaleControlPlane` whose outcome sets `control_plane`.
+   (Both runs take about 80 s each and run outside the test step, one at a time.)
 
 ## Rules for this work
 

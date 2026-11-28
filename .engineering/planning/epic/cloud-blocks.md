@@ -6,7 +6,7 @@ status: draft
 title: weft's spec takes cloudspec's blocks as a pinned, renamed copy and keeps only its run-time records and its example
 relations:
 - serves: vision:weft
-revision: 2
+revision: 3
 ---
 ## Order
 
@@ -16,7 +16,8 @@ consumer vendors cloudspec's blocks as a renamed copy at a pinned commit. D7 A: 
 design-time pieces; weft keeps its run-time records (`Instance`, `PlacementDecision`,
 `SecretDelivery`, `Release`, `ReleaseStep`, `Drift`, `Alert`, `Engine`, `OfferingPlan`, the actors
 `Scheduler`, `NodeAgent`, `ControlPlane`). The cloudspec session sent removal request R3 with the
-pin 7f22943d00b637b2a1ed76c23e14ddff11dee6b2.
+pin 7f22943; its `vendor.sh` gained `wire` renaming and `--exclude` in e817a3b (cloudspec
+integration PR 7), and the pin is the cloudspec `main` commit that carries it.
 
 ## Outcome
 
@@ -43,9 +44,14 @@ Assessment: `move/vendor-cloud-blocks` trial, 179 validation errors to 30 after 
 
 ## Scope
 
-`ess/`, `tools/` (lock gate, layers, domain map, docs pages), `product/cloud/crates/` (weft-impl,
-weft-controllers, weft-testkit, weft-client, weft-bin), `product/console/`, `sim/`, `website/docs/`,
-`quality/spec-diff-acknowledgements.json`. Out of scope: entities open under D7 in cloudspec.
+`ess/`, `tools/` (lock gate, layers, domain map, docs pages), `Taskfile.yml`, `.github/workflows/`,
+`AGENTS.md`, `docs/layers.md`, `product/cloud/crates/` (weft-impl,
+weft-controllers, weft-testkit, weft-client, weft-bin, weft-agent), `product/console/`, `sim/`, `website/docs/`,
+`quality/spec-diff-acknowledgements.json`, `quality/ratchet.yaml`. The integration branch starts
+from weft#33, where `tools/sim` is gone and `CLOUDSPEC_REV` exists.
+
+Out of scope: entities open under D7 in cloudspec; the history files under `docs/` (hardening
+passes, open questions) keep the old names they were written with.
 
 ## Acceptance
 

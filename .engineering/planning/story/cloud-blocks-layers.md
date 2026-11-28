@@ -8,7 +8,28 @@ relations:
 - decomposes: epic:cloud-blocks
 - serves: vision:weft
 - depends_on: story:cloud-blocks-vendor
-revision: 1
+- depends_on: story:cloud-blocks-policies
+- depends_on: story:cloud-blocks-lock-gate
+scope:
+- confidence: cited
+  path: AGENTS.md
+- confidence: cited
+  path: docs/layers.md
+- confidence: cited
+  path: tools/check-domain.sh
+- confidence: cited
+  path: tools/check-layers.sh
+- confidence: cited
+  path: tools/check-overlay.sh
+- confidence: cited
+  path: tools/check.d/30-domain-map.sh
+- confidence: cited
+  path: tools/gen-domain-map.sh
+- confidence: cited
+  path: tools/test-domain-map.sh
+- confidence: cited
+  path: website/docs/specification/layers.md
+revision: 5
 ---
 ## Epic
 
@@ -19,7 +40,7 @@ Decomposes `epic:cloud-blocks`: weft's layer checks and domain map know the vend
 1. `tools/check-layers.sh` and the domain map treat `ess/cloud/` as one layer below weft's files:
    a weft file may reference it, it may not reference weft, and a weft file referencing a higher
    weft layer still fails.
-2. `tools/synth-domain.sh`, `tools/check-domain.sh` and `tools/check-overlay.sh` read the
+2. `tools/check-domain.sh` and `tools/check-overlay.sh` read the
    vendored files.
 3. `docs/layers.md`, the docs page and `AGENTS.md` say which files are vendored and that they are
    changed only by `task vendor-update`.
@@ -27,14 +48,19 @@ Decomposes `epic:cloud-blocks`: weft's layer checks and domain map know the vend
 ## Scope
 
 `tools/check-layers.sh`, `tools/gen-domain-map.sh`, `tools/check.d/30-domain-map.sh`,
-`tools/test-domain-map.sh`, `tools/synth-domain.sh`, `tools/check-domain.sh`,
-`tools/check-overlay.sh`, `docs/layers.md`, `website/docs/specification/layers.md`, `AGENTS.md`.
+`tools/test-domain-map.sh`, `tools/check-domain.sh`,
+`tools/check-overlay.sh`, `docs/layers.md`, `website/docs/specification/layers.md`, `AGENTS.md`
+(the layer section, after `story:cloud-blocks-lock-gate`).
 
 ## Acceptance
 
 1. `tools/test-domain-map.sh` passes with a fixture in which a weft file references a higher weft
    layer (refused) and one references `cloud/` (accepted).
 2. `task layers` exits 0 on the tree of `story:cloud-blocks-policies`.
+3. `tools/check-domain.sh` run on a weft domain that references `weft.scope` exits 0; `weft.scope`
+   exists only under `ess/cloud/`.
+4. `grep -l 'task vendor-update' AGENTS.md docs/layers.md website/docs/specification/layers.md`
+   prints all three files.
 
 ## Rules for this work
 

@@ -10,7 +10,20 @@ relations:
 - depends_on: story:cloud-blocks-policies
 - depends_on: story:cloud-blocks-cluster-pinning
 - depends_on: story:cloud-blocks-runtime-fields
-revision: 1
+scope:
+- confidence: cited
+  path: product/console/src/hosts/index.tsx
+- confidence: cited
+  path: product/console/src/renderer
+- confidence: cited
+  path: product/console/test
+- confidence: cited
+  path: product/console/ui/account.ui.yaml
+- confidence: cited
+  path: product/console/ui/fixtures
+- confidence: cited
+  path: product/console/ui/operator.ui.yaml
+revision: 4
 ---
 ## Epic
 
@@ -25,7 +38,7 @@ Decomposes `epic:cloud-blocks`: the account and operator consoles use the rename
 ## Scope
 
 `product/console/ui/account.ui.yaml`, `product/console/ui/operator.ui.yaml`,
-`product/console/fixtures/`, `product/console/src/renderer/`, `product/console/src/hosts/index.tsx`,
+`product/console/ui/fixtures/`, `product/console/src/renderer/`, `product/console/src/hosts/index.tsx`,
 `product/console/test/`.
 
 ## Acceptance

@@ -8,25 +8,33 @@ relations:
 - decomposes: epic:cloud-blocks
 - serves: vision:weft
 - depends_on: story:cloud-blocks-policies
-revision: 1
+scope:
+- confidence: cited
+  path: sim/experiments
+- confidence: cited
+  path: sim/relations/globex-defines-in-shop.yaml
+revision: 3
 ---
 ## Epic
 
-Decomposes `epic:cloud-blocks`: decision D-f, one pin for cloudspec-sim and the blocks.
+Decomposes `epic:cloud-blocks`: decision D-f, the simulator runs on the blocks' pin.
 
 ## Outcome
 
-1. `CLOUDSPEC_REV` in `Taskfile.yml` is the blocks' pin and the simulator's.
-2. The 5 experiments and `sim/relations/globex-defines-in-shop.yaml` name the renamed commands.
+1. The 5 experiments and `sim/relations/globex-defines-in-shop.yaml` name the renamed commands
+   and `scope_id`.
+2. The simulator is installed from `CLOUDSPEC_REV` (set by `story:cloud-blocks-vendor`); this
+   story does not change the pin.
 
 ## Scope
 
-`sim/experiments/`, `sim/relations/globex-defines-in-shop.yaml`, `Taskfile.yml`
-(`CLOUDSPEC_REV` only).
+`sim/experiments/`, `sim/relations/globex-defines-in-shop.yaml`.
 
 ## Acceptance
 
-1. `task sim-relations` (slow lane; it fetches) runs its full setup to the last step at the pin.
+1. `task sim-experiments` exits 0 with `CLOUDSPEC_REV` at the pin of `story:cloud-blocks-vendor`
+   (was 2ed72c2). Slow lane; it fetches.
+2. `task sim-relations` exits 0 at the same pin.
 
 ## Rules for this work
 

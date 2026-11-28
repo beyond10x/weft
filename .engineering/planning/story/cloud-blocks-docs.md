@@ -10,27 +10,45 @@ relations:
 - depends_on: story:cloud-blocks-rust
 - depends_on: story:cloud-blocks-consoles
 - depends_on: story:cloud-blocks-sim-pin
-revision: 1
+- depends_on: story:cloud-blocks-layers
+scope:
+- confidence: cited
+  path: quality/spec-diff-acknowledgements.json
+- confidence: cited
+  path: tools/docs-spec-pages.sh
+- confidence: cited
+  path: website/data/status-proofs.json
+- confidence: cited
+  path: website/docs/concepts
+- confidence: cited
+  path: website/docs/run/consoles.md
+revision: 5
 ---
 ## Epic
 
-Decomposes `epic:cloud-blocks`: the docs and the spec diff follow the renamed domains.
+Decomposes `epic:cloud-blocks`: the docs and the spec diff follow the renamed domains, and the
+whole gate passes.
 
 ## Outcome
 
 1. `tools/docs-spec-pages.sh` generates pages for the vendored domains; its check and test follow.
-2. `website/docs/concepts/` and `website/data/status-proofs.json` name the renamed domains.
-3. `quality/spec-diff-acknowledgements.json` acknowledges each breaking change of the move.
+2. `website/docs/concepts/`, `website/docs/run/consoles.md`, `website/docs/concepts/managed-services.md`
+   and `website/data/status-proofs.json` (23 -> 28 domains) name the renamed domains.
+3. `quality/spec-diff-acknowledgements.json` acknowledges each breaking change of the move
+   (`check-spec-diff.sh --acknowledge`, then reviewed).
 
 ## Scope
 
 `tools/docs-spec-pages.sh`, its check and test, `website/docs/concepts/`,
+`website/docs/run/consoles.md`, `website/docs/concepts/managed-services.md`,
 `website/data/status-proofs.json`, `quality/spec-diff-acknowledgements.json`.
 
 ## Acceptance
 
 1. `task docs-check` exits 0 on the final tree.
 2. `tools/check.d/50-spec-diff` exits 0 on the final tree.
+3. `slot --here task check` exits 0 on the integration branch with `cloud.lock` at
+   `CLOUDSPEC_REV`.
 
 ## Rules for this work
 
