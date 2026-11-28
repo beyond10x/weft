@@ -37,6 +37,12 @@
 //! - [`r1_set_workload_replicas`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2);
+//! - [`r1_rollout_submit_job`], [`job_start_on_submit`], [`job_task_instances`] and
+//!   [`job_instance_scheduling_request`] (block "R1 for a Job workload", the owner's decision
+//!   D-C2 = A), ESS
+//!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
+//!   (E2); three of them also read a row the event names ([`attempt_ports`]), which ESS cannot
+//!   map (OPEN (ESS) in `ess/components.yaml`, no ESS story yet);
 //! - [`r1_create_replica`], ESS `story:rust-binding-wraps-a-plain-copy-into-an-optional-member`
 //!   (E3);
 //! - [`r1_submit_scheduling_request`], ESS
@@ -50,6 +56,7 @@
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2).
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
@@ -63,7 +70,11 @@ use crate::{Ports, System};
 pub mod edge_backend_ready;
 pub mod edge_backend_restarting;
 pub mod edge_backend_restore;
+pub mod job_instance_scheduling_request;
+pub mod job_start_on_submit;
+pub mod job_task_instances;
 pub mod r1_create_replica;
+pub mod r1_rollout_submit_job;
 pub mod r1_set_workload_replicas;
 pub mod r1_submit_scheduling_request;
 pub mod r4_assign;
@@ -104,6 +115,10 @@ pub enum Invoked {
 /// The hand-run bindings, in the order of `ess/components.yaml`.
 pub const ENTRIES: &[&Entry] = &[
     &r1_set_workload_replicas::ENTRY,
+    &r1_rollout_submit_job::ENTRY,
+    &job_start_on_submit::ENTRY,
+    &job_task_instances::ENTRY,
+    &job_instance_scheduling_request::ENTRY,
     &r1_create_replica::ENTRY,
     &r1_submit_scheduling_request::ENTRY,
     &r4_bind_placement::ENTRY,
@@ -279,8 +294,24 @@ pub fn caller_of(entry: &Entry, event: &SystemEvent) -> CallerAttributes {
     }
 }
 
+thread_local! {
+    /// The ports of the attempt in progress on this thread ([`attempt_ports`]).
+    static ATTEMPT_PORTS: RefCell<Option<Ports>> = const { RefCell::new(None) };
+}
+
+/// The ports of the attempt in progress on this thread: the rows a hand-run binding reads
+/// where its mapping takes a value from a row the event names (`r1-rollout-submit-job`: the
+/// workload's `JobSettings`; `job-task-instances`: the Job's workload and its instances;
+/// `job-instance-scheduling-request`: the Job's `gang`). ESS maps a binding only from its
+/// event (the OPEN (ESS) of the block "R1 for a Job workload" in `ess/components.yaml`), and
+/// [`Entry::invoke`] is given the system alone. `None` outside an attempt.
+pub(crate) fn attempt_ports() -> Option<Ports> {
+    ATTEMPT_PORTS.with(|held| held.borrow().clone())
+}
+
 /// Attempt `number` of `entry` on `event`, with its policy applied. The invocation runs as
-/// [`caller_of`]; the caller has no attributes after it, as after a request of the control host.
+/// [`caller_of`], with [`attempt_ports`] set to `ports`; the caller has no attributes after it,
+/// as after a request of the control host, and no ports are set.
 fn attempt(
     ports: &Ports,
     system: &mut System,
@@ -289,7 +320,9 @@ fn attempt(
     number: u32,
 ) -> Option<Answer> {
     ports.set_caller(caller_of(entry, event));
+    ATTEMPT_PORTS.with(|held| *held.borrow_mut() = Some(ports.clone()));
     let invoked = (entry.invoke)(system, event);
+    ATTEMPT_PORTS.with(|held| *held.borrow_mut() = None);
     ports.set_caller(CallerAttributes::default());
     let invoked = invoked?;
     let (refusal, result, events) = match invoked {

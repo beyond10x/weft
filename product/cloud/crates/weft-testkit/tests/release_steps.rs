@@ -417,7 +417,8 @@ fn a_rollout_step_of_an_applied_plan_starts_and_sets_the_service_replicas() {
 
 /// Statement 2 (Job): the rollout step of a Job workload starts, and the binding line of
 /// `r1-set-workload-replicas` reads refusal `not-a-service`, `dropped`; nothing is held and no
-/// service changes.
+/// service changes. The step runs its Job through the block "R1 for a Job workload"
+/// (`story:cloudspec-submission-job-run`, `job_run.rs`): its events follow the step's.
 #[test]
 fn a_rollout_step_of_a_job_workload_drops_not_a_service() {
     let w = World::new();
@@ -443,7 +444,13 @@ fn a_rollout_step_of_a_job_workload_drops_not_a_service() {
     );
     assert_eq!(
         events_after(&w.host, seq),
-        vec!["weft.deployments.ReleaseStepStarted"]
+        vec![
+            "weft.deployments.ReleaseStepStarted",
+            "weft.workloads.JobSubmitted",
+            "weft.workloads.JobStarted",
+            "weft.workloads.InstanceCreated",
+            "weft.scheduling.SchedulingRequested",
+        ]
     );
     assert_eq!(w.host.host().held(), 0);
     assert_eq!(format!("{:?}", ServiceStorage::list(&w.ports())), services);

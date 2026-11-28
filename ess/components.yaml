@@ -84,6 +84,15 @@ conversions:
       A scope's name is unique among open scopes and an account's name only among its siblings,
       so the scope an account opens is named by the account's id, its text form; nothing reads it
       back as an id.
+  # D-C2 A: binding job-task-instances makes each task's instance of the Job's workload.
+  - from: weft.shared.JobId
+    to: weft.shared.WorkloadId
+    because: >-
+      A Job references one workload (weft.workloads.Job.workload_id), and JobStarted names only
+      the Job, so a task's instance is of the workload the Job's row names. ESS maps a binding
+      only from its event, so this crossing stands for that read of the row; the binding is
+      delivered by hand (weft-impl/src/bindings/job_task_instances.rs), which reads the row, and
+      no generated code converts one identity into the other.
 
 components:
   # Line 72: "the user API (management plane)". Line 95: the CLI and CI reach it over HTTP.
@@ -1235,9 +1244,9 @@ bindings:
     on_failure:
       # workload-retired: harmless; a retired workload's release was replaced by a newer
       # revision's, whose own rollout step sets its count (as r1-create-replica drops it).
-      # not-a-service: harmless; only a Service holds a desired replica count. OPEN: a Rollout
-      # step of another shape (a Daemon, deployments.yaml OPEN on ReleaseStep.replicas) reaches
-      # its instances by no loop yet.
+      # not-a-service: harmless; only a Service holds a desired replica count. A Rollout step
+      # of a Job workload reaches its instances through the block "R1 for a Job workload" below.
+      # OPEN: a Daemon's (deployments.yaml OPEN on ReleaseStep.replicas) by no loop yet.
       drop: [workload-retired, not-a-service]
       # no-service and not-awake are transient: the Service is defined by its caller after the
       # workload (DefineService), and a draining or waking service returns to Awake. OPEN: an
@@ -1249,6 +1258,129 @@ bindings:
       # OPEN: no-workload is retried, unbounded if the step names a workload that never exists;
       # deployments.StartReleaseStep does not check the workload. A transport failure is retried.
       retry: {except: [workload-retired, not-a-service]}
+  #
+  # R1 for a Job workload (line 585; sketch lines 244-245; the owner's decision D-C2 = A): a
+  # rollout step started submits the Job of its workload, a submitted Job outside a gang starts
+  # with all its tasks, each task becomes an instance, and the instance is submitted to the
+  # scheduler. The Scheduler's PlaceInstance and R4 take it to the node as a replica's instance.
+  # Gang jobs, retries and a failed task are not in this block.
+  # Each binding of the block is delivered by hand (weft-impl/src/bindings/): three read a row
+  # the event names (the workload, the Job), and ESS maps a binding only from its event's fields
+  # or a literal; the four drop a refusal per name. OPEN (ESS): a mapping from a related row
+  # (r1-rollout-submit-job, job-task-instances, job-instance-scheduling-request's `where:`) and
+  # one invocation per element of a count (job-task-instances). Until then each `mapping:` below
+  # says what ESS can: the literals and the conversion are named where they stand.
+  #
+  # Edge 1: a rollout step started submits the Job of its workload with the workload's
+  # JobSettings (weft.workloads.Workload.settings): parallelism, gang, max_retries. A workload
+  # that holds no JobSettings (another shape, or none found) is sent the counts of one task
+  # (parallelism 1, gang false, max_retries 0), the literals of the mapping, so SubmitJob
+  # answers by the workload (no-workload, workload-of-other-scope, workload-retired, not-a-job)
+  # and never bad-counts. A Schedule workload's Jobs are started by its schedule (workloads.yaml
+  # Schedule): its rollout step submits none, and the binding does not react to it. A repeated
+  # delivery of ReleaseStepStarted submits a second Job: no refusal of SubmitJob reads the step.
+  - id: r1-rollout-submit-job
+    summary: Submit the Job of the workload a rollout step started.
+    when:
+      event: weft.deployments.ReleaseStepStarted
+      where: [event.kind == Rollout, defined(event.workload_id)]
+    invoke:
+      command: weft.workloads.SubmitJob
+    mapping:
+      workload_id: event.workload_id
+      scope_id: event.scope_id
+      # The workload's JobSettings where it holds them (OPEN (ESS) above); these literals
+      # otherwise.
+      parallelism: 1
+      gang: false
+      max_retries: 0
+    delivery: at_least_once
+    on_failure:
+      # not-a-job: harmless; a Service's rollout step sets its replica count
+      # (r1-set-workload-replicas). workload-retired: harmless, as there.
+      drop: [not-a-job, workload-retired]
+      # no-workload is retried, as r1-set-workload-replicas retries it (its OPEN). over-quota is
+      # retried until the scope's quota grows. not-callers-scope cannot follow (the invocation
+      # acts in the event's scope); workload-of-other-scope cannot follow (StartReleaseStep found
+      # the workload assigned in the release's environment); bad-counts cannot follow (the
+      # workload's JobSettings hold the invariants of weft.workloads.Job); schedule-missing and
+      # schedule-of-other-workload read a schedule_id this binding leaves absent. A transport
+      # failure is retried.
+      retry: {except: [not-a-job, workload-retired]}
+  #
+  # Edge 2: a submitted Job outside a gang starts with all its tasks bound. A gang's start
+  # waits for the whole gang to be bound (§ 10 line 453), which no loop does yet.
+  - id: job-start-on-submit
+    summary: Start a submitted Job outside a gang with all its tasks.
+    when:
+      event: weft.workloads.JobSubmitted
+      where: [event.gang == false]
+    invoke:
+      command: weft.workloads.StartJob
+    mapping:
+      job_id: event.job_id
+      bound_tasks: event.parallelism
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; a repeated delivery of this JobSubmitted (the Job already
+      # Running), or the Job was cancelled first.
+      drop: [wrong-state]
+      # none-bound and too-many cannot follow (the count is the Job's own parallelism, at least
+      # 1); no-such-job cannot follow (the event names the Job SubmitJob created);
+      # gang-incomplete cannot follow (gang false). A transport failure is retried.
+      retry: {except: [wrong-state]}
+  #
+  # Edge 3: a started Job's tasks become instances, one per task index below bound_tasks
+  # (Instance -> Job, one instance per task: D-C2 = A), each of the Job's workload. A task index
+  # that already has a live instance of the Job (Pending, Scheduled, Starting, Running, Paused)
+  # is skipped, so a repeated delivery of JobStarted, or another attempt after a refusal, makes
+  # no second instance of a task. A repeated delivery of ReleaseStepStarted submits a second Job
+  # (edge 1), whose tasks get instances of their own.
+  - id: job-task-instances
+    summary: Create one instance for each task of a started Job.
+    when:
+      event: weft.workloads.JobStarted
+    invoke:
+      command: weft.workloads.CreateInstance
+    mapping:
+      # The Job's workload, read from the Job's row (the conversion JobId -> WorkloadId above
+      # stands for that read).
+      workload_id: event.job_id
+      job_id: event.job_id
+      # task_index: each index below event.bound_tasks, one invocation each (OPEN (ESS) above).
+    delivery: at_least_once
+    on_failure:
+      # Nothing is dropped. OPEN: workload-retired (the Job's workload retired before its tasks
+      # started) is retried, unbounded; FailJob would end the Job. no-workload, no-job and
+      # foreign-job cannot follow (the Job names its workload); the other refusals read inputs
+      # this binding leaves absent. A transport failure is retried.
+      retry: {except: []}
+  #
+  # Edge 4: an instance of a Job outside a gang is submitted to the scheduler, with the mapping
+  # of r1-submit-scheduling-request, which skips every Job instance. An instance of a gang Job
+  # is left to the control plane, which submits it with its gang_id (block below); the binding
+  # reads the Job's gang and does not react to it, nor to an instance whose Job no row holds.
+  - id: job-instance-scheduling-request
+    summary: Ask the scheduler to place a Job task's instance as soon as it is created.
+    when:
+      event: weft.workloads.InstanceCreated
+      where: [defined(event.job_id)]
+    invoke:
+      command: weft.scheduling.SubmitSchedulingRequest
+    mapping:
+      instance_id: event.instance_id
+      scope_id: event.scope_id
+      identity: event.identity
+      claims: event.claims
+      min_isolation: event.minimum_isolation
+      zones: event.zones
+      priority: event.priority
+    delivery: at_least_once
+    on_failure:
+      # already-requested: harmless; a repeated delivery of this InstanceCreated.
+      drop: [already-requested]
+      # Every other refusal is retried, as r1-submit-scheduling-request retries it.
+      retry: {except: [already-requested]}
   #
   # Level: ServicesBelowScale -> RequestReplica (block above). Edge: the requested replica becomes
   # an instance.
@@ -1280,9 +1412,8 @@ bindings:
   # SubmitSchedulingRequest). A Job's instances are skipped: a gang member must carry its gang,
   # which workloads does not know (docs/open-questions.md "scheduling and claims", taken: skip until
   # gangs get their own loop); the control plane submits them with gang_id.
-  # OPEN: a Job instance outside a gang is skipped too (the event cannot tell the two apart), so
-  # it is submitted by the control plane like a gang member. Settled by the gang id on
-  # workloads.Instance and InstanceCreated, or by a loop of its own for Job tasks.
+  # A Job instance outside a gang is skipped too (the event cannot tell the two apart): binding
+  # job-instance-scheduling-request of the block "R1 for a Job workload" above submits it.
   - id: r1-submit-scheduling-request
     summary: Ask the scheduler to place an instance as soon as it is created.
     when:

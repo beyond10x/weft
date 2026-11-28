@@ -2,6 +2,7 @@
 
 mod cloudspec_apply;
 mod cloudspec_submit;
+mod job_run;
 mod plan_apply;
 mod plan_from_source;
 mod ratchet;
