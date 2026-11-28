@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { compileModel, loadBundle } from '../build/bundle.ts';
 import { actionAllowed, callerOwned, grantsOf, pageAllowed } from '../src/renderer/grants.ts';
 import { labelFromParams } from '../src/renderer/runtime.tsx';
-import type { Action } from '../src/renderer/types.ts';
+import type { Action, Json, Obj } from '../src/renderer/types.ts';
 
 const ir = compileModel();
 const account = loadBundle('account', [], ir);
@@ -20,8 +20,8 @@ describe('grants', () => {
     expect([...full.actors].sort()).toEqual(['weft.actors.AccountAdmin', 'weft.actors.Deployer']);
     expect([...deployer.actors]).toEqual(['weft.actors.Deployer']);
     expect([...grantsOf(operator.model, operator.actor).actors]).toEqual(['weft.actors.ClusterOperator']);
-    expect(full.commands.has('weft.formations.CreateFormation')).toBe(true);
-    expect(deployer.commands.has('weft.formations.CreateFormation')).toBe(false);
+    expect(full.commands.has('weft.architecture.CreateFormation')).toBe(true);
+    expect(deployer.commands.has('weft.architecture.CreateFormation')).toBe(false);
     expect(deployer.commands.has('weft.workloads.ScaleService')).toBe(true);
   });
 
@@ -48,18 +48,36 @@ describe('grants', () => {
     expect(actionAllowed(account.doc, page, toUsage, full)).toBe(true);
   });
 
-  it('the inputs a caller owns are account_id, tenant_id and the attributes of the actors it holds', () => {
-    expect([...callerOwned(account.model, account.actor)].sort()).toEqual(['account_id', 'principal_id', 'tenant_id']);
+  it('the inputs a caller owns are account_id, scope_id, tenant_id and the attributes of the actors it holds', () => {
+    expect([...callerOwned(account.model, account.actor)].sort()).toEqual(['account_id', 'principal_id', 'scope_id', 'tenant_id']);
+    expect([...callerOwned(operator.model, operator.actor)].sort()).toEqual(['account_id', 'scope_id', 'tenant_id']);
   });
 });
 
 describe('label_from params', () => {
   it('a param of the view is bound from the actor by name, then from the page params', () => {
-    expect(labelFromParams(account.model, 'weft.observability.AlertRules', account.actor, {})).toEqual({ account_id: account.actor.account_id });
+    expect(labelFromParams(account.model, 'weft.observability.AlertRules', account.actor, {})).toEqual({ scope_id: account.actor.scope_id });
+    expect(account.actor.scope_id).toBeTruthy();
     expect(labelFromParams(account.model, 'weft.secrets.SecretBackends', account.actor, {})).toEqual({});
-    expect(labelFromParams(account.model, 'weft.formations.Environments', account.actor, { formation_id: 'f1' })).toEqual({ formation_id: 'f1' });
+    expect(labelFromParams(account.model, 'weft.architecture.Environments', account.actor, { formation_id: 'f1' })).toEqual({ formation_id: 'f1' });
   });
   it('a param neither carries leaves the label map unread', () => {
-    expect(labelFromParams(account.model, 'weft.formations.Environments', account.actor, {})).toBeUndefined();
+    expect(labelFromParams(account.model, 'weft.architecture.Environments', account.actor, {})).toBeUndefined();
+  });
+});
+
+describe('actor fixtures', () => {
+  /** Every `actor.<name>` a document's expressions name, other than `actor.may`. */
+  const named = (v: Json, out = new Set<string>()): Set<string> => {
+    if (typeof v === 'string') for (const m of v.matchAll(/\bactor\.(\w+)/g)) { if (m[1] !== 'may') out.add(m[1]); }
+    else if (Array.isArray(v)) v.forEach((x) => named(x, out));
+    else if (v && typeof v === 'object') Object.values(v).forEach((x) => named(x, out));
+    return out;
+  };
+  it.each([['account', account], ['operator', operator]] as const)('every actor of the %s console carries every actor.<name> its document reads', (_, b) => {
+    const names = [...named(b.doc.pages as Json)];
+    const actors: [string, Obj][] = [['actor', b.actor], ...Object.entries(b.actors as Record<string, Obj>)];
+    const missing = actors.flatMap(([who, a]) => names.filter((n) => !(n in a)).map((n) => `${who}: ${n}`));
+    expect(missing).toEqual([]);
   });
 });

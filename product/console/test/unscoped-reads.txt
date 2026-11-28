@@ -1,16 +1,16 @@
-# Reads of the account console (ui/account.ui.yaml) of a view whose rows carry account_id that the
-# document cannot bind to the signed-in actor's account: the model offers no form of the view with
-# an account_id param. One line per read, `<page path>: <View>(<params>) | <reason>`. Held by
+# Reads of the account console (ui/account.ui.yaml) of a view whose rows carry scope_id (or
+# account_id) that the document cannot bind to the signed-in actor: the model offers no form of the
+# view with that param. One line per read, `<page path>: <View>(<params>) | <reason>`. Held by
 # test/tenancy.test.ts: the list only shrinks. When the model gains the param, bind
-# `account_id: actor.account_id` and remove the line.
-home.sections[instances]: weft.workloads.Instances() | model view has no account_id param
-home.sections[running]: weft.workloads.Services() | model view has no account_id param
-formations.detail.sections[workloads]: weft.workloads.WorkloadList(formation_id: params.formation_id) | model view has no account_id param
-workloads.sections[list]: weft.workloads.WorkloadList(formation_id: state.formation) | model view has no account_id param
-workloads.detail.sections[summary]: weft.workloads.WorkloadDetail(workload_id: params.workload_id) | model view has no account_id param
-workloads.detail.sections[service]: weft.workloads.ServiceDetail(workload_id: params.workload_id) | model view has no account_id param
-workloads.detail.sections[snapshots]: weft.workloads.SnapshotList(workload_id: params.workload_id) | model view has no account_id param
-services.sections[list]: weft.workloads.Services() | model view has no account_id param
-instances.sections[list]: weft.workloads.Instances() | model view has no account_id param
-instances.detail.sections[summary]: weft.workloads.InstanceDetail(instance_id: params.instance_id) | model view has no account_id param
-managed.detail.sections[backups]: weft.catalog.BackupList(service_instance_id: params.service_instance_id) | model view has no account_id param
+# `scope_id: actor.scope_id` and remove the line.
+home.sections[instances]: weft.workloads.Instances() | model view has no scope_id param
+home.sections[running]: weft.workloads.Services() | model view has no scope_id param
+formations.detail.sections[workloads]: weft.workloads.WorkloadList(formation_id: params.formation_id) | model view has no scope_id param
+workloads.sections[list]: weft.workloads.WorkloadList(formation_id: state.formation) | model view has no scope_id param
+workloads.detail.sections[summary]: weft.workloads.WorkloadDetail(workload_id: params.workload_id) | model view has no scope_id param
+workloads.detail.sections[service]: weft.workloads.ServiceDetail(workload_id: params.workload_id) | model view has no scope_id param
+workloads.detail.sections[snapshots]: weft.workloads.SnapshotList(workload_id: params.workload_id) | model view has no scope_id param
+services.sections[list]: weft.workloads.Services() | model view has no scope_id param
+instances.sections[list]: weft.workloads.Instances() | model view has no scope_id param
+instances.detail.sections[summary]: weft.workloads.InstanceDetail(instance_id: params.instance_id) | model view has no scope_id param
+managed.detail.sections[backups]: weft.services.BackupList(service_instance_id: params.service_instance_id) | model view has no scope_id param

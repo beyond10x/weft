@@ -4,6 +4,7 @@
 principal_id: 6f1d0c52-8a0e-4c11-9f7b-2d4c8e1a7b35
 tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880
 account_id: e4a5db1f-595f-4057-b315-8750cf2855d3
+scope_id: 6c227a2a-074f-4c4e-ae67-e170a75dd7b2
 roles:
   - deployer
 display: release-engineer

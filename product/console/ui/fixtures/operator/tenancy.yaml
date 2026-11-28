@@ -1,4 +1,4 @@
-# Tenants, their account trees, quotas, principals and role bindings.
+# Tenants, their account trees, quotas, principals and role bindings, and the scopes of the accounts.
 # Invented sample data for product/console (fixture mode); no real person, company or host.
 views:
   weft.accounts.Tenants:
@@ -59,3 +59,15 @@ views:
       - {role_binding_id: f2e66b3b-4c01-4ba9-adba-5e36831e74d2, principal_id: d1fe2ec6-f9d1-456f-99c7-3f27b28ded6d, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, account_id: d6abf07f-b10d-436d-80fc-790ec466a0b9, role: deployer, state: Active}
       - {role_binding_id: b6027f83-7a35-4708-a74b-81c9c1eaea47, principal_id: f8f36971-5d0c-4d27-a071-52ee2e1ae410, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, account_id: d6abf07f-b10d-436d-80fc-790ec466a0b9, role: billing, state: Active}
       - {role_binding_id: 1138c4f1-a850-4e74-b6a0-daddbba92f6f, principal_id: 8cc3a477-1a6d-487c-84b4-0e6e21b07053, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, account_id: null, role: owner, state: Active}
+  weft.scope.Scopes:
+    rows:
+      - {scope_id: 9915e675-30a8-40ce-a1ee-26257f4709ef, name: orbit, state: Open}
+      - {scope_id: 6c227a2a-074f-4c4e-ae67-e170a75dd7b2, name: orbit-platform, state: Open}
+      - {scope_id: f3ffca56-2e55-45e9-a3a8-bfd180e97ca2, name: orbit-data, state: Open}
+      - {scope_id: 1bf2affe-8cc0-4f83-a9d6-ac55f3fd67b0, name: orbit-ml, state: Open}
+      - {scope_id: 5203f942-13d6-4103-ba6e-48a36fbf55c7, name: orbit-sandbox, state: Closed}
+      - {scope_id: e3fd3db5-ed56-420d-88f4-f4f515982272, name: harbor, state: Open}
+      - {scope_id: f7402440-535b-4446-89e7-043eac6fdef9, name: harbor-prod, state: Open}
+      - {scope_id: 7020ab85-6c0d-4f1f-913d-01440ca73079, name: harbor-dev, state: Open}
+      - {scope_id: 883aa3ee-cfda-4164-81a0-bea9b3825e20, name: lumen, state: Open}
+      - {scope_id: ae98901b-ca66-400a-838a-8cbfa3926d9e, name: lumen-research, state: Open}

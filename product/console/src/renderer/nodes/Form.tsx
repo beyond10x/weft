@@ -1,7 +1,7 @@
 // `form`: the fields a person fills for one command (`does`). Each control comes from the field's
 // `as` and the command's input type in the model; an input the form does not show is taken from
 // what the opener handed (a row, the page params), then from the signed-in actor, by name; an input
-// the caller owns (account_id, tenant_id, the actor's attributes) from the actor first.
+// the caller owns (account_id, scope_id, tenant_id, the actor's attributes) from the actor first.
 
 import { useId, useState } from 'react';
 import type { FormEvent } from 'react';
@@ -32,13 +32,13 @@ export function controlOf(f: Field, input: ModelInput | undefined, enumOf: (t: s
   return 'text';
 }
 
-const CALLER_OWNED = new Set(['account_id', 'tenant_id']);
+const CALLER_OWNED = new Set(['account_id', 'scope_id', 'tenant_id']);
 
 /**
  * The input of a command: `bind` first, shown fields from the draft, the rest by name from what was
- * handed or the actor. An input the caller owns (`owned`: account_id, tenant_id and the attributes of
- * the actor) takes the actor's value over a handed row or param, so a row of another account cannot
- * send its account_id; an actor that carries no value for it leaves the handed one.
+ * handed or the actor. An input the caller owns (`owned`: account_id, scope_id, tenant_id and the
+ * attributes of the actor) takes the actor's value over a handed row or param, so a row of another
+ * account cannot send its scope_id; an actor that carries no value for it leaves the handed one.
  */
 export function commandInput(inputs: ModelInput[] | undefined, draft: Draft, shown: Set<string>, handed: Draft, actor: Obj, bound: Draft, owned: Set<string> = CALLER_OWNED): Draft {
   const out: Draft = { ...bound };

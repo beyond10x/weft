@@ -61,6 +61,31 @@ describe.each(APPS)('%s console', (app) => {
     expect(problems).toEqual([]);
   });
 
+  it('an action that sends its command directly binds every required input of the command', () => {
+    // A direct `does` (not a form) sends its `bind` and nothing else (runtime.tsx runCommand).
+    const problems: string[] = [];
+    walk(b.doc.pages, (o) => {
+      if (typeof o.does !== 'string' || o.component === 'form' || !o.name) return;
+      const c = b.model.commands[o.does];
+      if (!c) return;
+      const bound = Object.keys(o.bind ?? {});
+      for (const i of c.inputs) if (!i.optional && !bound.includes(i.name)) problems.push(`${o.name} → ${o.does}: binds no ${i.name}`);
+    });
+    expect(problems).toEqual([]);
+  });
+
+  it('every fixture row carries only fields of its view', () => {
+    const problems: string[] = [];
+    for (const [view, fx] of Object.entries(b.fixtures.views)) {
+      const fields = (ir.views as Obj)[view]?.fields?.map((f: Obj) => f.name as string);
+      if (!fields) { problems.push(`${view}: no view of the model`); continue; }
+      const extra = new Set<string>();
+      for (const r of fx.rows) for (const k of Object.keys(r ?? {})) if (!fields.includes(k)) extra.add(k);
+      if (extra.size) problems.push(`${view}: ${[...extra].sort().join(', ')}`);
+    }
+    expect(problems).toEqual([]);
+  });
+
   it('every host slot has a component', () => {
     const hosts = new Set<string>();
     walk(b.doc.pages, (o) => { if (typeof o.host === 'string') hosts.add(o.host); });
@@ -85,6 +110,27 @@ describe.each(APPS)('%s console', (app) => {
     const actors = Object.keys(ir.actors ?? {});
     const named = new Set(Object.values(b.doc.pages).map((p) => p.actor));
     for (const a of named) expect(actors).toContain(a);
+  });
+});
+
+describe('the vendored commands', () => {
+  const sends = (b: Bundle) => {
+    const out = new Map<string, Obj[]>();
+    walk(b.doc.pages, (o) => { if (typeof o.does === 'string') out.set(o.does, [...(out.get(o.does) ?? []), o]); });
+    return out;
+  };
+  const fieldsOf = (o: Obj) => (o.fields ?? []).map((f: Json) => (typeof f === 'string' ? f : f.field));
+
+  it('the operator console creates a cloud, then configures its access mode and control plane', () => {
+    const op = sends(loadBundle('operator', [], ir));
+    expect(op.get('weft.infrastructure.CreateCloud')?.map(fieldsOf)).toEqual([['name', 'placement', 'policy']]);
+    expect(op.get('weft.infrastructure.ConfigureCloud')?.map(fieldsOf)).toEqual([['cloud_id', 'access_mode', 'control_plane']]);
+  });
+
+  it('the account console pins a formation to a cluster, and creates it without one', () => {
+    const ac = sends(loadBundle('account', [], ir));
+    expect(ac.get('weft.cluster.PinFormation')?.map(fieldsOf)).toEqual([['cluster_id']]);
+    expect(ac.get('weft.architecture.CreateFormation')?.map(fieldsOf)).toEqual([['name', 'zones']]);
   });
 });
 
