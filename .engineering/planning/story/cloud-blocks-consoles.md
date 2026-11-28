@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-consoles
 kind: story
-status: proposed
+status: active
 title: The account and operator consoles drive the vendored commands and views
 relations:
 - decomposes: epic:cloud-blocks
@@ -23,9 +23,10 @@ scope:
   path: product/console/ui/fixtures
 - confidence: cited
   path: product/console/ui/operator.ui.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
