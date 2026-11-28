@@ -69,9 +69,11 @@ types:
 entities:
   # Lines 141-145: what access needs beside a cluster's AccessMode: for `federated`, its external
   # identity provider; for `single-user`, its implicit admin.
-  # Decided (integration 2026-11-26): the access mode is weft.infrastructure.Cloud's `access_mode`, set
-  # when the cluster is created and never changed; this row stores no copy of it and reads it
-  # through the `cluster` relation. The settings here are configured once, like the mode.
+  # Decided (integration 2026-11-26): the access mode is set once and never changed; this row
+  # stores no copy of it and reads it through the `cloud_runtime` relation. The settings here are
+  # configured once, like the mode. Since cloudspec's blocks were vendored (C3) the mode is on
+  # weft's weft.infrastructure.CloudRuntime, set by ConfigureCloud after CreateCloud, not on the
+  # Cloud (story cloud-blocks-runtime-fields, 2026-11-28).
   - name: weft.access.CloudAccess
     naming:
       summary: The identity provider or implicit admin of one cluster, by its access mode.
@@ -94,9 +96,10 @@ entities:
         type: Optional<weft.shared.PrincipalId>
     relations:
       # A cluster outlives its access settings' link; no command of this domain deletes a cluster.
-      - name: cluster
+      # The row it names holds the access mode; access is configured after the mode is set.
+      - name: cloud_runtime
         kind: references
-        target: weft.infrastructure.Cloud
+        target: weft.infrastructure.CloudRuntime
         cardinality: one
         via: cloud_id
       - name: implicit_admin
@@ -216,7 +219,7 @@ entities:
     relations:
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: creator
@@ -303,7 +306,7 @@ entities:
         via: principal_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
     lifecycle:
@@ -416,7 +419,7 @@ entities:
         via: trusted_issuer_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: creator
@@ -510,7 +513,7 @@ entities:
         via: federation_rule_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
     lifecycle:
@@ -705,8 +708,9 @@ events:
 
 commands:
   # Lines 141-145, line 406. A ClusterOperator sets, once, what the cluster's access mode needs.
-  # The mode itself is weft.infrastructure.Cloud's `access_mode`, fixed when the cluster was created;
-  # that `single-user` needs the `local` placement is weft.cluster's guard at creation.
+  # The mode itself is weft.infrastructure.CloudRuntime's `access_mode`, set once by
+  # weft.infrastructure.ConfigureCloud; that `single-user` needs the `local` placement is
+  # ConfigureCloud's guard. A cloud with no CloudRuntime row is `no-such-cluster` here.
   - name: weft.access.ConfigureAccess
     naming:
       display: Configure a cluster's access settings
@@ -719,8 +723,9 @@ commands:
       - name: no-such-cluster
         when_related: {via: input.cloud_id, exists: false}
         error: weft.access.NotFound
-      # The mode is read from the weft.infrastructure.Cloud row the input names (`via:` resolves the
-      # CloudId to that entity here, since this command creates the ClusterAccess row). Until
+      # The mode is read from the weft.infrastructure.CloudRuntime row the input names (`via:`
+      # resolves the CloudId through CloudAccess's `cloud_runtime` relation, since this command
+      # creates the CloudAccess row; it read weft.infrastructure.Cloud until 2026-11-28). Until
       # 2026-11-26 these read Cluster by `entity:`/`where: cloud_id == input.cloud_id`, which
       # synthesis cannot arrange (CreateCluster mints the id), so no branch had a scenario.
       - name: provider-missing
@@ -785,7 +790,7 @@ commands:
           exists: false
         error: weft.access.AccessNotConfigured
       # Line 143: `single-user` has no login. The ClusterAccess row tells the mode: ConfigureAccess
-      # stores an implicit admin exactly when weft.infrastructure.Cloud's `access_mode` is SingleUser
+      # stores an implicit admin exactly when weft.infrastructure.CloudRuntime's `access_mode` is SingleUser
       # (admin-missing, admin-in-federated), and the mode and the row never change. A guard
       # reading Cluster by `entity:`/`where:` had no scenario (its identity is minted by
       # CreateCluster), and `when_related` cannot read through the `cluster` relation.
@@ -1668,7 +1673,7 @@ views:
   # Lines 141-145: the CLI reads a cluster's access mode to know whether `weft login` applies.
   # OPEN: may this be read without a credential (the CLI needs it before login)? Taken: yes; it
   # holds no secret. The implicit admin is left out of it. `mode` is read from
-  # weft.infrastructure.Cloud through the `cluster` relation; this row stores no copy.
+  # weft.infrastructure.CloudRuntime through the `cloud_runtime` relation; this row stores no copy.
   - name: weft.access.CloudAccessOf
     source: weft.access.CloudAccess
     consistency: read_your_writes

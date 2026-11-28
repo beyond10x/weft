@@ -96,22 +96,34 @@ entities:
     naming:
       summary: An account inside a tenant or inside another account, nested to any depth.
     identity:
-      name: scope_id
-      type: weft.shared.ScopeId
+      name: account_id
+      type: weft.shared.AccountId
     fields:
       - name: tenant_id
         type: weft.shared.TenantId
       - name: parent_account_id
-        type: Optional<weft.shared.ScopeId>
+        type: Optional<weft.shared.AccountId>
         summary: The account this one is nested in; absent for an account directly in its tenant.
       - name: name
         type: weft.accounts.Name
+      # D-d A: the cloudspec scope the account maps to, one scope per account. The binding
+      # account-opens-scope opens it on AccountCreated; OpenScope mints the scope's id in its
+      # response, which a binding does not carry back, so RecordAccountScope records it on the
+      # account and refuses a scope another account holds.
+      - name: scope_id
+        type: Optional<weft.shared.ScopeId>
+        summary: The scope the account maps to; absent until RecordAccountScope records it.
     relations:
       - name: parent
         kind: references
         target: weft.accounts.Account
         cardinality: one
         via: parent_account_id
+      - name: scope
+        kind: references
+        target: weft.scope.Scope
+        cardinality: one
+        via: scope_id
     # OPEN: the sketch gives an account no lifecycle. Taken: Open, then Closed once no
     # sub-account of it is open. Records are kept, never deleted.
     lifecycle:
@@ -173,8 +185,8 @@ entities:
         type: weft.shared.PrincipalId
       - name: tenant_id
         type: weft.shared.TenantId
-      - name: scope_id
-        type: Optional<weft.shared.ScopeId>
+      - name: account_id
+        type: Optional<weft.shared.AccountId>
         summary: The account the role holds on, and below it; absent for a binding on the whole tenant.
       - name: role
         type: weft.shared.Role
@@ -188,7 +200,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: scope_id
+        via: account_id
     lifecycle:
       initial: Active
       states: [Active, Revoked]
@@ -223,8 +235,8 @@ entities:
       name: quota_id
       type: weft.shared.QuotaId
     fields:
-      - name: scope_id
-        type: weft.shared.ScopeId
+      - name: account_id
+        type: weft.shared.AccountId
       - name: tenant_id
         type: weft.shared.TenantId
       - name: parent_quota_id
@@ -254,7 +266,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: scope_id
+        via: account_id
       # The resource class the quota counts (sketch lines 127 and 360-368), operator-owned in
       # the inventory domain (layer 1); it stands on its own and outlives every quota of it.
       - name: resource_class
@@ -286,6 +298,12 @@ errors:
     summary: An open account with this name already sits under the same parent, and nothing was created.
   - name: weft.accounts.AccountHasOpenChildren
     summary: The account still has an open sub-account, so it was not closed.
+  - name: weft.accounts.ScopeMismatch
+    summary: The scope named is not the one recorded on the account, or none is recorded yet; nothing changed.
+  - name: weft.accounts.ScopeNotFound
+    summary: No scope has this identifier, so none was recorded on the account.
+  - name: weft.accounts.ScopeTaken
+    summary: The scope is recorded on an account already, or the account has its scope; nothing changed.
   - name: weft.accounts.PrincipalNotFound
     summary: No principal has this identifier, and nothing changed.
   - name: weft.accounts.PrincipalNotActive
@@ -339,17 +357,22 @@ events:
       - {name: tenant_id, type: weft.shared.TenantId}
   - name: weft.accounts.AccountCreated
     fields:
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: tenant_id, type: weft.shared.TenantId}
       - {name: name, type: weft.accounts.Name}
   - name: weft.accounts.SubAccountCreated
     fields:
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: parent_account_id, type: weft.shared.ScopeId}
+      - {name: parent_account_id, type: weft.shared.AccountId}
       - {name: name, type: weft.accounts.Name}
   - name: weft.accounts.AccountClosed
     fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+  - name: weft.accounts.AccountScopeRecorded
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: scope_id, type: weft.shared.ScopeId}
   - name: weft.accounts.PrincipalAdded
     fields:
@@ -365,7 +388,7 @@ events:
       - {name: role_binding_id, type: weft.shared.RoleBindingId}
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: role, type: weft.shared.Role}
   - name: weft.accounts.TenantOwnerBound
     fields:
@@ -378,13 +401,13 @@ events:
   - name: weft.accounts.QuotaGranted
     fields:
       - {name: quota_id, type: weft.shared.QuotaId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: resource_class, type: weft.shared.ResourceClassName}
       - {name: limit, type: Integer}
   - name: weft.accounts.QuotaAllocated
     fields:
       - {name: quota_id, type: weft.shared.QuotaId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: parent_quota_id, type: weft.shared.QuotaId}
       - {name: resource_class, type: weft.shared.ResourceClassName}
   - name: weft.accounts.QuotaRaised
@@ -503,15 +526,16 @@ commands:
         error: weft.accounts.AccountNameTaken
       - name: created
         creates: weft.accounts.Account
-        instance: scope_id
+        instance: account_id
         sets:
           tenant_id: input.tenant_id
           parent_account_id: {cleared: true}
+          scope_id: {cleared: true}
           name: input.name
         emits: [weft.accounts.AccountCreated]
         payload:
           weft.accounts.AccountCreated:
-            scope_id: {generated: true}
+            account_id: {generated: true}
             tenant_id: input.tenant_id
             name: input.name
 
@@ -521,13 +545,13 @@ commands:
     naming:
       display: Create a sub-account
     input:
-      - {name: parent_account_id, type: weft.shared.ScopeId}
+      - {name: parent_account_id, type: weft.shared.AccountId}
       - {name: name, type: weft.accounts.Name}
     outcomes:
       # hardening pass 1 D3: the parent is the account the request acts in, so another account
       # answers as a missing one, before its row is read.
       - name: not-callers-account
-        when: parent_account_id != caller.scope_id
+        when: parent_account_id != caller.account_id
         error: weft.accounts.AccountNotFound
       - name: no-such-parent
         when_related: {via: input.parent_account_id, exists: false}
@@ -550,15 +574,16 @@ commands:
         error: weft.accounts.AccountNameTaken
       - name: created
         creates: weft.accounts.Account
-        instance: scope_id
+        instance: account_id
         sets:
           tenant_id: {related: {via: input.parent_account_id, field: tenant_id}}
           parent_account_id: input.parent_account_id
+          scope_id: {cleared: true}
           name: input.name
         emits: [weft.accounts.SubAccountCreated]
         payload:
           weft.accounts.SubAccountCreated:
-            scope_id: {generated: true}
+            account_id: {generated: true}
             tenant_id: {related: {via: input.parent_account_id, field: tenant_id}}
             parent_account_id: input.parent_account_id
             name: input.name
@@ -574,13 +599,14 @@ commands:
     naming:
       display: Close an account
     input:
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: scope_id, type: weft.shared.ScopeId}
     outcomes:
       # hardening pass 1 D3: the account closed is the account the request acts in, so another
       # account answers as a missing one before its row or children are read. Written over the
       # input, not `when_subject`: ESS 0.99.2 refuses a subject guard beside the row set below.
       - name: not-callers-account
-        when: scope_id != caller.scope_id
+        when: account_id != caller.account_id
         error: weft.accounts.AccountNotFound
       - name: no-such-account
         unknown_instance: true
@@ -592,28 +618,83 @@ commands:
           where:
             all:
               - defined(parent_account_id)
-              - parent_account_id == input.scope_id
+              - parent_account_id == input.account_id
               - state == Open
           exists: true
         error: weft.accounts.AccountHasOpenChildren
+      # D-d A: AccountClosed names the account's scope, by which the R6 bindings remove the
+      # scope's rows. The scope is the input, checked against the one recorded on the account: the
+      # payload cannot take the stored Optional, since ESS 0.99.2 narrows it after a subject guard
+      # only, and a subject guard is refused beside the row set above. `defined` first, as in
+      # has-open-children; an account whose scope is not recorded yet is not closed.
+      - name: other-scope
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - account_id == input.account_id
+              - any:
+                  - not defined(scope_id)
+                  - scope_id != input.scope_id
+          exists: true
+        error: weft.accounts.ScopeMismatch
       - name: closed
         moves: weft.accounts.Account.close
-        instance: scope_id
+        instance: account_id
         affects:
           - entity: weft.accounts.RoleBinding
             where:
               all:
-                - defined(scope_id)
-                - scope_id == input.scope_id
+                - defined(account_id)
+                - account_id == input.account_id
                 - state == Active
             moves: weft.accounts.RoleBinding.revoke
         emits: [weft.accounts.AccountClosed]
         payload:
           weft.accounts.AccountClosed:
+            account_id: input.account_id
             scope_id: input.scope_id
       - name: wrong-state
         wrong_state: true
         error: weft.accounts.AccountNotOpen
+
+  # D-d A: one account, one scope. The binding account-opens-scope opens the scope on
+  # AccountCreated, and the control plane records the id OpenScope answered on the account. A
+  # scope recorded on another account, or a second scope on one account, is refused, so the
+  # reference is unique both ways.
+  # OPEN: a sub-account's scope; the binding opens one for AccountCreated only.
+  - name: weft.accounts.RecordAccountScope
+    naming:
+      display: Record an account's scope
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      - name: no-such-account
+        unknown_instance: true
+        error: weft.accounts.AccountNotFound
+      - name: no-such-scope
+        when_related: {via: input.scope_id, exists: false}
+        error: weft.accounts.ScopeNotFound
+      - name: scope-taken
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            any:
+              - all: [account_id == input.account_id, defined(scope_id)]
+              - all: [defined(scope_id), scope_id == input.scope_id]
+          exists: true
+        error: weft.accounts.ScopeTaken
+      - name: recorded
+        updates: weft.accounts.Account
+        instance: account_id
+        sets:
+          scope_id: input.scope_id
+        emits: [weft.accounts.AccountScopeRecorded]
+        payload:
+          weft.accounts.AccountScopeRecorded:
+            account_id: input.account_id
+            scope_id: input.scope_id
 
   # Sketch line 124 ("a user") and lines 141-142 (federated login, tokens from an external
   # identity provider): a user is known by the provider's subject.
@@ -804,7 +885,7 @@ commands:
     input:
       - {name: tenant_id, type: weft.shared.TenantId}
       - {name: principal_id, type: weft.shared.PrincipalId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: role, type: weft.shared.Role}
     outcomes:
       - name: owner-on-account
@@ -818,13 +899,13 @@ commands:
       # hardening pass 1 D3: the account is the account the request acts in, so another account
       # answers as a missing one before its row is read.
       - name: not-callers-account
-        when: scope_id != caller.scope_id
+        when: account_id != caller.account_id
         error: weft.accounts.AccountNotFound
       - name: no-such-principal
         when_related: {via: input.principal_id, exists: false}
         error: weft.accounts.PrincipalNotFound
       - name: no-such-account
-        when_related: {via: input.scope_id, exists: false}
+        when_related: {via: input.account_id, exists: false}
         error: weft.accounts.AccountNotFound
       # hardening pass 1 disclosure (accounts.yaml:773): a principal of another tenant answers as
       # a missing one (was CrossTenantBinding), before any state check.
@@ -834,13 +915,13 @@ commands:
       # hardening pass 1 disclosure (accounts.yaml:776): an account of another tenant answers as a
       # missing one (was CrossTenantBinding).
       - name: account-in-other-tenant
-        when_related: {via: input.scope_id, predicate: tenant_id != input.tenant_id}
+        when_related: {via: input.account_id, predicate: tenant_id != input.tenant_id}
         error: weft.accounts.AccountNotFound
       - name: principal-disabled
         when_related: {via: input.principal_id, predicate: state == Disabled}
         error: weft.accounts.PrincipalNotActive
       - name: account-closed
-        when_related: {via: input.scope_id, predicate: state == Closed}
+        when_related: {via: input.account_id, predicate: state == Closed}
         error: weft.accounts.AccountNotOpen
       - name: already-bound
         when_related:
@@ -848,8 +929,8 @@ commands:
           where:
             all:
               - principal_id == input.principal_id
-              - defined(scope_id)
-              - scope_id == input.scope_id
+              - defined(account_id)
+              - account_id == input.account_id
               - role == input.role
               - state == Active
           exists: true
@@ -868,7 +949,7 @@ commands:
         sets:
           principal_id: input.principal_id
           tenant_id: input.tenant_id
-          scope_id: input.scope_id
+          account_id: input.account_id
           role: input.role
         emits: [weft.accounts.RoleBound]
         payload:
@@ -876,7 +957,7 @@ commands:
             role_binding_id: {generated: true}
             principal_id: input.principal_id
             tenant_id: input.tenant_id
-            scope_id: input.scope_id
+            account_id: input.account_id
             role: input.role
 
   # Sketch line 101 (TenantOwner) and line 120 (the tenant owns everything below it). The first
@@ -926,7 +1007,7 @@ commands:
         sets:
           principal_id: input.principal_id
           tenant_id: input.tenant_id
-          scope_id: {cleared: true}
+          account_id: {cleared: true}
           role: owner
         emits: [weft.accounts.TenantOwnerBound]
         payload:
@@ -953,7 +1034,7 @@ commands:
         when_subject: {predicate: tenant_id != caller.tenant_id}
         error: weft.accounts.RoleBindingNotFound
       - name: not-callers-account
-        when_subject: {predicate: {all: [defined(scope_id), scope_id != caller.scope_id]}}
+        when_subject: {predicate: {all: [defined(account_id), account_id != caller.account_id]}}
         error: weft.accounts.RoleBindingNotFound
       - name: owner-binding
         when_subject: {predicate: role == owner}
@@ -1034,7 +1115,7 @@ commands:
     naming:
       display: Grant a top-level account's quota
     input:
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: resource_class, type: weft.shared.ResourceClassName}
       - {name: limit, type: Integer}
     outcomes:
@@ -1042,20 +1123,20 @@ commands:
         when: limit < 0
         error: weft.accounts.InvalidQuotaAmount
       - name: no-such-account
-        when_related: {via: input.scope_id, exists: false}
+        when_related: {via: input.account_id, exists: false}
         error: weft.accounts.AccountNotFound
       - name: sub-account
-        when_related: {via: input.scope_id, predicate: defined(parent_account_id)}
+        when_related: {via: input.account_id, predicate: defined(parent_account_id)}
         error: weft.accounts.NotTopLevelAccount
       - name: account-closed
-        when_related: {via: input.scope_id, predicate: state == Closed}
+        when_related: {via: input.account_id, predicate: state == Closed}
         error: weft.accounts.AccountNotOpen
       - name: quota-exists
         when_related:
           entity: weft.accounts.Quota
           where:
             all:
-              - scope_id == input.scope_id
+              - account_id == input.account_id
               - resource_class == input.resource_class
           exists: true
         error: weft.accounts.QuotaExists
@@ -1063,8 +1144,8 @@ commands:
         creates: weft.accounts.Quota
         instance: quota_id
         sets:
-          scope_id: input.scope_id
-          tenant_id: {related: {via: input.scope_id, field: tenant_id}}
+          account_id: input.account_id
+          tenant_id: {related: {via: input.account_id, field: tenant_id}}
           parent_quota_id: {cleared: true}
           resource_class: input.resource_class
           limit: input.limit
@@ -1073,7 +1154,7 @@ commands:
         payload:
           weft.accounts.QuotaGranted:
             quota_id: {generated: true}
-            scope_id: input.scope_id
+            account_id: input.account_id
             resource_class: input.resource_class
             limit: input.limit
 
@@ -1151,8 +1232,8 @@ commands:
     naming:
       display: Open a sub-account's quota
     input:
-      - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: parent_account_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: parent_account_id, type: weft.shared.AccountId}
       - {name: parent_quota_id, type: weft.shared.QuotaId}
       - {name: resource_class, type: weft.shared.ResourceClassName}
     outcomes:
@@ -1160,38 +1241,38 @@ commands:
       # request acts in, so another account answers as a missing one before its state
       # (TopLevelQuota) is read.
       - name: not-callers-account
-        when: scope_id != caller.scope_id
+        when: account_id != caller.account_id
         error: weft.accounts.AccountNotFound
       - name: no-such-account
-        when_related: {via: input.scope_id, exists: false}
+        when_related: {via: input.account_id, exists: false}
         error: weft.accounts.AccountNotFound
       - name: no-such-parent-quota
         when_related: {via: input.parent_quota_id, exists: false}
         error: weft.accounts.QuotaNotFound
       - name: top-level-account
-        when_related: {via: input.scope_id, predicate: not defined(parent_account_id)}
+        when_related: {via: input.account_id, predicate: not defined(parent_account_id)}
         error: weft.accounts.TopLevelQuota
       - name: other-parent
-        when_related: {via: input.scope_id, predicate: parent_account_id != input.parent_account_id}
+        when_related: {via: input.account_id, predicate: parent_account_id != input.parent_account_id}
         error: weft.accounts.QuotaParentMismatch
       # hardening pass 1 disclosure (accounts.yaml:1092): a quota of an account other than the
       # caller's parent account (tied to the caller by other-parent above) answers as a missing
       # one (was QuotaParentMismatch), before any state of it is read.
       - name: parent-quota-of-other-account
-        when_related: {via: input.parent_quota_id, predicate: scope_id != input.parent_account_id}
+        when_related: {via: input.parent_quota_id, predicate: account_id != input.parent_account_id}
         error: weft.accounts.QuotaNotFound
       - name: parent-quota-of-other-class
         when_related: {via: input.parent_quota_id, predicate: resource_class != input.resource_class}
         error: weft.accounts.QuotaParentMismatch
       - name: account-closed
-        when_related: {via: input.scope_id, predicate: state == Closed}
+        when_related: {via: input.account_id, predicate: state == Closed}
         error: weft.accounts.AccountNotOpen
       - name: quota-exists
         when_related:
           entity: weft.accounts.Quota
           where:
             all:
-              - scope_id == input.scope_id
+              - account_id == input.account_id
               - resource_class == input.resource_class
           exists: true
         error: weft.accounts.QuotaExists
@@ -1199,8 +1280,8 @@ commands:
         creates: weft.accounts.Quota
         instance: quota_id
         sets:
-          scope_id: input.scope_id
-          tenant_id: {related: {via: input.scope_id, field: tenant_id}}
+          account_id: input.account_id
+          tenant_id: {related: {via: input.account_id, field: tenant_id}}
           parent_quota_id: input.parent_quota_id
           resource_class: input.resource_class
           limit: 0
@@ -1209,7 +1290,7 @@ commands:
         payload:
           weft.accounts.QuotaAllocated:
             quota_id: {generated: true}
-            scope_id: input.scope_id
+            account_id: input.account_id
             parent_quota_id: input.parent_quota_id
             resource_class: input.resource_class
 
@@ -1242,7 +1323,7 @@ commands:
       # account the request acts in, so another account's quota answers as a missing one before
       # its remaining quota is read.
       - name: not-callers-account
-        when_subject: {predicate: scope_id != caller.scope_id}
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.accounts.QuotaNotFound
       - name: exceeds-parent
         when_subject: {predicate: remaining < input.limit}
@@ -1304,7 +1385,7 @@ commands:
       # hardening pass 1 D3 and disclosure (accounts.yaml:1208): the parent quota is of the
       # account the request acts in, so another account's quota answers as a missing one.
       - name: not-callers-account
-        when_subject: {predicate: scope_id != caller.scope_id}
+        when_subject: {predicate: account_id != caller.account_id}
         error: weft.accounts.QuotaNotFound
       - name: no-such-quota
         when_related: {via: input.quota_id, exists: false}
@@ -1364,9 +1445,9 @@ views:
       - {name: tenant_id, type: weft.shared.TenantId}
     filter: tenant_id == param.tenant_id
     fields:
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: parent_account_id, type: Optional<weft.shared.ScopeId>}
+      - {name: parent_account_id, type: Optional<weft.shared.AccountId>}
       - {name: name, type: weft.accounts.Name}
       - {name: state, type: weft.accounts.Account.State}
 
@@ -1407,11 +1488,11 @@ views:
       - {name: role_binding_id, type: weft.shared.RoleBindingId}
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
       - {name: role, type: weft.shared.Role}
       - name: account_name
         type: Optional<weft.accounts.Name>
-        field: {related: {via: scope_id, field: name}}
+        field: {related: {via: account_id, field: name}}
 
   # Sketch line 125: every binding of one tenant, active and revoked, for its owners and admins.
   - name: weft.accounts.RoleBindings
@@ -1424,7 +1505,7 @@ views:
       - {name: role_binding_id, type: weft.shared.RoleBindingId}
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
       - {name: role, type: weft.shared.Role}
       - {name: state, type: weft.accounts.RoleBinding.State}
 
@@ -1441,7 +1522,7 @@ views:
       - {name: role_binding_id, type: weft.shared.RoleBindingId}
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
+      - {name: account_id, type: Optional<weft.shared.AccountId>}
       - {name: role, type: weft.shared.Role}
       - {name: state, type: weft.accounts.RoleBinding.State}
 
@@ -1455,7 +1536,7 @@ views:
     consistency: read_your_writes
     fields:
       - {name: quota_id, type: weft.shared.QuotaId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: tenant_id, type: weft.shared.TenantId}
       - {name: parent_quota_id, type: Optional<weft.shared.QuotaId>}
       - {name: resource_class, type: weft.shared.ResourceClassName}
@@ -1473,11 +1554,11 @@ views:
     source: weft.accounts.Quota
     consistency: read_your_writes
     params:
-      - {name: scope_id, type: weft.shared.ScopeId}
-    filter: scope_id == param.scope_id
+      - {name: account_id, type: weft.shared.AccountId}
+    filter: account_id == param.account_id
     fields:
       - {name: quota_id, type: weft.shared.QuotaId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: resource_class, type: weft.shared.ResourceClassName}
       - {name: parent_quota_id, type: Optional<weft.shared.QuotaId>}
       - {name: limit, type: Integer}
@@ -1494,7 +1575,7 @@ views:
     filter: tenant_id == param.tenant_id
     fields:
       - {name: quota_id, type: weft.shared.QuotaId}
-      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
       - {name: tenant_id, type: weft.shared.TenantId}
       - {name: parent_quota_id, type: Optional<weft.shared.QuotaId>}
       - {name: resource_class, type: weft.shared.ResourceClassName}

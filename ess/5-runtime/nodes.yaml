@@ -493,7 +493,7 @@ entities:
       # references: the account (2. Tenancy) outlives a stream.
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
     lifecycle:

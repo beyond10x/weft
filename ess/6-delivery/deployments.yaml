@@ -90,7 +90,7 @@ entities:
         target: weft.deployments.Release
         cardinality: one
         via: rollback_of
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: scope_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
       - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: environment, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
       - {name: formation_revision, kind: references, target: weft.architecture.FormationRevision, cardinality: one, via: formation_revision_id}

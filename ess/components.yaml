@@ -74,6 +74,13 @@ conversions:
     because: >-
       As above, for a row field that is empty until weft-control first stamps it
       (identity.TrustDomain.rotation_ends_at, workloads.Schedule.last_fired_at).
+  # D-d A: binding account-opens-scope names an account's scope by the account's id.
+  - from: weft.shared.AccountId
+    to: String
+    because: >-
+      A scope's name is unique among open scopes and an account's name only among its siblings,
+      so the scope an account opens is named by the account's id, its text form; nothing reads it
+      back as an id.
 
 components:
   # Line 72: "the user API (management plane)". Line 95: the CLI and CI reach it over HTTP.
@@ -125,6 +132,7 @@ components:
         - weft.accounts.GrantTopQuota
         - weft.accounts.LowerTopQuota
         - weft.accounts.RaiseTopQuota
+        - weft.accounts.RecordAccountScope
         - weft.accounts.ReleaseQuota
         - weft.accounts.RevokeRole
         - weft.accounts.RevokeTenantOwner
@@ -185,6 +193,7 @@ components:
         # events of weft.accounts
         - weft.accounts.AccountClosed
         - weft.accounts.AccountCreated
+        - weft.accounts.AccountScopeRecorded
         - weft.accounts.PrincipalAdded
         - weft.accounts.PrincipalDisabled
         - weft.accounts.QuotaAllocated
@@ -349,6 +358,7 @@ components:
         - weft.claims.ReleaseClaim
         - weft.claims.ReleaseClaimBindings
         # commands of weft.infrastructure
+        - weft.infrastructure.ConfigureCloud
         - weft.infrastructure.CordonNode
         - weft.infrastructure.CreateCloud
         - weft.infrastructure.CreateNodePool
@@ -1567,6 +1577,60 @@ bindings:
     on_failure: retry
   # OPEN: ReleaseClaim on a Bound claim is refused (docs/open-questions.md "scheduling and claims",
   # taken), so R5 relies on ReleaseBinding having wiped the devices first (claims.yaml).
+
+  # ---------------------------------------------------------------------------------------------
+  # D-d A: an account of the multi-tenant example maps to one cloudspec scope. A created account
+  # opens its scope; OpenScope answers the scope's id, which the control plane records on the
+  # account with accounts.RecordAccountScope (a binding carries no response back).
+  - id: account-opens-scope
+    summary: Open the scope of an account just created.
+    when:
+      event: weft.accounts.AccountCreated
+    invoke:
+      command: weft.scope.OpenScope
+    mapping:
+      name: event.account_id
+    delivery: at_least_once
+    on_failure:
+      # name-taken: harmless; a repeated delivery of this AccountCreated, whose first delivery
+      # opened the scope (the name is the account's id, conversion above).
+      drop: [name-taken]
+      # A transport failure is retried.
+      retry: {except: [name-taken]}
+
+  # D-d A: a sub-account maps to a scope of its own, as a top-level account does.
+  - id: sub-account-opens-scope
+    summary: Open the scope of a sub-account just created.
+    when:
+      event: weft.accounts.SubAccountCreated
+    invoke:
+      command: weft.scope.OpenScope
+    mapping:
+      name: event.account_id
+    delivery: at_least_once
+    on_failure:
+      # name-taken: harmless; a repeated delivery of this SubAccountCreated.
+      drop: [name-taken]
+      # A transport failure is retried.
+      retry: {except: [name-taken]}
+
+  # D-d A: a closed account's scope closes. The R6 commands below refuse while the scope is open
+  # and are retried, so they act once this binding ran.
+  - id: account-closes-scope
+    summary: Close the scope of a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.scope.CloseScope
+    mapping:
+      scope_id: event.scope_id
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; a repeated delivery, the scope is closed already.
+      drop: [wrong-state]
+      # no-such-scope cannot follow: CloseAccount checked the scope recorded on the account. A
+      # transport failure is retried.
+      retry: {except: [wrong-state]}
 
   # ---------------------------------------------------------------------------------------------
   # R6 (line 590): account closed -> its exports revoked, tokens expired, instances stopped. Many

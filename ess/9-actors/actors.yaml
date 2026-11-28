@@ -31,6 +31,9 @@ naming:
 # account and below"); weft-control sets it to the account of the row it acts on. A guard compares
 # it with `==`/`!=` only (ESS caller values, `caller-values.md`). Commands that read none of them
 # are unchanged.
+# D-d A: `scope_id` is the cloudspec scope of that account; TenantOwner and AccountAdmin, which run
+# the account commands of weft.accounts, also declare `account_id`, the account itself, which
+# weft-api sets with `scope_id` from the same check.
 # OPEN: the owner may prefer the caller to carry the account tree; ESS compares a caller value only by
 # equality, so "the account the request acts in" is the form that can be checked.
 
@@ -46,6 +49,7 @@ actors:
       - weft.cluster.CreateDefaultCluster # integrator, 2026-11-26
       # cluster: every command except JoinNode and RecordNodeObservation.
       - weft.infrastructure.CreateCloud
+      - weft.infrastructure.ConfigureCloud
       - weft.infrastructure.SetCloudPolicy
       - weft.infrastructure.ScaleControlPlane
       - weft.infrastructure.DeclareZone
@@ -76,6 +80,9 @@ actors:
       - weft.accounts.RaiseTopQuota
       - weft.accounts.LowerTopQuota
       - weft.accounts.BindTenantOwner
+      # scope (cloudspec's blocks, D-d A): the operator runs scopes, as cloudspec's ClusterOperator.
+      - weft.scope.OpenScope
+      - weft.scope.CloseScope
       # access: Approve, Deny and Revoke of its own login only.
       - weft.access.ConfigureAccess
       - weft.access.ApproveLogin
@@ -133,6 +140,7 @@ actors:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
       - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
     may:
       - weft.cluster.CreateCluster # integrator, 2026-11-26
       - weft.cluster.SetClusterPolicy # integrator, 2026-11-26
@@ -231,6 +239,7 @@ actors:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
       - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_id, type: weft.shared.AccountId}
     may:
       - weft.cluster.CreateCluster # integrator, 2026-11-26
       - weft.cluster.SetClusterPolicy # integrator, 2026-11-26
@@ -1017,6 +1026,11 @@ actors:
       - weft.observability.CloseInstanceLogStreams
       - weft.observability.RetireInstanceMetricSeries
       - weft.claims.ReleaseClaimBindings
+      # D-d A: the binding account-opens-scope opens a created account's scope, and the control
+      # plane records the id OpenScope answered on the account.
+      - weft.scope.OpenScope
+      - weft.accounts.RecordAccountScope
+      - weft.scope.CloseScope
       # The gap views of its time steps: R3 (silent sessions, expired leases) and log retention.
       # Read-granted once named here. Bindings pass, 2026-11-26.
       - weft.nodes.SilentNodeSessions

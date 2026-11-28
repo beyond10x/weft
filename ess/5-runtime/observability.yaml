@@ -63,7 +63,7 @@ entities:
       - name: notification_error
         type: Optional<String>
     relations:
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: scope_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
       - {name: rule, kind: references, target: weft.observability.AlertRule, cardinality: one, via: alert_rule_id}
       - {name: target, kind: references, target: weft.observability.NotificationTarget, cardinality: one, via: notification_target_id}
     lifecycle:
