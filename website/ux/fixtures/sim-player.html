@@ -55,7 +55,7 @@ svg text { font-size:11px; fill: var(--fg); }
 .sq.bad { background: var(--bad); }
 input#filter { padding:4px 8px; border:1px solid var(--line); border-radius:4px; background: var(--bg); color: var(--fg); width: 260px; }
 .legend span { margin-right:12px; }
-#player .controls { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:4px 0 8px; }
+#player .controls { display:flex; flex-wrap:wrap; gap:6px 12px; align-items:center; margin:4px 0 8px; position:sticky; top:var(--head, 0px); z-index:1; background:var(--bg); }
 #player button, #player select, #player input { font: inherit; color: var(--fg); background: var(--bg); border:1px solid var(--line); border-radius:4px; padding:2px 8px; }
 #player .plots { display:flex; flex-wrap:wrap; gap:20px; align-items:flex-start; }
 #player .plots svg { max-width:100%; height:auto; }
@@ -258,9 +258,13 @@ function kcell(v) {
   return fmt(v);
 }
 
-/** Keeps what is scrolled into view below the sticky header, whatever its height. */
-function headerPadding() { document.documentElement.style.scrollPaddingTop = `${document.querySelector('header').offsetHeight + 8}px`; }
-addEventListener('resize', headerPadding);
+/** Keeps what is scrolled into view, and the player controls, below the sticky header, whatever its height. */
+function headerPadding() {
+  const h = document.querySelector('header').offsetHeight;
+  document.documentElement.style.scrollPaddingTop = `${h + 8}px`;
+  document.documentElement.style.setProperty('--head', `${h}px`);
+}
+new ResizeObserver(headerPadding).observe(document.querySelector('header'));
 
 function table(id, head, rows) {
   $(id).innerHTML = rows.length ? `<tr>${head.map(h => `<th>${h}</th>`).join('')}</tr>` + rows.map(r => `<tr>${r.map(c => `<td>${c}</td>`).join('')}</tr>`).join('') : '<tr><td class="mute">none</td></tr>';
