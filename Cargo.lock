@@ -1580,6 +1580,7 @@ dependencies = [
  "weft-agent",
  "weft-bin",
  "weft-client",
+ "weft-cloudspec",
  "weft-impl",
  "weft-platform",
  "weft-probe-api",

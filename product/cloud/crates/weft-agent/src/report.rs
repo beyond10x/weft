@@ -10,14 +10,21 @@
 //! - a finished process: `{"instance_id": "...", "exit_code": <code or null>, "stdout": "..."}`,
 //!   its exit code (`null` when a signal ended it) and its output as text ([`Report::exited`]);
 //! - a start of a process refused and not made again: `{"instance_id": "...", "refusal":
-//!   "<code>"}`, the place's code or the exec port's ([`Report::refused`]).
+//!   "<code>"}`, the place's code or the exec port's, or the `workloads` port's for a process
+//!   workload ([`Report::refused`]);
+//! - for a process workload run through the `workloads` port (`story:slot-node-process`), each
+//!   with `"process": "<name>"`: a start that did not reach running, `"failed": "prestart"` with
+//!   `step` and `exit_code` or `"failed": "command"` with `reason` ([`Report::process_failed`]);
+//!   an exit, `exit_code` (`null` for a signal) and `kept_down` ([`Report::process_exited`]); a
+//!   restart, `"restarted": <n>` ([`Report::process_restarted`]); a stop, `"stopped":
+//!   "within-grace" | "killed" | "not-running"` ([`Report::process_stopped`]).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 
 use serde_json::{json, Value};
-use weft_platform::node::Exited;
+use weft_platform::node::{Exited, ProcessExit, StartFailure, StopEnd};
 
 /// An open report file, appended to.
 #[derive(Debug)]
@@ -88,5 +95,96 @@ impl Report {
     /// What the file system refuses.
     pub fn refused(&mut self, instance_id: &str, code: &str) -> io::Result<()> {
         self.line(&json!({"instance_id": instance_id, "refusal": code}))
+    }
+
+    /// The start of `process` of `instance_id` through the `workloads` port did not reach
+    /// `running`: a prestart step ended other than with code 0, or the command did not start.
+    ///
+    /// # Errors
+    ///
+    /// What the file system refuses.
+    pub fn process_failed(
+        &mut self,
+        instance_id: &str,
+        process: &str,
+        failure: &StartFailure,
+    ) -> io::Result<()> {
+        self.line(&match failure {
+            StartFailure::Prestart { step, exit } => json!({
+                "instance_id": instance_id,
+                "process": process,
+                "failed": "prestart",
+                "step": step,
+                "exit_code": code(*exit),
+            }),
+            StartFailure::Command { reason } => json!({
+                "instance_id": instance_id,
+                "process": process,
+                "failed": "command",
+                "reason": reason,
+            }),
+        })
+    }
+
+    /// `process` of `instance_id` ended on its own with `exit`; `kept_down`: it is not started
+    /// again (the restart policy, or a code in `keep_down_on_exit`).
+    ///
+    /// # Errors
+    ///
+    /// What the file system refuses.
+    pub fn process_exited(
+        &mut self,
+        instance_id: &str,
+        process: &str,
+        exit: ProcessExit,
+        kept_down: bool,
+    ) -> io::Result<()> {
+        self.line(&json!({
+            "instance_id": instance_id,
+            "process": process,
+            "exit_code": code(exit),
+            "kept_down": kept_down,
+        }))
+    }
+
+    /// The agent started `process` of `instance_id` again, its `restarts`-th restart.
+    ///
+    /// # Errors
+    ///
+    /// What the file system refuses.
+    pub fn process_restarted(
+        &mut self,
+        instance_id: &str,
+        process: &str,
+        restarts: u32,
+    ) -> io::Result<()> {
+        self.line(&json!({"instance_id": instance_id, "process": process, "restarted": restarts}))
+    }
+
+    /// The agent stopped `process` of `instance_id`, which ended as `end` says.
+    ///
+    /// # Errors
+    ///
+    /// What the file system refuses.
+    pub fn process_stopped(
+        &mut self,
+        instance_id: &str,
+        process: &str,
+        end: Option<StopEnd>,
+    ) -> io::Result<()> {
+        let end = end.map(|end| match end {
+            StopEnd::WithinGrace => "within-grace",
+            StopEnd::Killed(_) => "killed",
+            StopEnd::NotRunning => "not-running",
+        });
+        self.line(&json!({"instance_id": instance_id, "process": process, "stopped": end}))
+    }
+}
+
+/// The exit code of `exit`; `None` when a signal ended the process.
+fn code(exit: ProcessExit) -> Option<u8> {
+    match exit {
+        ProcessExit::Code(code) => Some(code),
+        ProcessExit::Signal => None,
     }
 }

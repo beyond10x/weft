@@ -3,16 +3,19 @@
 //! `{"strategy": "<RolloutStrategy>"}`, sent by the caller as every request is
 //! ([`weft_bin::authenticate`]).
 //!
-//! The control host defines one workload per part with a fixed profile per part kind, here the
-//! snippet's ([`SNIPPET`]). In one unit ([`Host::unit`]):
+//! The control host defines one workload per part with a fixed profile per part kind: the
+//! snippet's ([`SNIPPET`]) and the host process's ([`PROCESS`], `story:slot-node-process`: shape
+//! `Daemon`, isolation `None`, and the part's `run_as`, `prestart`, `stop` and `restart`). In one
+//! unit ([`Host::unit`]):
 //!
 //! - the plan must name a source, else `422` `{"refusal": "PlanNotFromCloudspec"}` and no
 //!   command runs (a plan the caller's scope does not hold is left to `ApplyPlan`'s refusal);
 //! - the file kept under the source's digest ([`weft_impl::documents`]) is read with
 //!   [`Submission::read`];
 //! - `weft.deployments.ApplyPlan`, as the caller;
-//! - for each part with `block: workloads` and `kind: snippet` whose `parts.<key>` the coverage
-//!   does not mark `refused`, in key order, as the caller: `weft.architecture.AddComponent` named
+//! - for each part with `block: workloads` and `kind: snippet` or `kind: process` whose
+//!   `parts.<key>` the coverage does not mark `refused`, in key order, as the caller:
+//!   `weft.architecture.AddComponent` named
 //!   after the key (a component of the formation with that name is reused),
 //!   `weft.workloads.DefineWorkload` with the profile, `weft.architecture.AssignWorkload` to the
 //!   plan's revision and environment; then, as `weft.actors.ReleaseController` of the plan's
@@ -60,22 +63,32 @@ pub struct Profile {
     pub isolation: &'static str,
     /// The cpu claimed.
     pub cpu: i64,
-    /// `weft.workloads.ShapeKind`, `Job`, with `JobSettings`:
-    pub shape: &'static str,
-    /// `parallelism`,
-    pub parallelism: i64,
-    /// `gang`,
-    pub gang: bool,
-    /// `max_retries`,
-    pub max_retries: i64,
-    /// `backoff`.
-    pub backoff: &'static str,
-    /// `weft.workloads.RestartMode`.
+    /// `weft.workloads.ShapeKind` with its settings.
+    pub shape: Shape,
+    /// `weft.workloads.RestartMode` of the restart policy, when the part names no `restart`.
     pub restart_mode: &'static str,
     /// `weft.shared.PriorityClassName`.
     pub priority: &'static str,
     /// The name of the one `Main` process, which runs the part's `command` and `environment`.
     pub process: &'static str,
+    /// A host process: the part's `run_as`, `prestart`, `stop` and `restart` are the workload's,
+    /// and its `restart` sets the restart policy ([`restart_policy`]).
+    pub host_process: bool,
+}
+
+/// The shape of a profile's workloads (`weft.workloads.ShapeKind`) and its settings
+/// (`weft.workloads.ShapeSettings`).
+pub enum Shape {
+    /// `Job`, with `JobSettings`: `parallelism`, `gang`, `max_retries`, `backoff`.
+    Job {
+        parallelism: i64,
+        gang: bool,
+        max_retries: i64,
+        backoff: &'static str,
+    },
+    /// `Daemon`, with `DaemonSettings` selecting every node (`node_selector` empty): which node
+    /// runs an instance is placement's (`story:slot-node-pool-placement`).
+    Daemon,
 }
 
 /// The snippet profile (D-C1 = A).
@@ -86,15 +99,37 @@ pub const SNIPPET: Profile = Profile {
     package_kind: "Snippet",
     isolation: "Container",
     cpu: 1,
-    shape: "Job",
-    parallelism: 1,
-    gang: false,
-    max_retries: 0,
-    backoff: "PT1S",
+    shape: Shape::Job {
+        parallelism: 1,
+        gang: false,
+        max_retries: 0,
+        backoff: "PT1S",
+    },
     restart_mode: "Never",
     priority: "standard",
     process: "main",
+    host_process: false,
 };
+
+/// The process profile (`story:slot-node-process`): a program run on its node's host as a
+/// supervised `Daemon`, with no sandbox (isolation `None`, which `DefineWorkload` takes only with
+/// a named host user, `run_as`), on the runtime `process`.
+pub const PROCESS: Profile = Profile {
+    part_kind: "process",
+    runtime: "process",
+    artifact_digest: "sha256:weft-skeleton-process",
+    package_kind: "Process",
+    isolation: "None",
+    cpu: 1,
+    shape: Shape::Daemon,
+    restart_mode: "Never",
+    priority: "standard",
+    process: "main",
+    host_process: true,
+};
+
+/// The profiles of the part kinds an apply defines workloads of.
+const PROFILES: [&Profile; 2] = [&SNIPPET, &PROCESS];
 
 /// The plan an apply path names: `Some` for `/cloudspec/plans/<plan_id>/apply`.
 pub fn plan_of(path: &str) -> Option<&str> {
@@ -177,13 +212,20 @@ fn roll_out(
     let scope_id = &plan.scope_id.0 .0;
     let formation_id = &plan.formation_id.0 .0;
     let environment_id = &plan.environment_id.0 .0;
-    let runtime_id = runtime(sender.ports, SNIPPET.runtime);
     let controller = CallerAttributes {
         scope_id: Some(scope_id.clone()),
         ..CallerAttributes::default()
     };
     let mut rolled = Vec::new();
-    for (position, (key, part)) in (1_i64..).zip(parts(submission, &SNIPPET)) {
+    let mut profiled: Vec<(String, Value, &Profile, String)> = Vec::new();
+    for profile in PROFILES {
+        let runtime_id = runtime(sender.ports, profile.runtime);
+        for (key, part) in parts(submission, profile) {
+            profiled.push((key, part, profile, runtime_id.clone()));
+        }
+    }
+    profiled.sort_by(|a, b| a.0.cmp(&b.0));
+    for (position, (key, part, profile, runtime_id)) in (1_i64..).zip(profiled) {
         let component_id = match component(sender.ports, formation_id, &key) {
             Some(id) => id,
             None => published(
@@ -198,7 +240,7 @@ fn roll_out(
         let workload_id = published(
             &sender.send(
                 "weft.workloads.DefineWorkload",
-                define_workload(&SNIPPET, scope_id, &identity, &key, &runtime_id, &part),
+                define_workload(profile, scope_id, &identity, &key, &runtime_id, &part),
             )?,
             "workload_id",
         );
@@ -399,7 +441,30 @@ fn define_workload(
     runtime_id: &str,
     part: &Value,
 ) -> Value {
-    json!({
+    let (shape, settings) = match profile.shape {
+        Shape::Job {
+            parallelism,
+            gang,
+            max_retries,
+            backoff,
+        } => (
+            "Job",
+            json!({
+                "shape": "job",
+                "value": {
+                    "parallelism": parallelism,
+                    "gang": gang,
+                    "max_retries": max_retries,
+                    "backoff": backoff,
+                },
+            }),
+        ),
+        Shape::Daemon => (
+            "Daemon",
+            json!({"shape": "daemon", "value": {"node_selector": {}}}),
+        ),
+    };
+    let mut input = json!({
         "scope_id": scope_id,
         "identity": identity,
         "component": key,
@@ -407,33 +472,134 @@ fn define_workload(
         "artifact_digest": profile.artifact_digest,
         "runtime_id": runtime_id,
         "isolation": profile.isolation,
-        "shape": profile.shape,
-        "settings": {
-            "shape": profile.shape.to_ascii_lowercase(),
-            "value": {
-                "parallelism": profile.parallelism,
-                "gang": profile.gang,
-                "max_retries": profile.max_retries,
-                "backoff": profile.backoff,
-            },
-        },
+        "shape": shape,
+        "settings": settings,
         "claims": [{"name": "cpu", "class": "cpu", "amount": profile.cpu, "selector": {}}],
         "processes": [{
             "name": profile.process,
             "role": "Main",
             "command": part.get("command").cloned().unwrap_or_else(|| json!([])),
-            "environment": part.get("environment").cloned().unwrap_or_else(|| json!({})),
+            "environment": environment(part.get("environment")),
             "checks": [],
         }],
-        "restart_policy": {
-            "mode": profile.restart_mode,
-            "backoff_initial_seconds": 1,
-            "backoff_max_seconds": 60,
-            "backoff_limit": 5,
-            "backoff_window_seconds": 600,
-        },
+        "restart_policy": restart_policy(profile, part),
         "priority": profile.priority,
+    });
+    if profile.host_process {
+        input["run_as"] = part.get("run_as").cloned().unwrap_or(Value::Null);
+        input["prestart"] = prestart(part.get("prestart"));
+        input["stop"] = stop(part.get("stop"));
+        input["restart"] = restart(part.get("restart"));
+    }
+    input
+}
+
+/// The part's `environment` as `weft.workloads.Process.environment` takes it: each value as its
+/// text, a number or a Boolean as JSON writes it (cloudspec writes `POOLD_SLOTS: 8`).
+fn environment(environment: Option<&Value>) -> Value {
+    let Some(Value::Object(variables)) = environment else {
+        return json!({});
+    };
+    variables
+        .iter()
+        .map(|(name, value)| {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            (name.clone(), Value::String(text))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+/// The restart policy (`weft.workloads.RestartPolicy`) of a part: the profile's mode, or for a
+/// host process the mode of its `restart.policy`, with its `delay` (whole seconds, at least 1) as
+/// the initial backoff, so the node's report of a restart after that delay lies within the
+/// policy (`weft.node.RestartProcess`, `backoff-out-of-range`).
+fn restart_policy(profile: &Profile, part: &Value) -> Value {
+    let restart = part.get("restart").filter(|_| profile.host_process);
+    let mode = restart
+        .and_then(|restart| restart.get("policy"))
+        .and_then(Value::as_str)
+        .map_or_else(|| profile.restart_mode.to_owned(), variant);
+    let initial = restart
+        .and_then(|restart| restart.get("delay"))
+        .and_then(Value::as_str)
+        .and_then(seconds)
+        .unwrap_or(1)
+        .max(1);
+    json!({
+        "mode": mode,
+        "backoff_initial_seconds": initial,
+        "backoff_max_seconds": initial.max(60),
+        "backoff_limit": 5,
+        "backoff_window_seconds": 600,
     })
+}
+
+/// A part's `prestart` as `weft.workloads.PrestartStep`s, in list order: each step's `command`
+/// and `privileged` unchanged.
+fn prestart(prestart: Option<&Value>) -> Value {
+    let Some(Value::Array(steps)) = prestart else {
+        return Value::Null;
+    };
+    steps
+        .iter()
+        .map(|step| json!({"command": step.get("command"), "privileged": step.get("privileged")}))
+        .collect()
+}
+
+/// A part's `stop` as `weft.workloads.Stop`: the `grace` unchanged, the `kill` scope by its
+/// variant name (`group` is `Group`).
+fn stop(stop: Option<&Value>) -> Value {
+    let Some(stop) = stop.filter(|stop| stop.is_object()) else {
+        return Value::Null;
+    };
+    json!({
+        "grace": stop.get("grace"),
+        "kill": stop.get("kill").and_then(Value::as_str).map(variant),
+    })
+}
+
+/// A part's `restart` as `weft.workloads.ProcessRestart`: the `policy` by its variant name
+/// (`always` is `Always`, `on-failure` is `OnFailure`), `delay` and `keep_down_on_exit`
+/// unchanged.
+fn restart(restart: Option<&Value>) -> Value {
+    let Some(restart) = restart.filter(|restart| restart.is_object()) else {
+        return Value::Null;
+    };
+    json!({
+        "policy": restart.get("policy").and_then(Value::as_str).map(variant),
+        "delay": restart.get("delay"),
+        "keep_down_on_exit": restart.get("keep_down_on_exit"),
+    })
+}
+
+/// The variant name of a cloudspec word: each word of `on-failure`, `on_failure` or `group`
+/// capitalized and joined (`OnFailure`, `Group`); a variant name stays as it is.
+fn variant(word: &str) -> String {
+    word.split(['-', '_'])
+        .map(|piece| {
+            let mut chars = piece.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect()
+}
+
+/// The seconds of a duration `<n>s`, `<n>m` or `<n>h` (`n` a whole number), as cloudspec writes
+/// `stop.grace` and `restart.delay`.
+fn seconds(duration: &str) -> Option<i64> {
+    let (number, scale) = if let Some(number) = duration.strip_suffix('s') {
+        (number, 1)
+    } else if let Some(number) = duration.strip_suffix('m') {
+        (number, 60)
+    } else {
+        (duration.strip_suffix('h')?, 3600)
+    };
+    number.parse::<i64>().ok()?.checked_mul(scale)
 }
 
 /// The text member `field` of the first event `answer` published (empty when absent: the

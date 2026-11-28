@@ -1,7 +1,7 @@
 {
   "format": "ess-diff-acknowledgements/1",
   "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
-  "after": "c8502f8d93e9ad826038930338f15e1ab9e7c3aaede10df0635825d6c28a3f66",
+  "after": "297310676b372c07a3cbc14a910ac32dfa741e35409787f1c34ec3e7dac2e4ad",
   "acknowledged": [
     "system/weft/unclassified-changed",
     "type/weft.artifacts.ArtifactKind/variant-added/BuildContext",

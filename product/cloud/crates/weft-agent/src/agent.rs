@@ -128,7 +128,10 @@ pub fn run(
 
 /// As [`run`], with the `workloads` port when the node has one: the processes of a `Service`
 /// replica start through it (`story:workload-environment-and-args`, [`Follower::workloads`]),
-/// every other process through `exec`.
+/// and those of a process workload (`story:slot-node-process`), every other process through
+/// `exec`. The node's own records (`weft.node`) are not kept here
+/// ([`Follower::records`]): a process workload runs, and its `StartProcess`, `RestartProcess`
+/// and `StopProcess` are refused and logged.
 ///
 /// # Errors
 ///

@@ -31,9 +31,10 @@ use weft_types::shared::{
     WorkloadIdentity, ZoneName,
 };
 use weft_types::workloads::{
-    DesiredRun, InstanceData, InstanceHealth, InstanceSnapshot, InstanceState, PackageKind,
-    Process, ProcessRole, RestartMode, RestartPolicy, ServiceSettings, ShapeKind, ShapeSettings,
-    WorkloadData, WorkloadSnapshot, WorkloadState,
+    DaemonSettings, DesiredRun, InstanceData, InstanceHealth, InstanceSnapshot, InstanceState,
+    PackageKind, PrestartStep, Process, ProcessRestart, ProcessRole, RestartMode, RestartPolicy,
+    RunAs, ServiceSettings, ShapeKind, ShapeSettings, Stop, WorkloadData, WorkloadSnapshot,
+    WorkloadState,
 };
 
 /// The snippet of this node's instance.
@@ -54,6 +55,8 @@ const OTHER_DIGEST: &str =
 pub struct Placed {
     pub node_id: String,
     pub instance_id: String,
+    /// The `Active` assignment of the instance to the node.
+    pub assignment_id: String,
 }
 
 /// The seeded state: its rows, this node's join token, and the identities a test reads.
@@ -130,16 +133,86 @@ fn placed(
     snippet: &str,
     digest: &str,
 ) -> Placed {
+    let artifact_digest = ArtifactDigest(digest.to_owned());
+    rows.push(Row::Artifact(ArtifactSnapshot {
+        state: ArtifactState::Registered,
+        data: ArtifactData {
+            artifact_digest: artifact_digest.clone(),
+            scope_id: scope_id.clone(),
+            kind: ArtifactKind::Snippet,
+            size_bytes: i64::try_from(snippet.len()).expect("a short snippet"),
+            signature: "unsigned".to_owned(),
+            signer_key_id: "none".to_owned(),
+            built_from: None,
+        },
+    }));
+    let processes = vec![Process {
+        name: ProcessName("main".to_owned()),
+        role: ProcessRole::Main,
+        artifact_digest: None,
+        command: vec!["sh".to_owned(), "-c".to_owned(), snippet.to_owned()],
+        environment: BTreeMap::new(),
+        checks: Vec::new(),
+    }];
+    let restart_policy = RestartPolicy {
+        mode: RestartMode::Always,
+        backoff_initial_seconds: 1,
+        backoff_max_seconds: 60,
+        backoff_limit: 1,
+        backoff_window_seconds: 600,
+    };
+    let workload = WorkloadData {
+        workload_id: WorkloadId(Uuid(mint())),
+        scope_id: scope_id.clone(),
+        identity: WorkloadIdentity(format!("{}/web", scope_id.0 .0)),
+        component: ComponentName("web".to_owned()),
+        package_kind: PackageKind::Snippet,
+        artifact_digest,
+        runtime_id: RuntimeId(Uuid(mint())),
+        isolation: IsolationLevel::Container,
+        run_as: None,
+        upgrade: None,
+        volumes: None,
+        ports: None,
+        limits: None,
+        process_priority: None,
+        stop: None,
+        prestart: None,
+        restart: None,
+        environment_files: None,
+        shape: ShapeKind::Service,
+        settings: ShapeSettings::Service(ServiceSettings { stateful: false }),
+        claims: Vec::new(),
+        processes,
+        restart_policy,
+        priority: PriorityClassName("default".to_owned()),
+    };
+    rows.push(Row::Workload(WorkloadSnapshot {
+        state: WorkloadState::Defined,
+        data: workload.clone(),
+    }));
+    assigned(rows, cloud_id, &workload, IsolationLevel::Container)
+}
+
+/// A `Ready` node with an open session, and one `Scheduled` instance of `workload` on it under
+/// `isolation`, with an `Active` assignment: the rows pushed to `rows`. The instance copies the
+/// workload's processes and restart policy, as `CreateInstance` does; the workload's own row is
+/// not pushed.
+pub fn assigned(
+    rows: &mut Vec<Row>,
+    cloud_id: &CloudId,
+    workload: &WorkloadData,
+    isolation: IsolationLevel,
+) -> Placed {
     let now = timestamp(OffsetDateTime::now_utc());
     let placed = Placed {
         node_id: mint(),
         instance_id: mint(),
+        assignment_id: mint(),
     };
     let node_id = id(NodeId, &placed.node_id);
     let instance_id = id(InstanceId, &placed.instance_id);
-    let workload_id = WorkloadId(Uuid(mint()));
     let session_id = NodeSessionId(Uuid(mint()));
-    let artifact_digest = ArtifactDigest(digest.to_owned());
 
     rows.push(Row::Node(NodeSnapshot {
         state: NodeState::Ready,
@@ -185,71 +258,15 @@ fn placed(
             end_reason: None,
         },
     }));
-    rows.push(Row::Artifact(ArtifactSnapshot {
-        state: ArtifactState::Registered,
-        data: ArtifactData {
-            artifact_digest: artifact_digest.clone(),
-            scope_id: scope_id.clone(),
-            kind: ArtifactKind::Snippet,
-            size_bytes: i64::try_from(snippet.len()).expect("a short snippet"),
-            signature: "unsigned".to_owned(),
-            signer_key_id: "none".to_owned(),
-            built_from: None,
-        },
-    }));
-    let processes = vec![Process {
-        name: ProcessName("main".to_owned()),
-        role: ProcessRole::Main,
-        artifact_digest: None,
-        command: vec!["sh".to_owned(), "-c".to_owned(), snippet.to_owned()],
-        environment: BTreeMap::new(),
-        checks: Vec::new(),
-    }];
-    let restart_policy = RestartPolicy {
-        mode: RestartMode::Always,
-        backoff_initial_seconds: 1,
-        backoff_max_seconds: 60,
-        backoff_limit: 1,
-        backoff_window_seconds: 600,
-    };
-    rows.push(Row::Workload(WorkloadSnapshot {
-        state: WorkloadState::Defined,
-        data: WorkloadData {
-            workload_id: workload_id.clone(),
-            scope_id: scope_id.clone(),
-            identity: WorkloadIdentity(format!("{}/web", scope_id.0 .0)),
-            component: ComponentName("web".to_owned()),
-            package_kind: PackageKind::Snippet,
-            artifact_digest: artifact_digest.clone(),
-            runtime_id: RuntimeId(Uuid(mint())),
-            isolation: IsolationLevel::Container,
-            run_as: None,
-            upgrade: None,
-            volumes: None,
-            ports: None,
-            limits: None,
-            process_priority: None,
-            stop: None,
-            prestart: None,
-            restart: None,
-            environment_files: None,
-            shape: ShapeKind::Service,
-            settings: ShapeSettings::Service(ServiceSettings { stateful: false }),
-            claims: Vec::new(),
-            processes: processes.clone(),
-            restart_policy: restart_policy.clone(),
-            priority: PriorityClassName("default".to_owned()),
-        },
-    }));
     rows.push(Row::Instance(InstanceSnapshot {
         state: InstanceState::Scheduled,
         data: InstanceData {
             instance_id: instance_id.clone(),
-            workload_id,
-            scope_id: scope_id.clone(),
-            artifact_digest,
-            minimum_isolation: IsolationLevel::Container,
-            isolation: Some(IsolationLevel::Container),
+            workload_id: workload.workload_id.clone(),
+            scope_id: workload.scope_id.clone(),
+            artifact_digest: workload.artifact_digest.clone(),
+            minimum_isolation: workload.isolation,
+            isolation: Some(isolation),
             node_id: Some(node_id.clone()),
             job_id: None,
             task_index: None,
@@ -264,8 +281,8 @@ fn placed(
             desired: DesiredRun::Run,
             ready: false,
             health: InstanceHealth::Unknown,
-            processes,
-            restart_policy,
+            processes: workload.processes.clone(),
+            restart_policy: workload.restart_policy.clone(),
             restarts: 0,
             restarts_in_window: 0,
             backoff_seconds: None,
@@ -277,12 +294,12 @@ fn placed(
     rows.push(Row::Assignment(AssignmentSnapshot {
         state: AssignmentState::Active,
         data: AssignmentData {
-            assignment_id: AssignmentId(Uuid(mint())),
+            assignment_id: id(AssignmentId, &placed.assignment_id),
             instance_id,
             node_id,
             session_id,
             placement_decision_id: PlacementDecisionId(Uuid(mint())),
-            min_isolation: IsolationLevel::Container,
+            min_isolation: isolation,
             desired: DesiredState::Run,
             snapshot_id: None,
             assigned_at: now.clone(),
@@ -291,4 +308,99 @@ fn placed(
         },
     }));
     placed
+}
+
+/// What a process workload of [`process_workload`] states beside its command.
+#[derive(Debug, Clone, Default)]
+pub struct HostProcess {
+    pub prestart: Option<Vec<PrestartStep>>,
+    pub stop: Option<Stop>,
+    pub restart: Option<ProcessRestart>,
+}
+
+/// A `Defined` workload of package kind `Process`, shape `Daemon`, isolation `None`, run as
+/// `deployer`, whose one `Main` process `main` runs `poold serve`, with `host`'s prestart, stop
+/// and restart, and the restart policy `mode` with an initial backoff of 1 s, as the apply of a
+/// process part defines it; and its artifact. Both rows are pushed to `rows`.
+pub fn process_workload(
+    rows: &mut Vec<Row>,
+    scope_id: &ScopeId,
+    host: HostProcess,
+    mode: RestartMode,
+) -> WorkloadData {
+    let artifact_digest = ArtifactDigest("sha256:weft-skeleton-process".to_owned());
+    rows.push(Row::Artifact(ArtifactSnapshot {
+        state: ArtifactState::Registered,
+        data: ArtifactData {
+            artifact_digest: artifact_digest.clone(),
+            scope_id: scope_id.clone(),
+            kind: ArtifactKind::Process,
+            size_bytes: 1,
+            signature: "unsigned".to_owned(),
+            signer_key_id: "none".to_owned(),
+            built_from: None,
+        },
+    }));
+    let workload = WorkloadData {
+        workload_id: WorkloadId(Uuid(mint())),
+        scope_id: scope_id.clone(),
+        identity: WorkloadIdentity(format!("{}/daemon", scope_id.0 .0)),
+        component: ComponentName("daemon".to_owned()),
+        package_kind: PackageKind::Process,
+        artifact_digest,
+        runtime_id: RuntimeId(Uuid(mint())),
+        isolation: IsolationLevel::None,
+        run_as: Some(RunAs {
+            user: "deployer".to_owned(),
+        }),
+        upgrade: None,
+        volumes: None,
+        ports: None,
+        limits: None,
+        process_priority: None,
+        stop: host.stop,
+        prestart: host.prestart,
+        restart: host.restart,
+        environment_files: None,
+        shape: ShapeKind::Daemon,
+        settings: ShapeSettings::Daemon(DaemonSettings {
+            node_selector: BTreeMap::new(),
+        }),
+        claims: Vec::new(),
+        processes: vec![Process {
+            name: ProcessName("main".to_owned()),
+            role: ProcessRole::Main,
+            artifact_digest: None,
+            command: vec!["poold".to_owned(), "serve".to_owned()],
+            environment: BTreeMap::from([("POOLD_LOG".to_owned(), "info".to_owned())]),
+            checks: Vec::new(),
+        }],
+        restart_policy: RestartPolicy {
+            mode,
+            backoff_initial_seconds: 1,
+            backoff_max_seconds: 60,
+            backoff_limit: 5,
+            backoff_window_seconds: 600,
+        },
+        priority: PriorityClassName("standard".to_owned()),
+    };
+    rows.push(Row::Workload(WorkloadSnapshot {
+        state: WorkloadState::Defined,
+        data: workload.clone(),
+    }));
+    workload
+}
+
+/// One node with one `Scheduled` instance of a process workload of [`process_workload`] on it.
+pub fn process_on_one_node(host: HostProcess, mode: RestartMode) -> (Vec<Row>, Placed) {
+    let mut rows = Vec::new();
+    let scope_id = ScopeId(Uuid(mint()));
+    let workload = process_workload(&mut rows, &scope_id, host, mode);
+    let placed = assigned(
+        &mut rows,
+        &CloudId(Uuid(mint())),
+        &workload,
+        IsolationLevel::None,
+    );
+    (rows, placed)
 }

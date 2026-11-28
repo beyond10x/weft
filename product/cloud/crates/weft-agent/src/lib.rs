@@ -3,4 +3,5 @@
 
 pub mod agent;
 pub mod follow;
+pub mod records;
 pub mod report;
