@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T14:23:34Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-job-run",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "coordinator review; builds on the owner's picks D-C1 = A and D-C2 = A relayed by the operator; dependencies merged locally"
+  }
+}
