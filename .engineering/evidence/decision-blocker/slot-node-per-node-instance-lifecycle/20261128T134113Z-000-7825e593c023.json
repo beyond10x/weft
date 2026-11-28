@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T13:41:13Z",
+  "actor": "human:operator",
+  "artifact": "decision-blocker:slot-node-per-node-instance-lifecycle",
+  "kind": "decision-blocker",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "owner's pick D-S2 = A (relayed by the host operator): a per-node instance is stopped when its node leaves the pool and never placed elsewhere"
+  }
+}

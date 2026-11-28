@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T13:41:13Z",
+  "actor": "human:operator",
+  "artifact": "decision-blocker:slot-node-isolation-none-family",
+  "kind": "decision-blocker",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "owner's pick D-S1 = A (relayed by the host operator): isolation None runs through substrate's existing host-process family; gap 1 stays for the confined levels"
+  }
+}
