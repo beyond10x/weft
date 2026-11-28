@@ -26,11 +26,13 @@ scope:
   path: product/cloud/crates/weft-impl/src/documents.rs
 - confidence: cited
   path: product/cloud/crates/weft-impl/src/lib.rs
+- confidence: cited
+  path: product/cloud/crates/weft-impl/src/storage/mod.rs
 - confidence: inferred
   path: product/cloud/crates/weft-testkit/tests/cloudspec_submit.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T13:44:17Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T13:44:17Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
