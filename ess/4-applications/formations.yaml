@@ -12,9 +12,9 @@
 domain: weft.formations
 
 summary: >-
-  Formations: a set of components that belong together inside one account, their allowed links,
-  their border to the outside, their config and their environments, frozen into immutable
-  revisions.
+  Exports: one formation of an account offers an endpoint to another account by name, until it
+  is revoked. Formations, their components, links, revisions and environments are declared in
+  weft.architecture (the vendored blocks).
 
 naming:
   wire: weft

@@ -13,9 +13,9 @@
 domain: weft.catalog
 
 summary: >-
-  Managed services weft provides by name: offerings and their plans, the engines behind them,
-  service instances provisioned in an account or formation, the bindings through which a
-  component uses one, and backups and restores of durable ones.
+  The marketplace side of managed services: the engines behind offerings and their plans,
+  publishers, products, product versions with their parameters, and installations. Offerings,
+  service instances, bindings and backups are declared in weft.services (the vendored blocks).
 
 naming:
   wire: weft
