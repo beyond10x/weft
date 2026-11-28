@@ -14,6 +14,8 @@ scope:
 - confidence: cited
   path: AGENTS.md
 - confidence: cited
+  path: Taskfile.yml
+- confidence: cited
   path: docs/layers.md
 - confidence: cited
   path: tools/check-domain.sh
@@ -29,7 +31,7 @@ scope:
   path: tools/test-domain-map.sh
 - confidence: cited
   path: website/docs/specification/layers.md
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
