@@ -1,0 +1,54 @@
+# Fixture index of the account console (ess-ui/1 FixtureIndex).
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+views:
+  weft.formations.Formations: formations.yaml
+  weft.cluster.ClustersOfAccount: formations.yaml
+  weft.formations.Environments: formations.yaml
+  weft.formations.FormationComponents: formations.yaml
+  weft.formations.FormationRevisions: formations.yaml
+  weft.formations.FormationLinks: formations.yaml
+  weft.formations.Endpoints: formations.yaml
+  weft.formations.FormationBorder: formations.yaml
+  weft.formations.Configs: formations.yaml
+  weft.formations.ConfigMounts: formations.yaml
+  weft.formations.ScaleSettings: formations.yaml
+  weft.pipelines.DeployGatesOfEnvironment: formations.yaml
+  weft.workloads.WorkloadList: workloads.yaml
+  weft.workloads.WorkloadDetail: workloads.yaml
+  weft.workloads.Services: workloads.yaml
+  weft.workloads.ServiceDetail: workloads.yaml
+  weft.workloads.Instances: workloads.yaml
+  weft.workloads.InstanceList: workloads.yaml
+  weft.workloads.InstanceDetail: workloads.yaml
+  weft.workloads.JobList: workloads.yaml
+  weft.workloads.ScheduleList: workloads.yaml
+  weft.workloads.TriggerList: workloads.yaml
+  weft.workloads.SnapshotList: workloads.yaml
+  weft.nodes.InstanceObservations: runtime.yaml
+  weft.nodes.AssignmentsOfInstance: runtime.yaml
+  weft.nodes.ExecSessionsOfInstance: runtime.yaml
+  weft.observability.InstanceLogStreams: runtime.yaml
+  weft.identity.InstanceIdentityDocuments: runtime.yaml
+  weft.deployments.Releases: delivery.yaml
+  weft.deployments.ReleaseSteps: delivery.yaml
+  weft.deployments.DriftReport: delivery.yaml
+  weft.deployments.Plans: delivery.yaml
+  weft.catalog.OfferingCatalog: services.yaml
+  weft.catalog.OfferingPlans: services.yaml
+  weft.catalog.ProductCatalog: services.yaml
+  weft.catalog.ServiceInstanceList: services.yaml
+  weft.catalog.ServiceInstanceDetail: services.yaml
+  weft.catalog.ServiceBindingList: services.yaml
+  weft.catalog.BackupList: services.yaml
+  weft.catalog.RestoreList: services.yaml
+  weft.secrets.SecretBackends: services.yaml
+  weft.secrets.Secrets: services.yaml
+  weft.secrets.SecretGrants: services.yaml
+  weft.metering.CostRollup: metering.yaml
+  weft.metering.UsageRollup: metering.yaml
+  weft.metering.Budgets: metering.yaml
+  weft.metering.Statements: metering.yaml
+  weft.observability.Alerts: metering.yaml
+derived:
+  weft.catalog.FormationServiceBindings:
+    same_as: weft.catalog.ServiceBindingList

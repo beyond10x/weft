@@ -6,3 +6,5 @@
 /website/node_modules/
 /website/build/
 /website/.docusaurus/
+/product/console/node_modules/
+/product/console/.out/

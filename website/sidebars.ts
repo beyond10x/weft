@@ -35,6 +35,7 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: ['simulator/install', 'simulator/run', 'simulator/results'],
     },
+    'run/consoles',
     {
       type: 'category',
       label: 'Run weft (Planned)',

@@ -1,0 +1,25 @@
+# Runtimes, translators, trust domains and secret backends.
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+views:
+  weft.workloads.RuntimeList:
+    rows:
+      - {runtime_id: 599c032f-05eb-4756-8603-17f7e98b490b, name: oci, version: 2.1.0, package_kinds: [Image, Process, Bundle], minimum_isolation: Container, state: Registered}
+      - {runtime_id: a4a5c693-69e6-41c4-824f-acd6fd56566d, name: wasm, version: 0.9.3, package_kinds: [Wasm, Snippet], minimum_isolation: ProcessSandbox, state: Registered}
+      - {runtime_id: 1f28abce-b7db-442e-86a5-454f2a9582fb, name: microvm, version: 1.3.0, package_kinds: [Machine, Image, Model, Training], minimum_isolation: MicroVm, state: Registered}
+      - {runtime_id: 4d931fb1-900e-4868-ac7b-ae46bad7eac9, name: agent, version: 0.4.0, package_kinds: [Agent, EssSystem, Graph, Browser], minimum_isolation: UserKernel, state: Registered}
+      - {runtime_id: edbd15f6-7755-406f-bec1-370a8437319c, name: oci, version: 1.8.4, package_kinds: [Image], minimum_isolation: Container, state: Retired}
+  weft.deployments.Translators:
+    rows:
+      - {translator_id: c88f5f6c-0995-47d0-a03b-cec641850008, source_kind: Compose, source_format_version: compose-spec-2, translator_version: 0.6.1, artifact_digest: sha256:2873ef85e75183e0fe43e668f3a414e9d3cdd9dc789794170a346418a03ea25c, registered_at: 2026-11-20T12:00:00Z, state: Registered}
+      - {translator_id: 1721a509-649b-4c1e-8256-431a57c52bcf, source_kind: Helm, source_format_version: helm-v3, translator_version: 0.3.0, artifact_digest: sha256:6827b5052aab7ed116595cab26db491e8b8248c5f5f945a6202d184d5d475efc, registered_at: 2026-11-21T09:30:00Z, state: Registered}
+      - {translator_id: 0d38b613-1a39-4d56-85f6-681d902b5395, source_kind: Kubernetes, source_format_version: apps/v1, translator_version: 0.3.0, artifact_digest: sha256:c2a8d9a5e16218604b037d372747596656cdf815362eb2c9593dfe1668667f85, registered_at: 2026-11-21T09:31:00Z, state: Registered}
+      - {translator_id: a0873fa1-2fb2-4472-a359-987ceacc8597, source_kind: EssSystem, source_format_version: ess/37, translator_version: 0.2.0, artifact_digest: sha256:e757f9fba9a745b67864128fc9f3f069a1476a4dae9fd275d2d1d510d0f16e43, registered_at: 2026-11-23T15:00:00Z, state: Registered}
+      - {translator_id: d778b0e3-e80a-479a-ac3b-e29b061216e5, source_kind: Compose, source_format_version: compose-spec-2, translator_version: 0.5.0, artifact_digest: sha256:593c99522851729b6e8bbc3e1c74eba243bb9e683a95d58e21ef7e20129fea46, registered_at: 2026-11-10T12:00:00Z, state: Retired}
+  weft.identity.TrustDomains:
+    rows:
+      - {trust_domain_id: 8d13ab19-80d9-4ac5-a584-f114ccf6fd1d, cloud_id: 90ea73f6-e911-40bb-a029-e63f7fce6c9f, name: weft.example.test, signing_key_ref: kms://weft-primary/identity-2026-11, previous_signing_key_ref: kms://weft-primary/identity-2026-10, rotation_ends_at: 2026-11-29T00:00:00Z, requested_signing_key_ref: null, document_ttl_seconds: 3600, state: Rotating}
+      - {trust_domain_id: 41a24c75-5c70-4ed7-9f5a-744a9592e000, cloud_id: 90ea73f6-e911-40bb-a029-e63f7fce6c9f, name: edge.weft.example.test, signing_key_ref: kms://weft-primary/edge-2026-09, previous_signing_key_ref: null, rotation_ends_at: null, requested_signing_key_ref: null, document_ttl_seconds: 900, state: Active}
+  weft.secrets.SecretBackends:
+    rows:
+      - {backend_id: 47e7c12d-a0f9-48b0-b9fb-1789f63f7ea5, name: cluster-store, kind: ClusterStore, address: null, state: Active}
+      - {backend_id: a1645f82-d290-45ff-bf37-dc30d4a61ac5, name: external-vault, kind: ExternalVault, address: https://vault.example.test:8200, state: Active}
