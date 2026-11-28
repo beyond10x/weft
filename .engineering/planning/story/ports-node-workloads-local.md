@@ -9,6 +9,7 @@ relations:
 - serves: vision:weft
 - depends_on: story:ports-node-exec-facts
 - depends_on: story:skeleton-node-run-assignment
+- depends_on: story:ports-node-workloads-port
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-agent

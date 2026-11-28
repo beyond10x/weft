@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-job-run
 kind: story
-status: draft
+status: active
 title: A rollout step of a Job workload submits and starts its Job, and each task becomes an instance placed on a node (D-C2)
 relations:
 - decomposes: epic:cloudspec-submission
@@ -33,7 +33,10 @@ scope:
   path: quality/spec-diff-acknowledgements.json
 - confidence: cited
   path: tools/synth-input.sh
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T14:23:34Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T14:23:34Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

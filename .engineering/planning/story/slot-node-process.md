@@ -2,15 +2,15 @@
 format: aep.planning-md/3
 id: story:slot-node-process
 kind: story
-status: draft
+status: active
 title: A process part of a cloudspec architecture runs on a node as a supervised Daemon workload with its environment, prestart, stop and restart
 relations:
 - decomposes: epic:slot-node-daemon
 - serves: vision:weft
-- depends_on: story:ports-node-workloads-local
 - depends_on: story:cloud-blocks-layer-refactor-pin
 - depends_on: story:cloudspec-submission-plan-from-source
 - depends_on: story:cloudspec-submission-apply-workloads
+- depends_on: story:ports-node-workloads-port
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-agent/src/follow.rs
@@ -22,7 +22,10 @@ scope:
   path: product/cloud/crates/weft-platform/src/node.rs
 - confidence: inferred
   path: product/cloud/crates/weft-testkit
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T14:42:44Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T14:42:44Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
