@@ -3,10 +3,7 @@ title: Run cloudspec-sim
 description: Explore weft's specification with random command sequences, run experiments with faults and controllers, replay one walk, and describe commands.
 ---
 
-cloudspec-sim has four commands for a run on weft. Run them from the repository root with
-`--spec ess`: `--spec` defaults to `blocks`, cloudspec's own specification
-([install cloudspec-sim](install.md)). The examples call it `cloudspec-sim`; `task sim-install` puts
-it at `target/cloudspec-sim/bin/cloudspec-sim`.
+cloudspec-sim has four commands. Run them from the repository root with `--spec ess` ([install](install.md)).
 
 | Command | Does |
 |---|---|
