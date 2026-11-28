@@ -1,6 +1,7 @@
 //! The one integration-test binary of weft-testkit.
 
 mod cloudspec_apply;
+mod cloudspec_snippet;
 mod cloudspec_submit;
 mod job_run;
 mod plan_apply;
