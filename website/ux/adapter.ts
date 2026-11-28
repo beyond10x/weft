@@ -127,8 +127,8 @@ export const SCENARIOS: Scenario[] = [
     id: 'replay',
     question: 'Find how to replay a walk',
     start: '',
-    words: ['replay', 'weft-sim'],
-    truth: { path: 'docs/simulator/run', text: 'weft-sim replay --spec ess' },
+    words: ['replay', 'cloudspec-sim'],
+    truth: { path: 'docs/simulator/run', text: 'cloudspec-sim replay --spec ess' },
   },
   {
     id: 'planned',

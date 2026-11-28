@@ -1,8 +1,8 @@
 #!/bin/sh
 # Cases of tools/check.d/20-rust-lint.sh on fixture repositories (adversary round, story
 # repo-lint-gate). Each case copies the hook unchanged into target/test-rust-lint/<case>/: a root
-# workspace (members product/*/crates/*, edition 2021 in [workspace.package]), a tools/sim
-# workspace of its own, each with a Cargo.lock, the pinned rust-toolchain.toml and a
+# workspace (members product/*/crates/*, edition 2021 in [workspace.package]), a tools/second
+# workspace of its own, each with a Cargo.lock, the pinned rust-toolchain.toml at the root and a
 # tools/synth.sh that does nothing; it runs the hook there and compares its exit status.
 #
 # Builds (cargo fmt, cargo clippy on crates without dependencies). Run by
@@ -20,17 +20,17 @@ cases=0
 fixture() {
   d=$work/$1
   rm -rf "$d"
-  mkdir -p "$d/tools/check.d" "$d/product/p/crates/a/src" "$d/tools/sim/src" || exit 2
+  mkdir -p "$d/tools/check.d" "$d/product/p/crates/a/src" "$d/tools/second/src" || exit 2
   cp -p "$repo/tools/check.d/20-rust-lint.sh" "$d/tools/check.d/" || exit 2
   printf '#!/bin/sh\nexit 0\n' > "$d/tools/synth.sh" && chmod +x "$d/tools/synth.sh" || exit 2
-  cp "$repo/rust-toolchain.toml" "$d/" && cp "$repo/tools/sim/rust-toolchain.toml" "$d/tools/sim/" || exit 2
-  printf '[workspace]\nresolver = "2"\nmembers = ["product/*/crates/*"]\nexclude = ["tools/sim"]\n\n[workspace.package]\nversion = "0.1.0"\nedition = "2021"\npublish = false\n' > "$d/Cargo.toml" || exit 2
+  cp "$repo/rust-toolchain.toml" "$d/" || exit 2
+  printf '[workspace]\nresolver = "2"\nmembers = ["product/*/crates/*"]\nexclude = ["tools/second"]\n\n[workspace.package]\nversion = "0.1.0"\nedition = "2021"\npublish = false\n' > "$d/Cargo.toml" || exit 2
   printf '[package]\nname = "a"\nversion.workspace = true\nedition.workspace = true\npublish.workspace = true\n' > "$d/product/p/crates/a/Cargo.toml" || exit 2
   printf '//! A.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n' > "$d/product/p/crates/a/src/lib.rs" || exit 2
-  printf '[package]\nname = "sim"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[workspace]\n' > "$d/tools/sim/Cargo.toml" || exit 2
-  printf '//! Sim.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n' > "$d/tools/sim/src/lib.rs" || exit 2
+  printf '[package]\nname = "second"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[workspace]\n' > "$d/tools/second/Cargo.toml" || exit 2
+  printf '//! Second.\n\n/// One.\npub fn one() -> u8 {\n    1\n}\n' > "$d/tools/second/src/lib.rs" || exit 2
   # A lock file cargo completes on its first run; the hook refuses a workspace without one.
-  printf 'version = 4\n' > "$d/Cargo.lock" && printf 'version = 4\n' > "$d/tools/sim/Cargo.lock" || exit 2
+  printf 'version = 4\n' > "$d/Cargo.lock" && printf 'version = 4\n' > "$d/tools/second/Cargo.lock" || exit 2
 }
 
 # expect <want> <case> [<line>]: run the hook of fixture $d, compare its exit status with <want>;
@@ -54,7 +54,7 @@ expect() {
 
 # Control: the clean fixture passes.
 fixture control
-expect 0 "control: a clean fixture passes" "pass in: . tools/sim"
+expect 0 "control: a clean fixture passes" "pass in: . tools/second"
 
 # A member crate whose own Cargo.toml names edition 2024 (what `cargo new` writes since Rust 1.85),
 # in a workspace whose [workspace.package] names 2021. Its file formatted as cargo fmt formats it
@@ -114,7 +114,7 @@ pub fn empty(v: &[u8]) -> bool {
 "
 expect 1 "generated: a clippy warning written by hand beside the generated module fails" "cargo clippy --workspace --all-targets -- -D warnings fails in ."
 
-# Every workspace of the repository is reached, not only . and tools/sim.
+# Every workspace of the repository is reached, not only . and tools/second.
 other() {
   mkdir -p "$d/tools/other/src" || exit 2
   printf '[package]\nname = "other"\nversion = "0.1.0"\nedition = "2021"\npublish = false\n\n[workspace]\n' > "$d/tools/other/Cargo.toml" || exit 2
@@ -123,7 +123,7 @@ other() {
 fixture other-workspace
 other 'v.is_empty()'
 printf 'version = 4\n' > "$d/tools/other/Cargo.lock" || exit 2
-expect 0 "workspaces: a third workspace, clean, is linted and passes" "pass in: . tools/other tools/sim"
+expect 0 "workspaces: a third workspace, clean, is linted and passes" "pass in: . tools/other tools/second"
 fixture other-workspace-clippy
 other 'v.len() == 0'
 printf 'version = 4\n' > "$d/tools/other/Cargo.lock" || exit 2

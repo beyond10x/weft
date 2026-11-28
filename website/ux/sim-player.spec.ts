@@ -1,6 +1,7 @@
-// The browser checks of weft-sim's search player: the page `ux/fixtures/sim-player.html`, which the
-// Rust page test of weft-sim renders from its search fixture and holds byte for byte (`task
-// sim-test`), opened with a fake clock (`page.clock`). The tests drive the controls by role and name
+// The browser checks of cloudspec-sim's search player: the page `ux/fixtures/sim-player.html`, a
+// copy of `crates/cloudspec-sim/tests/pages/sim-player.html` of beyond10x/cloudspec at the revision
+// CLOUDSPEC_REV of Taskfile.yml, which cloudspec-sim's Rust page test renders from its search
+// fixture and holds byte for byte, opened with a fake clock (`page.clock`). The tests drive the controls by role and name
 // and read the player's `data-*` state and the drawn elements by their data attributes. The expected
 // numbers come from the snapshot inlined in the page, read here, never from the player. A script
 // error on the page fails the test.
@@ -76,7 +77,7 @@ async function cells(page: Page): Promise<Record<string, string>> {
 }
 
 async function receive(page: Page, snap: unknown): Promise<void> {
-  await page.evaluate((s) => (window as unknown as { weftPlayer: { receive(s: unknown): void } }).weftPlayer.receive(s), snap);
+  await page.evaluate((s) => (window as unknown as { cloudspecPlayer: { receive(s: unknown): void } }).cloudspecPlayer.receive(s), snap);
 }
 
 test.beforeEach(async ({ context }) => hermetic(context, ORIGIN));
@@ -262,7 +263,7 @@ test('result without a climb', async ({ page }) => {
 });
 
 // `fixtures/sim-player-markup.html`: the same run with `<!--<script>` as the fourth value of the
-// first axis and `</script><!--<script>` in a KPI of every row, inlined by weft-sim (its Rust test
+// first axis and `</script><!--<script>` in a KPI of every row, inlined by cloudspec-sim (its Rust test
 // `the_player_page_inlines_markup_in_recorded_values_as_data` holds the page). No `-->` follows,
 // which would end the parser state the texts open. The page must still parse, run its script and
 // show both texts as text.
@@ -409,7 +410,7 @@ test('selected point shows its replay', async ({ page }) => {
   const row = ROWS.find((r) => r.decision === 'rejected')!;
   await page.locator(`[data-path-step="${row.seq}"]`).click();
   await expect(selectedWalk(page)).toHaveText(String(row.walk));
-  await expect(replayCommand(page)).toHaveText(/^weft-sim replay /);
+  await expect(replayCommand(page)).toHaveText(/^cloudspec-sim replay /);
   const words = (await replayCommand(page).textContent())!.split(/\s+/);
   const after = (flag: string) => words[words.indexOf(flag) + 1];
   expect(after('--walk')).toBe(String(row.walk));
@@ -461,7 +462,7 @@ test('a replay command of odd paths stays one quoted text inside the screen at 3
   expect(await layoutFailures(page)).toEqual([]);
   expect(await visibilityFailures(page, [{ name: 'replay command', selector: '[data-replay-command]' }])).toEqual([]);
   // A result written before the run named its paths: they come from its command line.
-  await receive(page, { ...SNAP, run: { command: 'weft-sim simulate --spec specs/a --experiment e.yaml --out sim/out/b --threads 2' } });
+  await receive(page, { ...SNAP, run: { command: 'cloudspec-sim simulate --spec specs/a --experiment e.yaml --out sim/out/b --threads 2' } });
   await expect(replayCommand(page)).toContainText('--spec specs/a --trace sim/out/b/result.json');
   expect(errors).toEqual([]);
 });

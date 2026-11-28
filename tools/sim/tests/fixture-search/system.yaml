@@ -1,9 +1,0 @@
-format: ess/37
-system: demo
-version: v1
-
-summary: The box model of the weft-sim search tests.
-
-domains:
-  - demo.box
-  - demo.actors

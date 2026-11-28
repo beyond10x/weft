@@ -1,5 +1,7 @@
 //! The one integration-test binary of weft-testkit.
 
+mod ratchet;
+
 mod trivial {
     #[test]
     fn repo_root_holds_the_pinned_toolchain() {

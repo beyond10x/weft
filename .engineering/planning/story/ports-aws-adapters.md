@@ -11,12 +11,12 @@ relations:
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/aws
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other adapters (hosts, aws, kubernetes) are designed,
-not built". Design: `docs/platform-ports.md` § 8, column `aws`, and § 11. Depends on
+not built". Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 8, column `aws`, and § 11. Depends on
 `story:ports-spec-placement`. Outside the first build: it waits for the connectors gaps of
 design § 11 (no AWS provider with writes; standing grants per operation and instance).
 

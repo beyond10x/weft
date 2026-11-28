@@ -1,8 +1,9 @@
 #!/bin/sh
 # The metamorphic relations of hardening pass 3 (technique 5 of `ess:hardening`,
-# docs/hardening/pass-3.md), each run by `weft-sim relate` from sim/experiments/full-setup.yaml
-# settled by its controllers. Measures on the in-memory model, so it runs without slot; build
-# weft-sim first (task sim-build).
+# docs/hardening/pass-3.md), each run by `cloudspec-sim relate` from sim/experiments/full-setup.yaml
+# settled by its controllers. Measures on the in-memory model, so it runs without slot; install
+# cloudspec-sim first (task sim-install, which pins its revision; the binary is $CLOUDSPEC_SIM,
+# default target/cloudspec-sim/bin/cloudspec-sim).
 #
 # Usage: tools/sim-relations.sh [spec dir]   (default ess)
 #   non-interference  globex's steps, a cross-account DefineWorkload into acme's formation among
@@ -14,10 +15,10 @@ set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 spec="${1:-ess}"
-sim=tools/sim/target/debug/weft-sim
+sim="${CLOUDSPEC_SIM:-target/cloudspec-sim/bin/cloudspec-sim}"
 base=sim/experiments/full-setup.yaml
 acme=tenant_a,account_a,sub_a,quota_a,sub_quota_a,cluster_a,topology_a,formation_shop,formation_etl,rev_shop,rev_etl,env_shop,env_etl
-[ -x "$sim" ] || { echo "sim-relations: build weft-sim first (task sim-build)" >&2; exit 2; }
+[ -x "$sim" ] || { echo "sim-relations: install cloudspec-sim first (task sim-install)" >&2; exit 2; }
 status=0
 run() {
   name="$1"

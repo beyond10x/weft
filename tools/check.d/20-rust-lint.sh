@@ -11,7 +11,7 @@
 # Exit 2 when it cannot measure.
 #
 # The workspaces: the root of every Cargo.toml outside target/, node_modules/ and .git/, as
-# `cargo locate-project --workspace` names it (today ., tools/sim, tools/budget-fixture and
+# `cargo locate-project --workspace` names it (today ., tools/budget-fixture and
 # tests/fixtures/generated-probe), less the ones named in SKIP below, which still get check 2.
 # Each must commit its Cargo.lock: cargo writes a missing one into the tree, and this hook
 # writes only under target/. A workspace other than . builds into target/rust-lint/ws/<path>.

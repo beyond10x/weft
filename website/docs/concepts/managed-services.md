@@ -12,7 +12,7 @@ owned by the component `weft-control` ([components](components.md)).
 
 :::caution[Planned]
 Specified, not built. The catalog is part of the specification, which `task check` validates
-and weft-sim explores in memory. No release of weft provisions a service.
+and cloudspec-sim explores in memory. No release of weft provisions a service.
 :::
 
 Runs today: none of the components serves a user, no offering provisions and no product

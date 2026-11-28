@@ -19,12 +19,12 @@ scope:
   path: tools/check-ports-fixture
 - confidence: cited
   path: tools/check-ports.sh
-revision: 3
+revision: 4
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "what the specification declares for them". Design:
-`docs/platform-ports.md` § 9, spec change S5. Depends on `story:ports-spec-port-names`
+`cloudspec@2ed72c2:docs/platform-ports.md` § 9, spec change S5. Depends on `story:ports-spec-port-names`
 (`tools/check-ports.sh`).
 
 ## Context

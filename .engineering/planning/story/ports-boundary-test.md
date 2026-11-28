@@ -14,12 +14,12 @@ scope:
   path: product/cloud/crates/weft-platform/tests/fixtures/boundary
 - confidence: cited
   path: product/cloud/crates/weft-platform/tests/main.rs
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, acceptance 2 (a test fails when code outside an adapter calls
-substrate's SDK or spawns a node process). Design: `docs/platform-ports.md` § 3.5 and § 12.5.
+substrate's SDK or spawns a node process). Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 3.5 and § 12.5.
 Depends on `story:ports-node-exec-facts` and `story:ports-local-machines`: until both moved the
 SDK and the agent start behind adapters, the repository tree itself breaks the rules.
 

@@ -16,7 +16,7 @@ scope:
   path: tools/sim/src/simulate.rs
 - confidence: cited
   path: tools/sim/tests/main.rs
-revision: 2
+revision: 3
 ---
 ## Context
 
@@ -26,10 +26,10 @@ formation by its id (fixed in weft#21; `docs/hardening/pass-2.md:900` had listed
 untied). weft-sim did not find it:
 
 - the KPI `cross_tenant_reach` is fed only by the `tenant-isolation` check
-  (`tools/sim/src/simulate.rs:383-418`), which reads the assignment and placement views for two
+  (`cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs:383-418`), which reads the assignment and placement views for two
   tenants sharing a kernel on one node; it never asks whether a command's caller account owns
   the row the command wrote;
-- `caller_for` (`tools/sim/src/explore.rs:106`) copies the caller's `account_id` from the
+- `caller_for` (`cloudspec@2ed72c2:crates/cloudspec-sim/src/explore.rs:106`) copies the caller's `account_id` from the
   input's `account_id`, so exploration seldom sends a caller of another account.
 
 The sweep in weft#21 lists the commands still without a caller check (formations: AddToBorder,
@@ -39,8 +39,8 @@ AddTopologyGroup's `parent_group_id` (`ess/1-infrastructure/cluster.yaml`).
 
 ## Scope
 
-- `tools/sim/src/simulate.rs`, `tools/sim/src/explore.rs`
-- `tools/sim/tests/main.rs`
+- `cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs`, `cloudspec@2ed72c2:crates/cloudspec-sim/src/explore.rs`
+- `cloudspec@2ed72c2:crates/cloudspec-sim/tests/main.rs`
 - `quality/ratchet.yaml` (the new KPI's merge requirement)
 
 ## Acceptance

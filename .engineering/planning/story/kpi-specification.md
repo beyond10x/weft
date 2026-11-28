@@ -24,7 +24,7 @@ scope:
   path: tools/kpis.d/30-specification.sh
 - confidence: cited
   path: tools/sim/tests/ratchet/mod.rs
-revision: 11
+revision: 12
 ---
 ## Epic
 
@@ -89,7 +89,7 @@ Shape:
   number). Exit status 1 with an `ess-target-failure/1` document is a measurement, not an error of
   the hook.
 - The validation, layer, stamped-time and marker counts are outputs of `repo-facts@1`.
-- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::specification_kpis_have_measurements` (the 21 ids of the
   table above and § Mapping, a list in the test, each with a measurement under the subject
   `specification`), `ratchet::specification_gate_kpis_are_merge_requirements` (the six gate ids,
@@ -121,7 +121,7 @@ relations are those recorded with their citations in `story:kpi-repository` § D
    with the value `task kpis` printed at the adopting commit, the 1024-walk explore-from-setup
    figures included.
    This includes the two requirements `no-lost-outcomes` and `no-new-unsupported-answers`, which
-   `story:kpi-repository` lists in `RECORDS_PENDING` of `tools/sim/tests/ratchet/mod.rs`: this story
+   `story:kpi-repository` lists in `RECORDS_PENDING` of `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs`: this story
    writes their records and removes both from that list, which is then empty.
 5. The `weft-sim-report@1` and `ess-synthesis@1` declarations declare every output a measurement
    of this story names: `ratchet::the_ratchet_file_is_consistent` of `story:kpi-repository`

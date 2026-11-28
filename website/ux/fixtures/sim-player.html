@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>weft-sim</title>
+<title>cloudspec-sim</title>
 <style>
 :root { --bg:#fbfbfa; --fg:#1d1d1f; --mute:#6e6e73; --line:#d9d9de; --hit:#1f8a4c; --hitbg:#e3f4e9; --miss:#b4b4bb; --bad:#c62828; --badbg:#fde8e8; --accent:#2f5bd3; }
 @media (prefers-color-scheme: dark) { :root { --bg:#16171a; --fg:#e8e8ea; --mute:#9a9aa2; --line:#33343a; --hit:#4cc27e; --hitbg:#173525; --miss:#55565e; --bad:#ff6b6b; --badbg:#3a1a1a; --accent:#7ea2ff; } }
@@ -81,7 +81,7 @@ svg text.an { fill: var(--mute); }
 </style>
 </head>
 <body>
-<header><h1>weft-sim <span id="mode" class="mute"></span></h1><span id="status" class="mute"></span><span id="info" class="mute"></span></header>
+<header><h1>cloudspec-sim <span id="mode" class="mute"></span></h1><span id="status" class="mute"></span><span id="info" class="mute"></span></header>
 <main>
 <section id="counters"></section>
 <div class="row">
@@ -438,7 +438,7 @@ function replayLine() {
   box.hidden = !row || typeof row.walk !== 'number';
   if (box.hidden) return;
   box.querySelector('[data-selected-walk]').textContent = String(row.walk);
-  box.querySelector('[data-replay-command]').textContent = `weft-sim replay --spec ${shq(runPath('spec', 'ess'))} --trace ${shq(runPath('out', 'sim/out/simulate') + '/result.json')} --walk ${row.walk}`;
+  box.querySelector('[data-replay-command]').textContent = `cloudspec-sim replay --spec ${shq(runPath('spec', 'blocks'))} --trace ${shq(runPath('out', 'sim/out/simulate') + '/result.json')} --walk ${row.walk}`;
 }
 
 function playerDraw() {
@@ -590,14 +590,14 @@ $('p-speed').addEventListener('change', (ev) => { P.speed = Number(ev.target.val
 $('p-x').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.y) P.y = P.x; P.x = i; playerDraw(); });
 $('p-y').addEventListener('change', (ev) => { const i = P.axes.findIndex(a => a.name === ev.target.value); if (i === P.x) P.x = P.y; P.y = i; playerDraw(); });
 
-window.weftPlayer = { receive(s) { if (!s) return; render(s); playerReceive(s); } };
+window.cloudspecPlayer = { receive(s) { if (!s) return; render(s); playerReceive(s); } };
 
 buildDomains();
 if (location.hash.startsWith('#open')) { const q = decodeURIComponent(location.hash.slice(6)); for (const d of $('domains').children) if (!q || d.dataset.text.includes(q)) d.open = true; }
-if (SNAP) window.weftPlayer.receive(SNAP);
+if (SNAP) window.cloudspecPlayer.receive(SNAP);
 if (LIVE) {
   const source = new EventSource('/events');
-  source.onmessage = (ev) => { const s = JSON.parse(ev.data); window.weftPlayer.receive(s); if (!s.running && s.gaps) source.close(); };
+  source.onmessage = (ev) => { const s = JSON.parse(ev.data); window.cloudspecPlayer.receive(s); if (!s.running && s.gaps) source.close(); };
 }
 </script>
 </body>

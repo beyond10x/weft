@@ -1,10 +1,10 @@
 ---
 title: Operate and troubleshoot
-description: What the gate and weft-sim tell you today, how to read a failure of each, and what operating a running weft will look like (Planned).
+description: What the gate and cloudspec-sim tell you today, how to read a failure of each, and what operating a running weft will look like (Planned).
 ---
 
 There is no running weft to operate yet. What you can operate today is the specification: the
-gate and weft-sim. Operating a cloud is [planned](#operating-a-cloud-planned).
+gate and cloudspec-sim. Operating a cloud is [planned](#operating-a-cloud-planned).
 
 ## The gate
 
@@ -17,7 +17,8 @@ failure:
 | `layers` | `tools/check-layers.sh` | a domain refers to a domain of a higher layer |
 | `stamped-time` | `tools/check-stamped-time.sh`, then `--negative` | a command with a `StampedAt` input is granted outside the control plane's actors, or the check stops refusing that |
 | `ci-paths` | `tools/test-planning-only.sh` | the CI path filter classifies one of its test cases wrongly |
-| `sim-test` | `cargo nextest run` in `tools/sim` | a test of weft-sim fails, a test runs over 60 s, or the run over 120 s |
+| `docs-check` | `tools/test-docs-check.sh`, then `tools/check-docs.sh` | a claim of the docs site or of `AGENTS.md` that the tree does not prove |
+| `test` | `cargo nextest run --workspace` through `tools/test-step.sh` | a test of the root workspace fails, a test runs over 60 s, or setup and tests run over 120 s |
 
 In CI the workflow `Gate` runs the same `task check` on every pull request and on `main`. A pull
 request that changes only planning or prose files passes without building.
@@ -30,9 +31,13 @@ request that changes only planning or prose files passes without building.
 | `layers` | the reference it names; move the entity or the field to the right layer ([layers](../specification/layers.md)) |
 | `stamped-time` | the command and actor it names; a time the control plane decides on is granted only to `ControlPlane`, `Scheduler` or `ReleaseController` ([validate](../specification/validate.md#why-stamped-time)) |
 | `ci-paths` | the case it prints as `FAIL: want … got …` |
-| `sim-test` | the failing test's output; `task sim-test` alone reruns only this step |
+| `docs-check` | the `<file>:<line>` it prints and the KPI line after it; `task docs-check` alone reruns only this step |
+| `test` | the failing test's output; `task test` alone reruns only this step |
 
-## weft-sim findings
+The gate does not test the simulator: cloudspec-sim is a tool of cloudspec, tested in
+[its repository](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim).
+
+## cloudspec-sim findings
 
 | What you see | What it means | Next |
 |---|---|---|

@@ -11,12 +11,12 @@ relations:
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/hosts
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other adapters (hosts, aws, kubernetes) are designed,
-not built". Design: `docs/platform-ports.md` § 8, column `hosts`. Depends on
+not built". Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 8, column `hosts`. Depends on
 `story:ports-spec-placement` (a control host serves one placement).
 
 ## Context

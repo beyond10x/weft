@@ -9,13 +9,13 @@ relations:
 - serves: vision:weft
 - depends_on: story:ports-node-exec-facts
 - depends_on: story:ports-local-machines
-revision: 1
+revision: 2
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`: a placement whose every port is served in this process, for tests
 and simulation. A later specification change, after the `local` adapter of the first build
-(`docs/platform-ports.md` § 12).
+(`cloudspec@2ed72c2:docs/platform-ports.md` § 12).
 
 ## Context
 
@@ -28,20 +28,20 @@ and simulation. A later specification change, after the `local` adapter of the f
   in-process, for tests and simulation. Access mode as for `Local` (single-user).
 - Prior art in weft: `weft-sim simulate` runs an experiment's setup, traffic, faults and controllers
   on the interpreted model with the invariants checked after every step
-  (`tools/sim/src/simulate.rs:1-3`); `weft-testkit`'s control host in this process, whose test
+  (`cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs:1-3`); `weft-testkit`'s control host in this process, whose test
   decides when controllers and bindings act (`product/cloud/crates/weft-testkit/src/in_process.rs:1-4`).
-- Memory adapters per port (`docs/platform-ports.md` § 5, § 6): `machines` makes a node as an
+- Memory adapters per port (`cloudspec@2ed72c2:docs/platform-ports.md` § 5, § 6): `machines` makes a node as an
   in-process node agent; `exec` and `workloads` run a behavioural model of the process (exit code,
   output, duration from a seeded generator) instead of a process; `endpoints`, `edge`, `dns`,
   `certificates` route in memory; `volumes`, `images`, `objects`, `secret-store` keep bytes in maps.
   No file, socket or process outside the test's own.
 - Ownership: the port definitions move to cloudspec; weft keeps the wiring of the adapters
-  (`docs/platform-ports.md`, as for the other placements).
+  (`cloudspec@2ed72c2:docs/platform-ports.md`, as for the other placements).
 
 ## Scope
 
 - `ess/1-infrastructure/infrastructure.yaml` (the `Memory` variant; guards that name `Local` for
-  access mode), `docs/platform-ports.md` § 8 (a column `memory`)
+  access mode), `cloudspec@2ed72c2:docs/platform-ports.md` § 8 (a column `memory`)
 - `product/cloud/crates/weft-platform/src/memory/` (proposed, beside `src/local/`)
 
 ## Acceptance

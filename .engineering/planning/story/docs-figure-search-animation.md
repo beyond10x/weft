@@ -17,7 +17,7 @@ scope:
   path: website/static/img
 - confidence: inferred
   path: website/ux/adapter.ts
-revision: 7
+revision: 8
 ---
 ## Epic
 
@@ -50,7 +50,7 @@ climb before reading the table of points:
 ## Domain relations
 
 None of `ess/`. The figure shows the one run the published page holds (the one-to-one relation of
-`story:anim-docs-published-run`, inferred there from `tools/sim/src/report.rs:267`).
+`story:anim-docs-published-run`, inferred there from `cloudspec@2ed72c2:crates/cloudspec-sim/src/report.rs:267`).
 
 ## Scope
 

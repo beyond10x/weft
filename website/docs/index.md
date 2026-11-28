@@ -21,7 +21,7 @@ implements it.
 | The domain model: 23 domains in 10 layers | [`ess/`](https://github.com/beyond10x/weft/tree/main/ess) | Exists, valid |
 | Components and reconciliation bindings: `weft-api`, `weft-control`, `weft-node`, `weft-edge` | [`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml) | Exists, valid |
 | The node channel and the exec channel | [`protocols/`](https://github.com/beyond10x/weft/tree/main/protocols) | Exists |
-| weft-sim: explores and simulates the specification in memory | [`tools/sim/`](https://github.com/beyond10x/weft/tree/main/tools/sim) | Exists |
+| cloudspec-sim: explores and simulates the specification in memory; a tool of cloudspec at a pinned revision | [`crates/cloudspec-sim`](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim) | Exists |
 | Experiments: a full setup, node loss, duplicate delivery and others | [`sim/experiments/`](https://github.com/beyond10x/weft/tree/main/sim/experiments) | Exist |
 | The gate, `task check` | [`Taskfile.yml`](https://github.com/beyond10x/weft/blob/main/Taskfile.yml) | Runs on every change |
 | HTTP API and CLI surfaces | none yet | Planned |
@@ -79,7 +79,7 @@ flowchart TB
 
 ## Where to go next
 
-- [Getting started](getting-started.md): validate the specification and run weft-sim.
+- [Getting started](getting-started.md): validate the specification and run cloudspec-sim.
 - [Concepts](concepts/tenants-and-accounts.md): tenants, accounts, formations, workloads, claims,
   nodes and clusters.
 - [Read the specification](specification/read.md): the files, a domain, a command.
