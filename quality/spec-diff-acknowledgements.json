@@ -1,7 +1,7 @@
 {
   "format": "ess-diff-acknowledgements/1",
   "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
-  "after": "188c3cd7a96f4d12c8c5bebe71bae66d2f0cf72d60b32d0aa1d6fd16cdf2c063",
+  "after": "44b80d0f64e4a2439dc0754859fa0aae06da287bf207acce36d13e952e431e35",
   "acknowledged": [
     "system/weft/unclassified-changed",
     "type/weft.deployments.SourceKind/variant-added/Agent",
@@ -766,6 +766,8 @@
     "command/weft.scheduling.PlaceInstance/input-added/formation_id",
     "command/weft.scheduling.PlaceInstance/input-added/scope_id",
     "command/weft.scheduling.PlaceInstance/input-removed/account_id",
+    "command/weft.scheduling.PlaceInstance/outcome-added/instance-of-other-formation",
+    "command/weft.scheduling.PlaceInstance/outcome-added/instance-of-other-scope",
     "command/weft.scheduling.PlaceInstance/outcome-added/other-formation",
     "command/weft.scheduling.PlaceInstance/outcome-condition-changed/binding-of-other-account",
     "command/weft.scheduling.PlaceInstance/outcome-condition-changed/crosses-closed-link",
