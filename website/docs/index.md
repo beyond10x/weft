@@ -48,7 +48,7 @@ The specification splits weft into four planes and four server components
 | Plane | Component | Does |
 |---|---|---|
 | Management | `weft-api` | The user API: logins, tokens, tenants, accounts, formations. Called by the CLI and by CI. |
-| Control | `weft-control` | State, scheduling, translation of deployment sources, identity, secret delivery. Decides; runs no workload. |
+| Control | `weft-control` | State, scheduling, identity, secret delivery; translation is cloudspec's. Decides; runs no workload. |
 | Worker | `weft-node` | One agent per node; starts, observes and stops instances. Holds no state the control plane does not know. |
 | Data | `weft-edge` | The gateway in front of public endpoints; holds a request while a sleeping service wakes. |
 

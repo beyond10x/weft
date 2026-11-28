@@ -193,8 +193,10 @@ the observation (pattern A) or "external" (pattern B).
   `exited`, `cancelled`, `expired`, `unknown` (`:336-363`), as weft's own enum, not substrate's
   re-exported type (`:23` today).
 - Refusals: `EmptyCommand`, `HostPath`, `Ended { state, refusal }`, `NoExit(after)`
-  (`confine.rs:113-128`), `Refused { code }` (a substrate refusal such as
-  `exec.sandbox-unavailable`, `substrate@0.29.0:README.md:12-14`), `Unavailable`.
+  (`confine.rs:113-128`), `Refused { class, code, message, retriable }` (a substrate refusal such
+  as `exec.sandbox-unavailable`, `substrate@0.29.0:README.md:12-14`, with its class `Refused`,
+  `Conflict`, `Unserved`, `Exhausted` or `Failed` and substrate's retriable flag), `Invalid
+  { field, reason }` (limits outside substrate's contract bounds), `Unavailable`.
 - Idempotency: one `run` is one substrate operation with its own `op`; the adapter does not retry a
   run whose start answered unknown, it reports `Unavailable`.
 - Observed: from the daemon's event history, never from the start's answer

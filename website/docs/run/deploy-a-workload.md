@@ -60,9 +60,10 @@ weft account create acme/research/gpu-lab --quota gpu=4
 The steps behind `weft deploy` are specified in `weft.deployments` and `weft.formations` and can be
 explored with weft-sim today:
 
-1. The document is a **deployment source**. A translator turns it into a **formation revision**
-   and a coverage report: every object mapped, mapped with loss, or refused with a reason. A
-   refused object stops the deploy.
+1. The document is a **deployment source**. cloudspec's inbound translator turns it into a
+   cloudspec architecture, which weft takes as a **formation revision**, and a coverage report:
+   every object mapped, mapped with loss, or refused with a reason. A refused object stops the
+   deploy. weft has no translator of its own.
 2. A **plan** shows the difference between the live release and the new revision, with a
    **simulation**: does every instance fit capacity and quota, does every link, egress and secret
    grant pass the account's policy, which component can reach which.
@@ -73,6 +74,6 @@ explored with weft-sim today:
 5. **Drift** between the live release and what the nodes report is recorded and re-applied or
    escalated.
 
-Besides weft's own document, the specified source kinds are a Docker Compose file, a Helm chart,
-Kubernetes manifests, an ESS system and an agent document
+Besides weft's own document, the sources cloudspec translates are a Docker Compose file, a Helm
+chart, Kubernetes manifests, an ESS system and an agenticspec deployment
 ([formations](../concepts/formations.md#deployment-sources)).

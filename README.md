@@ -17,6 +17,11 @@ container image, a virtual machine, a model, an ESS system or an agent. Workload
 disks, network addresses and secrets. Tenants, nested accounts, tenant clusters and quotas keep
 users apart.
 
+weft is the runtime of [cloudspec](https://github.com/beyond10x/cloudspec) specifications: it runs
+what cloudspec translated from a source (a Helm chart, a Compose file, an agenticspec deployment,
+an ESS system) and has no translator of its own. The multi-tenant cloud described here is its first
+example.
+
 Status: specification first. No code exists yet.
 
 | Where | What |

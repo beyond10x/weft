@@ -141,7 +141,9 @@ the `Shared source gates` workflow refuse any other author.
 
 ## Ecosystem specs
 
-Other specification formats of the ecosystem enter only as deployable workloads, through a
-translator of the `deployments` domain: an ESS `system.yaml`, a `loom.agent/1` document, a
-Docker Compose file, a Helm chart, Kubernetes manifests, later a ModelSpec program. weft's own
-domains reuse none of them.
+Other specification formats of the ecosystem enter only as deployable workloads: an ESS
+`system.yaml`, a `loom.agent/1` document, an agenticspec deployment, a Docker Compose file, a Helm
+chart, Kubernetes manifests, later a ModelSpec program. Since 2026-11-28 (decision D5) cloudspec
+translates them into a cloudspec architecture and weft runs only that; weft writes no translator
+(`docs/domain-sketch.md`, last section). The `deployments` domain still holds the translator
+records until a later specification change. weft's own domains reuse none of these formats.

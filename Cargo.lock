@@ -1391,11 +1391,10 @@ dependencies = [
 name = "weft-agent"
 version = "0.1.0"
 dependencies = [
- "b10x-substrate-sdk",
  "serde_json",
  "time",
- "tokio",
  "weft-client",
+ "weft-platform",
  "weft-testkit",
 ]
 
@@ -1476,6 +1475,15 @@ name = "weft-node"
 version = "1.0.0"
 dependencies = [
  "weft-types",
+]
+
+[[package]]
+name = "weft-platform"
+version = "0.1.0"
+dependencies = [
+ "b10x-substrate-sdk",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

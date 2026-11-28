@@ -1,8 +1,8 @@
 //! weft-probe <host:port>: opens one TCP connection to the address and prints what happened, one
 //! line: `connected <addr>`, `refused <addr>: <error>`, `unreachable <addr>: <error>`,
 //! `timed-out <addr>: <error>` or `failed <addr>: <error>`. Exits 0 only when it connected, 1
-//! when it did not, 2 on a usage error. The confinement test of weft-agent runs it unconfined and
-//! confined with the same arguments.
+//! when it did not, 2 on a usage error. The confinement test of weft-platform runs it unconfined
+//! and confined with the same arguments.
 
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpStream};
