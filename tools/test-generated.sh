@@ -313,11 +313,12 @@ done
 one_time_lines=$(grep -r --include='*.yaml' -c '^[[:space:]]*one_time_response:' ess | awk -F: '{ n += $NF } END { print n + 0 }')
 jq -s -r --argjson lines "$one_time_lines" '
   ["r1-set-workload-replicas", "r1-rollout-submit-job", "job-start-on-submit",
-   "job-task-instances", "job-instance-scheduling-request", "r1-create-replica",
-   "r1-submit-scheduling-request",
+   "job-task-instances", "job-instance-scheduling-request", "job-task-succeeded-on-exit",
+   "job-complete-on-task", "r1-create-replica", "r1-submit-scheduling-request",
    "r4-bind-placement", "r4-assign",
-   "r4-schedule-instance", "r4-record-placement-assigned", "edge-backend-ready",
-   "edge-backend-restore", "edge-backend-restarting"] as $removed
+   "r4-schedule-instance", "r4-record-placement-assigned",
+   "telemetry-close-log-streams-on-exit", "telemetry-retire-series-on-exit", "edge-backend-ready",
+   "edge-backend-restore", "edge-backend-restarting", "edge-backend-exited"] as $removed
   | def otr: [.. | objects | select(has("one_time_response"))] | length;
     def drop_otr: walk(if type == "object" then del(.one_time_response) else . end);
     def expected($file):

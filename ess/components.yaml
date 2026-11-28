@@ -93,6 +93,25 @@ conversions:
       only from its event, so this crossing stands for that read of the row; the binding is
       delivered by hand (weft-impl/src/bindings/job_task_instances.rs), which reads the row, and
       no generated code converts one identity into the other.
+  # D-C2 A: binding job-task-succeeded-on-exit records the task of the instance that exited.
+  - from: weft.shared.InstanceId
+    to: weft.shared.JobId
+    because: >-
+      An instance of a Job's task references its Job (weft.workloads.Instance.job_id), and
+      InstanceExited names only the instance, so the task that succeeded is of the Job the
+      instance's row names. ESS maps a binding only from its event, so this crossing stands for
+      that read of the row; the binding is delivered by hand
+      (weft-impl/src/bindings/job_task_succeeded_on_exit.rs), which reads the row, and no
+      generated code converts one identity into the other.
+  # D-C2 A: binding job-complete-on-task completes the Job with the outputs its tasks wrote.
+  - from: weft.shared.JobId
+    to: List<weft.shared.ArtifactDigest>
+    because: >-
+      CompleteJob takes the outputs the Job wrote (weft.workloads.Job.output_artifacts), and
+      TaskSucceeded names only the Job. A snippet's Job writes none, and ESS maps no list literal
+      into a binding's input, so this crossing stands for "the Job's outputs": the binding is
+      delivered by hand (weft-impl/src/bindings/job_complete_on_task.rs), which sends none, and
+      no generated code converts an identity into a list.
 
 components:
   # Line 72: "the user API (management plane)". Line 95: the CLI and CI reach it over HTTP.
@@ -1264,13 +1283,17 @@ bindings:
   # rollout step started submits the Job of its workload, a submitted Job outside a gang starts
   # with all its tasks, each task becomes an instance, and the instance is submitted to the
   # scheduler. The Scheduler's PlaceInstance and R4 take it to the node as a replica's instance.
+  # The instance's exit 0 records its task succeeded, and the task's success completes the Job:
+  # finished is the Job Succeeded.
   # Gang jobs, retries and a failed task are not in this block.
-  # Each binding of the block is delivered by hand (weft-impl/src/bindings/): three read a row
-  # the event names (the workload, the Job), and ESS maps a binding only from its event's fields
-  # or a literal; the four drop a refusal per name. OPEN (ESS): a mapping from a related row
-  # (r1-rollout-submit-job, job-task-instances, job-instance-scheduling-request's `where:`) and
-  # one invocation per element of a count (job-task-instances). Until then each `mapping:` below
-  # says what ESS can: the literals and the conversion are named where they stand.
+  # Each binding of the block is delivered by hand (weft-impl/src/bindings/): four read a row
+  # the event names (the workload, the Job, the instance), and ESS maps a binding only from its
+  # event's fields or a literal; the six drop a refusal per name. OPEN (ESS): a mapping from a
+  # related row (r1-rollout-submit-job, job-task-instances, job-task-succeeded-on-exit,
+  # job-instance-scheduling-request's `where:`), one invocation per element of a count
+  # (job-task-instances), and a binding condition on an Integer leaf (job-task-succeeded-on-exit:
+  # exit_code 0). Until then each `mapping:` below says what ESS can: the literals and the
+  # conversions are named where they stand.
   #
   # Edge 1: a rollout step started submits the Job of its workload with the workload's
   # JobSettings (weft.workloads.Workload.settings): parallelism, gang, max_retries. A workload
@@ -1382,6 +1405,62 @@ bindings:
       drop: [already-requested]
       # Every other refusal is retried, as r1-submit-scheduling-request retries it.
       retry: {except: [already-requested]}
+  #
+  # Edge 5: an instance of a Job's task that exited 0 records its task succeeded (the owner's
+  # decision D-C2 = A: exit 0 -> RecordTaskSucceeded), with the Job and the task index of the
+  # instance's row. A Service's replica (service_id defined) is not a task. The binding does not
+  # react to an exit other than 0 (a failed task is RetryTask or FailJob, outside this block),
+  # nor to an instance that names no Job or no task index, or that no row holds. OPEN:
+  # RecordTaskSucceeded counts and keeps no record of which task succeeded, so a repeated
+  # delivery of InstanceExited while the Job runs counts its task twice; with parallelism 1 the
+  # first delivery completes the Job (edge 6) and a repeat is refused not-running.
+  - id: job-task-succeeded-on-exit
+    summary: Record the task of a Job's instance that exited 0 as succeeded.
+    when:
+      event: weft.workloads.InstanceExited
+      # And exit_code 0 (OPEN (ESS) above: a binding condition compares no Integer leaf).
+      where: [not defined(event.service_id)]
+    invoke:
+      command: weft.workloads.RecordTaskSucceeded
+    mapping:
+      # The Job of the instance's row (the conversion InstanceId -> JobId above stands for that
+      # read).
+      job_id: event.instance_id
+      # The task index of the instance's row (OPEN (ESS) above); this literal otherwise.
+      task_index: 0
+    delivery: at_least_once
+    on_failure:
+      # not-running: harmless; the Job ended first (completed by a repeated delivery, cancelled
+      # or failed), so its task has nothing to count.
+      drop: [not-running]
+      # negative-index and index-out-of-range cannot follow (job-task-instances made the instance
+      # for a task index below the Job's parallelism); no-such-job cannot follow (the instance
+      # names the Job its task came from). A transport failure is retried.
+      retry: {except: [not-running]}
+  #
+  # Edge 6: a task's success completes its Job once every task succeeded: CompleteJob with no
+  # output (a snippet writes none; Job -> Artifact, output_artifacts, references many). Finished
+  # is the Job Succeeded (D-C2 = A).
+  - id: job-complete-on-task
+    summary: Complete a Job once every task succeeded.
+    when:
+      event: weft.workloads.TaskSucceeded
+    invoke:
+      command: weft.workloads.CompleteJob
+    mapping:
+      job_id: event.job_id
+      # The outputs the Job's tasks wrote: none for a snippet (the conversion JobId ->
+      # List<ArtifactDigest> above stands for them; a binding maps no list literal).
+      outputs: event.job_id
+    delivery: at_least_once
+    on_failure:
+      # outstanding: harmless; another task of the Job has not succeeded yet, and the last
+      # task's TaskSucceeded completes it. wrong-state: harmless; a repeated delivery (the Job
+      # Succeeded already), or the Job ended otherwise first.
+      drop: [outstanding, wrong-state]
+      # no-such-job cannot follow (the event names the Job whose task succeeded); unknown-output
+      # cannot follow (no output is sent). A transport failure is retried.
+      retry: {except: [outstanding, wrong-state]}
   #
   # Level: ServicesBelowScale -> RequestReplica (block above). Edge: the requested replica becomes
   # an instance.
@@ -1955,6 +2034,13 @@ bindings:
   # Serves R2, R3 and R6. unknown-instance and instance-live cannot follow (the event is the end
   # of a known instance); a repeated delivery moves no row and succeeds. A transport failure is
   # retried.
+  # The two bindings on InstanceExited are delivered by hand (weft-impl/src/bindings/) since
+  # story cloudspec-submission-job-exit put the event on the path: CloseInstanceLogStreams and
+  # RetireInstanceMetricSeries publish one event per row changed (`each: changed`), and the Rust
+  # target of ESS 0.99.2 gives the outcome exactly one such event, so an instance with no open
+  # stream or active series has no event to publish but a made-up one. OPEN (ESS): an
+  # `each: changed` over no row. Until then each binding reads the instance's rows and invokes
+  # nothing for an instance with none to change, which closes or retires nothing either way.
   - id: telemetry-close-log-streams-on-exit
     summary: Close the log streams of an instance that exited.
     when:
@@ -2377,6 +2463,8 @@ bindings:
       instance_id: event.instance_id
     delivery: at_least_once
     on_failure: *edge-not-ready-failure
+  # Delivered by hand (weft-impl/src/bindings/edge_backend_exited.rs) since story
+  # cloudspec-submission-job-exit put InstanceExited on the path, to drop no-backend by name.
   - id: edge-backend-exited
     summary: Remove a backend whose instance exited.
     when:
