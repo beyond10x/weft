@@ -3,6 +3,7 @@
 mod cloudspec_submit;
 mod plan_apply;
 mod ratchet;
+mod release_steps;
 
 mod trivial {
     #[test]
