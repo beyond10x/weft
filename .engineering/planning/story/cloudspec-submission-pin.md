@@ -21,15 +21,29 @@ scope:
 - confidence: cited
   path: Taskfile.yml
 - confidence: cited
+  path: ess/4-applications/workloads.yaml
+- confidence: cited
   path: ess/5-runtime/scheduling.yaml
+- confidence: cited
+  path: ess/9-actors/actors.yaml
 - confidence: cited
   path: ess/cloud
 - confidence: cited
+  path: ess/components.yaml
+- confidence: cited
   path: ess/ess-inputs.yaml
 - confidence: cited
+  path: product/cloud/crates/weft-agent/tests/seeds/mod.rs
+- confidence: cited
   path: product/cloud/crates/weft-cloudspec/tests
+- confidence: cited
+  path: product/cloud/crates/weft-cloudspec/tests/goldens.rs
+- confidence: cited
+  path: product/cloud/crates/weft-controllers
 - confidence: inferred
   path: product/cloud/crates/weft-controllers/src/placement.rs
+- confidence: cited
+  path: product/cloud/crates/weft-impl/src
 - confidence: cited
   path: product/cloud/crates/weft-impl/src/behaviours/assign.rs
 - confidence: inferred
@@ -38,17 +52,21 @@ scope:
   path: product/cloud/crates/weft-impl/src/behaviours/define_workload.rs
 - confidence: inferred
   path: product/cloud/crates/weft-impl/src/behaviours/place_instance.rs
+- confidence: cited
+  path: product/cloud/crates/weft-testkit
 - confidence: inferred
   path: product/cloud/crates/weft-testkit/src/steps.rs
 - confidence: inferred
   path: product/console/ui/fixtures
 - confidence: cited
   path: quality/spec-diff-acknowledgements.json
-- confidence: inferred
+- confidence: cited
   path: sim/experiments
 - confidence: cited
   path: tests/fixtures/cloudspec
-revision: 8
+- confidence: cited
+  path: website/docs/concepts/components.md
+revision: 18
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T11:22:48Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T11:22:48Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
