@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T04:02:06Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-node-run-assignment",
+  "kind": "story",
+  "revision": 29,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "Gate on main ab601cb (weft#32)",
+    "reference": "https://github.com/beyond10x/weft/actions/runs/46105129689"
+  }
+}

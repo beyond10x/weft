@@ -1,0 +1,74 @@
+---
+format: aep.planning-md/3
+id: story:cloud-blocks-layers
+kind: story
+status: proposed
+title: Layer and domain-map checks treat ess/cloud as one layer below weft's own files
+relations:
+- decomposes: epic:cloud-blocks
+- serves: vision:weft
+- depends_on: story:cloud-blocks-vendor
+- depends_on: story:cloud-blocks-policies
+- depends_on: story:cloud-blocks-lock-gate
+scope:
+- confidence: cited
+  path: AGENTS.md
+- confidence: cited
+  path: docs/layers.md
+- confidence: cited
+  path: tools/check-domain.sh
+- confidence: cited
+  path: tools/check-layers.sh
+- confidence: cited
+  path: tools/check-overlay.sh
+- confidence: cited
+  path: tools/check.d/30-domain-map.sh
+- confidence: cited
+  path: tools/gen-domain-map.sh
+- confidence: cited
+  path: tools/test-domain-map.sh
+- confidence: cited
+  path: website/docs/specification/layers.md
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+---
+## Epic
+
+Decomposes `epic:cloud-blocks`: weft's layer checks and domain map know the vendored layer.
+
+## Outcome
+
+1. `tools/check-layers.sh` and the domain map treat `ess/cloud/` as one layer below weft's files:
+   a weft file may reference it, it may not reference weft, and a weft file referencing a higher
+   weft layer still fails.
+2. `tools/check-domain.sh` and `tools/check-overlay.sh` read the
+   vendored files.
+3. `docs/layers.md`, the docs page and `AGENTS.md` say which files are vendored and that they are
+   changed only by `task vendor-update`.
+
+## Scope
+
+`tools/check-layers.sh`, `tools/gen-domain-map.sh`, `tools/check.d/30-domain-map.sh`,
+`tools/test-domain-map.sh`, `tools/check-domain.sh`,
+`tools/check-overlay.sh`, `docs/layers.md`, `website/docs/specification/layers.md`, `AGENTS.md`
+(the layer section, after `story:cloud-blocks-lock-gate`).
+
+## Acceptance
+
+1. `tools/test-domain-map.sh` passes with a fixture in which a weft file references a higher weft
+   layer (refused) and one references `cloud/` (accepted).
+2. `task layers` exits 0 on the tree of `story:cloud-blocks-policies`.
+3. `tools/check-domain.sh` run on a weft domain that references `weft.scope` exits 0; `weft.scope`
+   exists only under `ess/cloud/`.
+4. `grep -l 'task vendor-update' AGENTS.md docs/layers.md website/docs/specification/layers.md`
+   prints all three files.
+
+## Rules for this work
+
+- Merge into the integration branch `move/vendor-cloud-blocks`; `main` gets it once the whole gate
+  is green.
+- Builds and tests run through `slot --here`. No test over 60 s; the test step ends within 120 s. A
+  pool job ends within 10 minutes unless it names its time with `slot --timeout` (at most 30m). No
+  Python in anything committed. No network request in the test step.
+- One owner per domain file; parallel edits are checked with `tools/check-overlay.sh`.
