@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:anim-point-replay
 kind: story
-status: draft
+status: implemented
 title: 'Replay a search point by its walk number: weft-sim reruns that point and its page shows the timeline'
 relations:
 - decomposes: epic:search-animation
@@ -24,7 +24,11 @@ scope:
   path: website/ux/fixtures/sim-player.html
 - confidence: inferred
   path: website/ux/sim-player.spec.ts
-revision: 6
+revision: 9
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T22:37:32Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-11-27T22:37:32Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1,"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-11-27T23:36:41Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"test_result":1,"approval":1,"review_outcome":3}}}
 ---
 ## Epic
 

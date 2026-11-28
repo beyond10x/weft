@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T22:37:32Z",
+  "actor": "human:operator",
+  "artifact": "story:anim-point-replay",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the host operator: further waves with no shared file start on the session's default; dependencies merged in weft#19-#23"
+  }
+}
