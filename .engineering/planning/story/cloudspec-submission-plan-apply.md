@@ -10,13 +10,11 @@ relations:
 scope:
 - confidence: inferred
   path: product/cloud/crates/weft-impl/src/behaviours/apply_plan.rs
-- confidence: inferred
-  path: product/cloud/crates/weft-impl/src/behaviours/record_plan_result.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
 - confidence: inferred
   path: product/cloud/crates/weft-testkit/tests/plan_apply.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T13:56:42Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T13:56:42Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
