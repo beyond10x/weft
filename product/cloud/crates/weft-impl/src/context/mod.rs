@@ -51,6 +51,8 @@ pub struct CallerAttributes {
     pub account_id: Option<String>,
     /// `principal_id`.
     pub principal_id: Option<String>,
+    /// `scope_id`: the scope the request acts in.
+    pub scope_id: Option<String>,
 }
 
 /// The context of the command running now.
@@ -117,6 +119,14 @@ impl weft_types::behaviour::Context for crate::Ports {
             .principal_id
             .clone()
             .map(|id| shared::PrincipalId(Uuid(id)))
+    }
+
+    fn caller_scope_id(&self) -> Option<shared::ScopeId> {
+        self.context()
+            .caller
+            .scope_id
+            .clone()
+            .map(|id| shared::ScopeId(Uuid(id)))
     }
 
     fn caller_tenant_id(&self) -> Option<shared::TenantId> {

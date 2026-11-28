@@ -19,10 +19,10 @@ use weft_types::nodes::{
 };
 use weft_types::primitives::Uuid;
 use weft_types::shared::{
-    AccountId, ArtifactDigest, AssignmentId, CloudId, ComponentName, EnvironmentId, FormationId,
+    ArtifactDigest, AssignmentId, CloudId, ComponentName, EnvironmentId, FormationId,
     FormationRevisionId, InstanceId, IsolationFacts, IsolationLevel, NodeId, NodeSessionId,
     PlacementDecisionId, PriorityClassName, ProcessName, ResourceAmount, ResourceClassName,
-    RuntimeId, ServiceId, WorkloadId, ZoneName,
+    RuntimeId, ScopeId, ServiceId, WorkloadId, ZoneName,
 };
 use weft_types::workloads::{
     DesiredRun, InstanceData, InstanceHealth, InstanceSnapshot, InstanceState, PackageKind,
@@ -65,16 +65,10 @@ pub struct Seed {
 /// Two `Ready` nodes, each with an open session and one `Scheduled` instance assigned to it.
 pub fn two_nodes() -> Seed {
     let cloud_id = CloudId(Uuid(mint()));
-    let account_id = AccountId(Uuid(mint()));
+    let scope_id = ScopeId(Uuid(mint()));
     let mut rows = Vec::new();
-    let this = placed(&mut rows, &cloud_id, &account_id, THIS_SNIPPET, THIS_DIGEST);
-    let other = placed(
-        &mut rows,
-        &cloud_id,
-        &account_id,
-        OTHER_SNIPPET,
-        OTHER_DIGEST,
-    );
+    let this = placed(&mut rows, &cloud_id, &scope_id, THIS_SNIPPET, THIS_DIGEST);
+    let other = placed(&mut rows, &cloud_id, &scope_id, OTHER_SNIPPET, OTHER_DIGEST);
     Seed {
         rows,
         join_token: mint(),
@@ -126,7 +120,7 @@ fn id<T>(wrap: impl FnOnce(Uuid) -> T, text: &str) -> T {
 fn placed(
     rows: &mut Vec<Row>,
     cloud_id: &CloudId,
-    account_id: &AccountId,
+    scope_id: &ScopeId,
     snippet: &str,
     digest: &str,
 ) -> Placed {
@@ -181,7 +175,7 @@ fn placed(
         state: ArtifactState::Registered,
         data: ArtifactData {
             artifact_digest: artifact_digest.clone(),
-            account_id: account_id.clone(),
+            scope_id: scope_id.clone(),
             kind: ArtifactKind::Snippet,
             size_bytes: i64::try_from(snippet.len()).expect("a short snippet"),
             signature: "unsigned".to_owned(),
@@ -208,7 +202,7 @@ fn placed(
         state: WorkloadState::Defined,
         data: WorkloadData {
             workload_id: workload_id.clone(),
-            account_id: account_id.clone(),
+            scope_id: scope_id.clone(),
             formation_id: FormationId(Uuid(mint())),
             formation_revision_id: FormationRevisionId(Uuid(mint())),
             environment_id: EnvironmentId(Uuid(mint())),
@@ -230,7 +224,7 @@ fn placed(
         data: InstanceData {
             instance_id: instance_id.clone(),
             workload_id,
-            account_id: account_id.clone(),
+            scope_id: scope_id.clone(),
             artifact_digest,
             minimum_isolation: IsolationLevel::Container,
             isolation: Some(IsolationLevel::Container),

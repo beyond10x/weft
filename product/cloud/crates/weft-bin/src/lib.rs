@@ -464,6 +464,7 @@ pub fn authenticate(request: &Request, trust_callers: bool) -> (Option<Caller>, 
             tenant_id: attribute("tenant_id"),
             account_id: attribute("account_id"),
             principal_id: attribute("principal_id"),
+            scope_id: attribute("scope_id"),
         },
     )
 }

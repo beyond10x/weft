@@ -1,6 +1,6 @@
 //! `r1-submit-scheduling-request` (`ess/components.yaml`): `weft.workloads.InstanceCreated`
 //! where `job_id` is not defined -> `weft.scheduling.SubmitSchedulingRequest`, mapping
-//! `instance_id`, `account_id`, `formation_id`, `claims`, `minimum_isolation` (as
+//! `instance_id`, `scope_id`, `formation_id`, `claims`, `minimum_isolation` (as
 //! `min_isolation`), `zones` and `priority`.
 //!
 //! Removed from the synthesis input for ESS
@@ -45,7 +45,7 @@ fn deliver(system: &mut System, event: &SystemEvent) -> Option<Invoked> {
     }
     let input = SubmitSchedulingRequest {
         instance_id: created.instance_id.clone(),
-        account_id: created.account_id.clone(),
+        scope_id: created.scope_id.clone(),
         formation_id: created.formation_id.clone(),
         claims: created.claims.clone(),
         min_isolation: created.minimum_isolation,

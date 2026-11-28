@@ -1,33 +1,33 @@
-//! `weft.workloads.DefineWorkload` (`PLAN.md` § Obligations, `ess/4-applications/workloads.yaml`),
+//! `weft.workloads.DefineWorkload` (`PLAN.md` § Obligations, `ess/cloud/5-workloads/workloads.yaml`),
 //! in the selection precedence of its contract:
 //!
-//! 1. the input guards in declaration order: `not-callers-account` (a caller acting in no
-//!    account counts as another account's), `spec-kind`, `box-package`, `no-main`,
+//! 1. the input guards in declaration order: `not-callers-scope` (a caller acting in no
+//!    scope counts as another scope's), `spec-kind`, `box-package`, `no-main`,
 //!    `invalid-check`, `invalid-restart-policy`, and the external `settings-shape-mismatch`
 //!    (`before_row`: the tag of `settings` names another shape than `shape`);
 //! 2. every existence check before every predicate, in declaration order:
 //!    `formation-missing`, `environment-missing`, `revision-missing`, `no-runtime`,
-//!    `component-missing` (no `weft.formations.Component` of the formation has the name);
+//!    `component-missing` (no `weft.architecture.Component` of the formation has the name);
 //! 3. the predicates on those rows: `formation-foreign`, `environment-foreign`,
 //!    `revision-foreign`, `formation-retired`, `environment-retired`, `runtime-retired`,
 //!    `runtime-kind`, `below-runtime-isolation`;
 //! 4. the external branches ahead of `defined`, decided from the `weft.artifacts.Artifact` row
-//!    of the same store: `no-artifact`, `artifact-foreign` (registered to another account),
+//!    of the same store: `no-artifact`, `artifact-foreign` (registered to another scope),
 //!    `artifact-revoked`, `artifact-kind` (an artifact kind other than the package kind, the
 //!    same variant name);
 //! 5. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
 //!    the same store ([`crate::quota::exceeded_alone`]): the claims of one instance of the
-//!    workload alone would take the account, or an account above it, past a quota. What the
-//!    account's live instances hold does not count; `CreateInstance` asks for each instance. It
+//!    workload alone would take the scope's quota, or a quota above it, past its limit. What the
+//!    scope's live instances hold does not count; `CreateInstance` asks for each instance. It
 //!    is answered before `defined`, the branch the contract takes "otherwise" (its default);
 //! 6. `defined`: a `Defined` workload with the values sent.
 
+use weft_types::architecture::{EnvironmentState, FormationState};
 use weft_types::artifacts::{ArtifactKind, ArtifactState};
 use weft_types::behaviour::{
     ArtifactStorage, ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage,
     FormationStorage, RuntimeStorage, WorkloadStorage,
 };
-use weft_types::formations::{EnvironmentState, FormationState};
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
 use weft_types::shared::{IsolationLevel, WorkloadId};
@@ -50,8 +50,8 @@ impl DefineWorkloadBehavior for Ports {
         &mut self,
         input: DefineWorkload,
     ) -> Result<DefineWorkloadOutcome, UnmetObligation> {
-        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(DefineWorkloadOutcome::NotCallersAccount { error: NotFound });
+        if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
+            return Ok(DefineWorkloadOutcome::NotCallersScope { error: NotFound });
         }
         if matches!(
             input.package_kind,
@@ -124,7 +124,7 @@ impl DefineWorkloadBehavior for Ports {
             return Ok(DefineWorkloadOutcome::ComponentMissing { error: NotFound });
         }
 
-        if formation.data.account_id != input.account_id {
+        if formation.data.scope_id != input.scope_id {
             return Ok(DefineWorkloadOutcome::FormationForeign { error: NotFound });
         }
         if environment.data.formation_id != input.formation_id {
@@ -164,7 +164,7 @@ impl DefineWorkloadBehavior for Ports {
                 error: ArtifactNotFound,
             });
         };
-        if artifact.data.account_id != input.account_id {
+        if artifact.data.scope_id != input.scope_id {
             return Ok(DefineWorkloadOutcome::ArtifactForeign {
                 error: ArtifactNotFound,
             });
@@ -179,7 +179,7 @@ impl DefineWorkloadBehavior for Ports {
                 error: ArtifactKindMismatch,
             });
         }
-        if quota::exceeded_alone(self, &input.account_id, &input.claims) {
+        if quota::exceeded_alone(self, &input.scope_id, &input.claims) {
             return Ok(DefineWorkloadOutcome::OverQuota {
                 error: QuotaExceeded,
             });
@@ -188,7 +188,7 @@ impl DefineWorkloadBehavior for Ports {
         let workload_id = WorkloadId(Uuid(mint()));
         let defined = WorkloadDefined {
             workload_id: workload_id.clone(),
-            account_id: input.account_id.clone(),
+            scope_id: input.scope_id.clone(),
             formation_id: input.formation_id.clone(),
             environment_id: input.environment_id.clone(),
             component: input.component.clone(),
@@ -203,7 +203,7 @@ impl DefineWorkloadBehavior for Ports {
                 state: WorkloadState::Defined,
                 data: WorkloadData {
                     workload_id,
-                    account_id: input.account_id,
+                    scope_id: input.scope_id,
                     formation_id: input.formation_id,
                     formation_revision_id: input.formation_revision_id,
                     environment_id: input.environment_id,

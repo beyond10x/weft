@@ -106,7 +106,7 @@ mod replicas {
     };
     use weft_types::primitives::Uuid;
     use weft_types::shared::{QuotaId, ServiceId, WorkloadId};
-    use weft_types::workloads::{InstanceCreated, ReplicaRequested};
+    use weft_types::workloads::{InstanceCreated, ReplicaRequested, WorkloadSnapshot};
 
     use super::world::{binding_lines, instances, request_lines, requests_for, World};
 
@@ -135,7 +135,7 @@ mod replicas {
             instance_id: instance.instance_id.clone(),
             workload_id: instance.workload_id.clone(),
             minimum_isolation: instance.minimum_isolation,
-            account_id: instance.account_id.clone(),
+            scope_id: instance.scope_id.clone(),
             formation_id: workload.data.formation_id.clone(),
             claims: workload.data.claims.clone(),
             service_id: instance.service_id.clone(),
@@ -175,8 +175,8 @@ mod replicas {
         assert_eq!(instance["state"], json!("Pending"));
         assert_eq!(requests.len(), 1, "{requests:?}");
         assert_eq!(requests[0]["state"], json!("Pending"));
-        assert_eq!(requests[0]["account_id"], json!(path.account_id));
-        assert_eq!(requests[0]["cluster_id"], json!(path.cluster_id));
+        assert_eq!(requests[0]["scope_id"], json!(path.scope_id));
+        assert_eq!(requests[0]["formation_id"], json!(ids.formation_id));
     }
 
     /// Statement 2: a replayed `ReplicaRequested` of a live replica is answered `replica-live`
@@ -210,12 +210,27 @@ mod replicas {
         QuotaStorage::put(&mut ports, quota);
     }
 
-    /// Statement 3: a `ReplicaRequested` whose instance would take the account past its `cpu`
-    /// quota is answered `over-quota`, off the drop list: retried, not dropped. It is attempted
-    /// again on the next tick, then after a wait of two ticks; once the quota is raised, the
-    /// next attempt creates it.
+    /// Takes the row of the world's workload away: a `ReplicaRequested` of its service names a
+    /// workload no row holds, and `CreateInstance` answers `no-workload`, off the drop list of
+    /// `r1-create-replica`: retried. The row, to put back.
+    fn take_workload(w: &World) -> WorkloadSnapshot {
+        let mut ports = w.ports();
+        let key = WorkloadId(Uuid(w.ids.workload_id.clone()));
+        let row = WorkloadStorage::get(&ports, &key).expect("the workload row");
+        WorkloadStorage::delete(&mut ports, &key);
+        row
+    }
+
+    /// Puts the workload's row back: the next attempt creates the instance.
+    fn put_back(w: &World, row: WorkloadSnapshot) {
+        WorkloadStorage::put(&mut w.ports(), row);
+    }
+    /// Statement 3, as the blocks moved it: `CreateInstance` is out of the outcome group `quota`.
+    /// A `ReplicaRequested` whose instance takes the scope past its `cpu` quota creates the
+    /// instance and its scheduling request; `weft.scheduling.PlaceInstance` refuses to place it
+    /// (`quota-exceeded`, `placement::a_request_the_quota_refuses_is_attempted_after_doubling_waits_with_one_line_each`).
     #[test]
-    fn a_replica_request_past_the_account_quota_is_retried_until_the_quota_admits_it() {
+    fn a_replica_request_past_the_scope_quota_is_created_and_left_to_placement() {
         let w = World::new();
         w.process.host().tick();
         let client = w.process.client();
@@ -223,15 +238,37 @@ mod replicas {
         set_limit(&w, 1);
         let seq = w.process.last_seq();
         w.process.host().replay(vec![replica_requested(&w, 1)]);
+        let after = w.process.log_after(seq);
+        let lines = binding_lines(&after, CREATE_REPLICA);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0]["result"], json!("applied"));
+        assert!(lines[0].get("refusal").is_none(), "{lines:?}");
+        assert_eq!(binding_lines(&after, SUBMIT)[0]["result"], json!("applied"));
+        assert_eq!(instances(client, &w.ids.workload_id).len(), 2);
+        assert_eq!(w.process.host().held(), 0);
+    }
+
+    /// A refusal of `CreateInstance` off the drop list of `r1-create-replica` (`no-workload`: the
+    /// workload's row is gone) is retried, not dropped. It is attempted again
+    /// on the next tick, then after a wait of two ticks; once the row is back, the next
+    /// attempt creates it.
+    #[test]
+    fn a_replica_request_refused_off_the_drop_list_is_retried_until_it_is_admitted() {
+        let w = World::new();
+        w.process.host().tick();
+        let client = w.process.client();
+        let workload = take_workload(&w);
+        let seq = w.process.last_seq();
+        w.process.host().replay(vec![replica_requested(&w, 1)]);
         let lines = binding_lines(&w.process.log_after(seq), CREATE_REPLICA);
         assert_eq!(lines.len(), 1, "{lines:?}");
-        assert_eq!(lines[0]["refusal"], json!("over-quota"));
+        assert_eq!(lines[0]["refusal"], json!("no-workload"));
         assert_eq!(lines[0]["result"], json!("retried"));
         assert_eq!(lines[0]["attempt"], json!(1));
         assert_eq!(instances(client, &w.ids.workload_id).len(), 1);
         assert_eq!(w.process.host().held(), 1);
 
-        // Still used up: the next tick attempts it again and holds it again.
+        // Still gone: the next tick attempts it again and holds it again.
         let seq = w.process.last_seq();
         w.process.host().tick();
         let lines = binding_lines(&w.process.log_after(seq), CREATE_REPLICA);
@@ -239,8 +276,8 @@ mod replicas {
         assert_eq!(lines[0]["result"], json!("retried"));
         assert_eq!(lines[0]["attempt"], json!(2));
 
-        // Raised: the first tick waits, the second attempts it.
-        set_limit(&w, 64);
+        // Back: the first tick waits, the second attempts it.
+        put_back(&w, workload);
         let seq = w.process.last_seq();
         w.process.host().tick();
         assert_eq!(
@@ -266,7 +303,7 @@ mod replicas {
     fn a_held_replica_request_is_attempted_after_doubling_waits_with_one_line_per_attempt() {
         const TICKS: u32 = 100;
         let w = World::new();
-        set_limit(&w, 0);
+        let workload = take_workload(&w);
         let start = w.process.last_seq();
         let mut attempted_at = Vec::new();
         for tick in 1..=TICKS {
@@ -285,7 +322,7 @@ mod replicas {
         assert!(
             lines
                 .iter()
-                .all(|line| line["refusal"] == json!("over-quota")
+                .all(|line| line["refusal"] == json!("no-workload")
                     && line["result"] == json!("retried")),
             "{lines:?}"
         );
@@ -299,8 +336,8 @@ mod replicas {
             "{after:?}"
         );
 
-        // Raised: the attempt due at tick 128 creates it.
-        set_limit(&w, 64);
+        // Back: the attempt due at tick 128 creates it.
+        put_back(&w, workload);
         for _ in 0..28 {
             w.process.host().tick();
         }
@@ -325,7 +362,7 @@ mod replicas {
         let second = service.data.service_id.clone();
         WorkloadStorage::put(&mut ports, workload);
         ServiceStorage::put(&mut ports, service);
-        set_limit(&w, 0);
+        take_workload(&w);
         w.process.host().replay(vec![replica_requested(&w, 0)]);
         assert_eq!(w.process.host().held(), 1);
 
@@ -512,7 +549,6 @@ mod replicas {
 /// ports of an in-process host after the path and the definitions: each guard in the selection
 /// precedence of its contract (`PLAN.md`), and the rows and event of the accepting outcome.
 mod obligations {
-    use serde_json::json;
     use weft_impl::bindings::outcome_name;
     use weft_impl::context::mint;
     use weft_impl::Ports;
@@ -529,8 +565,8 @@ mod obligations {
         SubmitSchedulingRequestOutcome,
     };
     use weft_types::shared::{
-        AccountId, BoxId, FormationId, GangId, InstanceId, InvocationId, JobId, PrincipalId,
-        PriorityClassName, QuotaId, ServiceId, SessionId, TenantId, WarmPoolId, WorkloadId,
+        BoxId, FormationId, GangId, InstanceId, InvocationId, JobId, PrincipalId,
+        PriorityClassName, QuotaId, ScopeId, ServiceId, SessionId, WarmPoolId, WorkloadId,
     };
     use weft_types::workloads::obligations::CreateInstanceBehavior;
     use weft_types::workloads::{
@@ -617,7 +653,7 @@ mod obligations {
 
     fn owners(w: &World, of: &WorkloadId) -> Owners {
         let mut ports = w.ports();
-        let account = AccountId(Uuid(w.path.account_id.clone()));
+        let scope = ScopeId(Uuid(w.path.scope_id.clone()));
         let owners = Owners {
             job: JobId(id()),
             invocation: InvocationId(id()),
@@ -632,7 +668,7 @@ mod obligations {
                 data: JobData {
                     job_id: owners.job.clone(),
                     workload_id: of.clone(),
-                    account_id: account.clone(),
+                    scope_id: scope.clone(),
                     parallelism: 1,
                     gang: false,
                     max_retries: 0,
@@ -651,7 +687,7 @@ mod obligations {
                 data: InvocationData {
                     invocation_id: owners.invocation.clone(),
                     workload_id: of.clone(),
-                    account_id: account.clone(),
+                    scope_id: scope.clone(),
                     deadline_at: Timestamp("2026-01-01T00:00:00Z".to_owned()),
                     request: Vec::new(),
                     result: None,
@@ -669,7 +705,7 @@ mod obligations {
                 data: BoxData {
                     box_id: owners.boxed.clone(),
                     workload_id: of.clone(),
-                    account_id: account.clone(),
+                    scope_id: scope.clone(),
                     size: BoxSize {
                         cpus: 1,
                         memory_mib: 256,
@@ -692,7 +728,7 @@ mod obligations {
                 data: SessionData {
                     session_id: owners.session.clone(),
                     workload_id: of.clone(),
-                    account_id: account.clone(),
+                    scope_id: scope.clone(),
                     kind: SessionKind::Terminal,
                     principal_id: PrincipalId(id()),
                     attached: false,
@@ -706,7 +742,7 @@ mod obligations {
                 data: WarmPoolData {
                     warm_pool_id: owners.warm_pool.clone(),
                     workload_id: of.clone(),
-                    account_id: account,
+                    scope_id: scope,
                     size: 1,
                 },
             },
@@ -869,72 +905,18 @@ mod obligations {
             },
         );
 
-        // Over quota: 4 live instances claim 4 cpu, the limit is 4. A live replica still
-        // answers `replica-live` first.
-        let mut quota = QuotaStorage::get(&ports, &QuotaId(Uuid(w.path.quota_id.clone())))
-            .expect("the quota row");
-        assert_eq!(
-            InstanceStorage::list(&ports)
-                .iter()
-                .filter(|row| row.state != InstanceState::Exited)
-                .count(),
-            4
-        );
-        quota.data.limit = 4;
-        QuotaStorage::put(&mut ports, quota.clone());
+        // Out of the outcome group `quota` (the blocks): with no quota for the class left, a live
+        // replica still answers `replica-live`, and a new one is created; `PlaceInstance`
+        // admits it by the scope's quota
+        // (`place_instance::place_instance_admits_by_the_quota_of_the_scope_and_every_quota_above_it`).
+        QuotaStorage::delete(&mut ports, &QuotaId(Uuid(w.path.quota_id.clone())));
         refuses(&w, base.clone(), "replica-live");
-        refuses(
-            &w,
-            CreateInstance {
-                replica_index: Some(2),
-                ..base.clone()
-            },
-            "over-quota",
-        );
-        // An instance of another account does not count against this account's quota.
-        let mut stranger =
-            InstanceStorage::get(&ports, &created.instance_id).expect("the instance row");
-        stranger.state = InstanceState::Running;
-        stranger.data.instance_id = InstanceId(id());
-        stranger.data.service_id = None;
-        stranger.data.account_id = AccountId(id());
-        InstanceStorage::put(&mut ports, stranger);
-        quota.data.limit = 5;
-        QuotaStorage::put(&mut ports, quota.clone());
         creates(
             &w,
             CreateInstance {
                 replica_index: Some(2),
                 ..base.clone()
             },
-        );
-        // A quota above the account's bounds it too.
-        let parent = QuotaId(id());
-        let mut above = quota.clone();
-        above.data.quota_id = parent.clone();
-        above.data.account_id = AccountId(id());
-        above.data.limit = 5;
-        QuotaStorage::put(&mut ports, above);
-        quota.data.limit = 64;
-        quota.data.parent_quota_id = Some(parent);
-        QuotaStorage::put(&mut ports, quota.clone());
-        refuses(
-            &w,
-            CreateInstance {
-                replica_index: Some(3),
-                ..base.clone()
-            },
-            "over-quota",
-        );
-        // No quota for the class: none of it may be held.
-        QuotaStorage::delete(&mut ports, &quota.data.quota_id);
-        refuses(
-            &w,
-            CreateInstance {
-                replica_index: Some(3),
-                ..base.clone()
-            },
-            "over-quota",
         );
     }
 
@@ -949,7 +931,7 @@ mod obligations {
         assert_eq!(row.state, InstanceState::Pending);
         let data = &row.data;
         assert_eq!(data.workload_id, workload.data.workload_id);
-        assert_eq!(data.account_id, AccountId(Uuid(w.path.account_id.clone())));
+        assert_eq!(data.scope_id, ScopeId(Uuid(w.path.scope_id.clone())));
         assert_eq!(data.artifact_digest, workload.data.artifact_digest);
         assert_eq!(data.minimum_isolation, workload.data.isolation);
         assert_eq!(data.processes, workload.data.processes);
@@ -968,7 +950,7 @@ mod obligations {
 
         assert_eq!(event.workload_id, workload.data.workload_id);
         assert_eq!(event.minimum_isolation, workload.data.isolation);
-        assert_eq!(event.account_id, data.account_id);
+        assert_eq!(event.scope_id, data.scope_id);
         assert_eq!(
             event.formation_id,
             FormationId(Uuid(w.ids.formation_id.clone()))
@@ -988,7 +970,7 @@ mod obligations {
     fn submission(created: &InstanceCreated) -> SubmitSchedulingRequest {
         SubmitSchedulingRequest {
             instance_id: created.instance_id.clone(),
-            account_id: created.account_id.clone(),
+            scope_id: created.scope_id.clone(),
             formation_id: created.formation_id.clone(),
             claims: created.claims.clone(),
             min_isolation: created.minimum_isolation,
@@ -1012,8 +994,8 @@ mod obligations {
         assert_eq!(requests(&w.ports()), before, "{input:?} added a request");
     }
 
-    /// A gang of `tenant` in `state`: its identity.
-    fn gang(w: &World, tenant: &str, state: GangState) -> GangId {
+    /// A gang of the scope `scope` in `state`: its identity.
+    fn gang(w: &World, scope: &str, state: GangState) -> GangId {
         let gang_id = GangId(id());
         GangStorage::put(
             &mut w.ports(),
@@ -1021,7 +1003,7 @@ mod obligations {
                 state,
                 data: GangData {
                     gang_id: gang_id.clone(),
-                    tenant_id: TenantId(Uuid(tenant.to_owned())),
+                    scope_id: ScopeId(Uuid(scope.to_owned())),
                     job_id: JobId(id()),
                     size: 2,
                     registered_at: Timestamp("2026-01-01T00:00:00Z".to_owned()),
@@ -1039,25 +1021,9 @@ mod obligations {
         let client = w.process.client();
         let globex_tenant = steps::create_tenant(client, "globex");
         let globex = steps::create_account(client, &globex_tenant);
-        let globex_caller = steps::account_caller(&globex_tenant, &globex);
-        let globex_formation =
-            steps::create_formation(client, &globex_caller, &globex, &w.path.cluster_id);
-        let acme_caller = steps::account_caller(&w.path.tenant_id, &w.path.account_id);
-        let mut other_input =
-            steps::input::create_formation(&w.path.account_id, &w.path.cluster_id);
-        other_input["name"] = json!("other");
-        let other_formation = client
-            .command(
-                "weft.formations.CreateFormation",
-                steps::ACCOUNT_ADMIN,
-                acme_caller,
-                other_input,
-            )
-            .expect("the control host answers")
-            .body["published"][0]["payload"]["formation_id"]
-            .as_str()
-            .expect("a formation id")
-            .to_owned();
+        let globex_scope = steps::record_account_scope(client, &globex);
+        let globex_caller = steps::account_caller(&globex_tenant, &globex, &globex_scope);
+        let globex_formation = steps::create_formation(client, &globex_caller, &globex_scope);
 
         // The input guard.
         declines(
@@ -1072,21 +1038,15 @@ mod obligations {
 
         // Existence, in declaration order, ahead of every predicate.
         let missing = SubmitSchedulingRequest {
-            account_id: AccountId(id()),
-            instance_id: InstanceId(id()),
+            scope_id: ScopeId(id()),
             formation_id: FormationId(id()),
             priority: PriorityClassName("nope".to_owned()),
             gang_id: Some(GangId(id())),
             ..base.clone()
         };
-        declines(&w, missing.clone(), "unknown-account");
+        declines(&w, missing.clone(), "unknown-scope");
         let missing = SubmitSchedulingRequest {
-            account_id: AccountId(Uuid(globex.clone())),
-            ..missing
-        };
-        declines(&w, missing.clone(), "unknown-instance");
-        let missing = SubmitSchedulingRequest {
-            instance_id: base.instance_id.clone(),
+            scope_id: ScopeId(Uuid(globex_scope.clone())),
             ..missing
         };
         declines(&w, missing.clone(), "unknown-formation");
@@ -1102,30 +1062,24 @@ mod obligations {
         declines(&w, missing, "unknown-gang");
 
         // The predicates, in declaration order.
-        let closed = gang(&w, &w.path.tenant_id, GangState::Bound);
-        let mismatched = SubmitSchedulingRequest {
-            account_id: AccountId(Uuid(globex.clone())),
-            formation_id: FormationId(Uuid(other_formation.clone())),
-            gang_id: Some(closed.clone()),
-            ..base.clone()
-        };
-        declines(&w, mismatched.clone(), "instance-of-other-account");
+        let closed = gang(&w, &w.path.scope_id, GangState::Bound);
         declines(
             &w,
             SubmitSchedulingRequest {
-                account_id: base.account_id.clone(),
                 formation_id: FormationId(Uuid(globex_formation)),
-                ..mismatched.clone()
+                gang_id: Some(closed.clone()),
+                ..base.clone()
             },
-            "formation-of-other-account",
+            "formation-of-other-scope",
         );
         declines(
             &w,
             SubmitSchedulingRequest {
-                account_id: base.account_id.clone(),
-                ..mismatched
+                scope_id: ScopeId(Uuid(globex_scope.clone())),
+                gang_id: Some(closed.clone()),
+                ..base.clone()
             },
-            "formation-not-instances",
+            "formation-of-other-scope",
         );
         let mut ports = w.ports();
         let standard = PriorityClassName("standard".to_owned());
@@ -1151,14 +1105,14 @@ mod obligations {
             },
             "gang-closed",
         );
-        let foreign_gang = gang(&w, &globex_tenant, GangState::Forming);
+        let foreign_gang = gang(&w, &globex_scope, GangState::Forming);
         declines(
             &w,
             SubmitSchedulingRequest {
                 gang_id: Some(foreign_gang),
                 ..base.clone()
             },
-            "gang-of-other-tenant",
+            "gang-of-other-scope",
         );
 
         // Requested once; a second request while it is pending is `already-requested`, also
@@ -1199,7 +1153,7 @@ mod obligations {
     }
 
     #[test]
-    fn submit_scheduling_request_writes_what_the_priority_class_formation_and_account_name() {
+    fn submit_scheduling_request_writes_what_the_priority_class_formation_and_scope_name() {
         let w = World::new();
         let ports = w.ports();
         let base = submission(&creates(&w, replica(&w)));
@@ -1214,10 +1168,8 @@ mod obligations {
         assert_eq!(row.state, SchedulingRequestState::Pending);
         let data = &row.data;
         assert_eq!(data.instance_id, base.instance_id);
-        assert_eq!(data.tenant_id, TenantId(Uuid(w.path.tenant_id.clone())));
-        assert_eq!(data.account_id, base.account_id);
+        assert_eq!(data.scope_id, base.scope_id);
         assert_eq!(data.formation_id, base.formation_id);
-        assert_eq!(data.cluster_id.0 .0, w.path.cluster_id);
         assert_eq!(data.claims, base.claims);
         assert_eq!(data.min_isolation, base.min_isolation);
         assert_eq!(data.zones, base.zones);
@@ -1240,33 +1192,25 @@ mod obligations {
         );
         assert_eq!(scheduling_requested.request_id, data.request_id);
         assert_eq!(scheduling_requested.instance_id, data.instance_id);
-        assert_eq!(scheduling_requested.tenant_id, data.tenant_id);
-        assert_eq!(scheduling_requested.cluster_id, data.cluster_id);
+        assert_eq!(scheduling_requested.scope_id, data.scope_id);
         assert_eq!(scheduling_requested.min_isolation, data.min_isolation);
         assert_eq!(scheduling_requested.priority, data.priority);
     }
 
-    /// `replica-live` and the quota count an instance in `Pending`, `Scheduled`, `Starting`,
-    /// `Running` or `Paused` and no other: with a quota of 1 cpu and every instance in a live
-    /// state, replica 0 is live and replica 1 over the quota; in any other state both are
-    /// created.
+    /// `replica-live` counts an instance in `Pending`, `Scheduled`, `Starting`, `Running` or
+    /// `Paused` and no other: in a live state replica 0 is live; in any other state it is
+    /// created again. The quota counts the same states, at `PlaceInstance` since the blocks took
+    /// `CreateInstance` out of the outcome group `quota`
+    /// (`place_instance::the_quota_counts_the_five_live_states_and_no_other`).
     #[test]
-    fn replica_live_and_the_quota_count_the_five_live_states_and_no_other() {
+    fn replica_live_counts_the_five_live_states_and_no_other() {
         let w = World::new();
         let mut ports = w.ports();
-        let key = QuotaId(Uuid(w.path.quota_id.clone()));
-        let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
-        quota.data.limit = 1;
-        QuotaStorage::put(&mut ports, quota);
         let set_all = |ports: &mut Ports, state: InstanceState| {
             for mut row in InstanceStorage::list(ports) {
                 row.state = state;
                 InstanceStorage::put(ports, row);
             }
-        };
-        let second = CreateInstance {
-            replica_index: Some(1),
-            ..replica(&w)
         };
         creates(&w, replica(&w));
         for state in [
@@ -1278,7 +1222,6 @@ mod obligations {
         ] {
             set_all(&mut ports, state);
             refuses(&w, replica(&w), "replica-live");
-            refuses(&w, second.clone(), "over-quota");
         }
         for state in [
             InstanceState::Exited,
@@ -1287,8 +1230,6 @@ mod obligations {
         ] {
             set_all(&mut ports, state);
             creates(&w, replica(&w));
-            set_all(&mut ports, state);
-            creates(&w, second.clone());
         }
     }
 }
@@ -1386,48 +1327,58 @@ mod adversary {
     use weft_impl::Ports;
     use weft_testkit::steps;
     use weft_testkit::ControlHost;
-    use weft_types::behaviour::{InstanceStorage, QuotaStorage, ServiceStorage};
+    use weft_types::behaviour::{InstanceStorage, ServiceStorage, WorkloadStorage};
     use weft_types::primitives::Uuid;
-    use weft_types::shared::{QuotaId, ServiceId};
+    use weft_types::shared::{ServiceId, WorkloadId};
+    use weft_types::workloads::WorkloadSnapshot;
 
     use super::world::{binding_lines, instances, World};
 
     const CREATE_REPLICA: &str = "r1-create-replica";
 
-    fn set_limit(ports: &mut Ports, quota_id: &str, limit: i64) {
-        let key = QuotaId(Uuid(quota_id.to_owned()));
-        let mut quota = QuotaStorage::get(ports, &key).expect("the quota row");
-        quota.data.limit = limit;
-        quota.data.remaining = limit;
-        QuotaStorage::put(ports, quota);
+    /// Sets the service `service_id` to `replicas` replicas.
+    fn scale(ports: &mut Ports, service_id: &str, replicas: i64) {
+        let key = ServiceId(Uuid(service_id.to_owned()));
+        let mut service = ServiceStorage::get(ports, &key).expect("the service row");
+        service.data.replicas = replicas;
+        ServiceStorage::put(ports, service);
     }
 
-    fn set_limit_in(state: &FsPath, quota_id: &str, limit: i64) {
+    /// Takes the row of the workload `workload_id` away: a `ReplicaRequested` of its service
+    /// names a workload no row holds, and `CreateInstance` answers `no-workload`, which
+    /// `r1-create-replica` retries (`ess/components.yaml`). The row, to put back.
+    fn take(ports: &mut Ports, workload_id: &str) -> WorkloadSnapshot {
+        let key = WorkloadId(Uuid(workload_id.to_owned()));
+        let row = WorkloadStorage::get(ports, &key).expect("the workload row");
+        WorkloadStorage::delete(ports, &key);
+        row
+    }
+
+    fn put_back_in(state: &FsPath, row: WorkloadSnapshot) {
         let mut ports = Ports::open(state).expect("the stopped host's state file opens");
-        set_limit(&mut ports, quota_id, limit);
+        WorkloadStorage::put(&mut ports, row);
     }
 
-    /// A service of 2 replicas whose account quota is used up: tick 1 requests replica 0 and
-    /// `CreateInstance` answers `over-quota` (held); tick 2 attempts it again and the level step,
-    /// which sees no live instance of index 0, requests index 0 a second time. Once the quota
-    /// admits both, the service must hold replicas 0 and 1 (`ess/4-applications/workloads.yaml`
-    /// RequestReplica OPEN: "the controller requests one replica per service at a time and waits
-    /// for InstanceCreated or the refusal").
+    /// A service of 2 replicas whose `CreateInstance` is refused off the drop list (its
+    /// workload's row is gone): tick 1 requests replica 0 and `CreateInstance` answers
+    /// `no-workload` (held); tick 2 attempts it again and the level step, which sees no live
+    /// instance of index 0, requests index 0 a second time. Once the row is back, the service
+    /// must hold replicas 0 and 1 (`ess/4-applications/workloads.yaml` RequestReplica OPEN: "the
+    /// controller requests one replica per service at a time and waits for InstanceCreated or
+    /// the refusal").
     #[test]
-    fn a_held_replica_is_not_requested_twice_and_every_index_is_made_once_the_quota_admits_it() {
+    fn a_held_replica_is_not_requested_twice_and_every_index_is_made_once_it_is_admitted() {
         let w = World::new();
         let mut ports = w.ports();
-        set_limit(&mut ports, &w.path.quota_id, 0);
+        scale(&mut ports, &w.ids.service_id, 2);
+        let workload = take(&mut ports, &w.ids.workload_id);
         let key = ServiceId(Uuid(w.ids.service_id.clone()));
-        let mut service = ServiceStorage::get(&ports, &key).expect("the service row");
-        service.data.replicas = 2;
-        ServiceStorage::put(&mut ports, service);
 
         w.process.host().tick();
         w.process.host().tick();
         assert_eq!(InstanceStorage::list(&w.ports()).len(), 0);
 
-        set_limit(&mut ports, &w.path.quota_id, 64);
+        WorkloadStorage::put(&mut ports, workload);
         for _ in 0..4 {
             w.process.host().tick();
         }
@@ -1440,21 +1391,18 @@ mod adversary {
         assert_eq!(
             (indexes, service.data.running_replicas),
             (vec![0, 1], 2),
-            "replicas made and the service's live count after the quota was raised"
+            "replicas made and the service's live count after the workload's row was back"
         );
     }
 
-    /// A replica whose `CreateInstance` was answered `over-quota` is held for another attempt;
-    /// the control host restarts; the quota is raised. `r1-create-replica` is
-    /// `delivery: at_least_once` and retries `over-quota` (`ess/components.yaml`), and
-    /// `RequestReplica` already counted the replica, so the level step never asks again: the
-    /// instance must still be made.
-    ///
-    /// The quota is used up by replica 0 of the service, not by a limit of 0 before the
-    /// definitions: `DefineWorkload` and `DefineService` answer `over-quota` themselves when the
-    /// workload's claims alone pass a limit. Replica 1 is the held one.
+    /// A replica whose `CreateInstance` was refused off the drop list (`no-workload`) is held
+    /// for another attempt; the control host restarts; the workload's row is back.
+    /// `r1-create-replica` is `delivery: at_least_once` and retries every refusal but
+    /// `replica-live` and `workload-retired` (`ess/components.yaml`), and `RequestReplica`
+    /// already counted the replica, so the level step never asks again: the instance must
+    /// still be made. Replica 0 runs; replica 1 is the held one.
     #[test]
-    fn a_replica_held_over_quota_is_made_after_the_control_host_restarts() {
+    fn a_held_replica_is_made_after_the_control_host_restarts() {
         let mut host = ControlHost::start();
         let path = steps::run_path(&host.client());
         let ids = steps::run_definitions(&host.client(), &path);
@@ -1467,14 +1415,11 @@ mod adversary {
             std::thread::sleep(Duration::from_millis(20));
         }
         host.stop();
-        {
+        let workload = {
             let mut ports = Ports::open(&host.state_path()).expect("the state file opens");
-            set_limit(&mut ports, &path.quota_id, 1);
-            let key = ServiceId(Uuid(ids.service_id.clone()));
-            let mut service = ServiceStorage::get(&ports, &key).expect("the service row");
-            service.data.replicas = 2;
-            ServiceStorage::put(&mut ports, service);
-        }
+            scale(&mut ports, &ids.service_id, 2);
+            take(&mut ports, &ids.workload_id)
+        };
         let mut host = host.restart();
         let seq = host.last_seq();
 
@@ -1483,19 +1428,19 @@ mod adversary {
         loop {
             let held = binding_lines(&host.log_after(seq), CREATE_REPLICA);
             if held.iter().any(|line| {
-                line["refusal"] == json!("over-quota") && line["result"] == json!("retried")
+                line["refusal"] == json!("no-workload") && line["result"] == json!("retried")
             }) {
                 break;
             }
             assert!(
                 started.elapsed() < Duration::from_secs(5),
-                "no held over-quota attempt of r1-create-replica: {held:?}"
+                "no held no-workload attempt of r1-create-replica: {held:?}"
             );
             std::thread::sleep(Duration::from_millis(20));
         }
 
         host.stop();
-        set_limit_in(&host.state_path(), &path.quota_id, 64);
+        put_back_in(&host.state_path(), workload);
         let host = host.restart();
         let client = host.client();
         let started = Instant::now();
@@ -1512,8 +1457,8 @@ mod adversary {
             }
             assert!(
                 started.elapsed() < Duration::from_secs(3),
-                "3 s after the restart with the quota raised the service has no instance: the held \
-                 ReplicaRequested was lost with the process"
+                "3 s after the restart with the workload's row back the service has no replica 1: \
+                 the held ReplicaRequested was lost with the process"
             );
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -1537,8 +1482,8 @@ mod ready {
         SchedulingRequestSnapshot, SchedulingRequestState,
     };
     use weft_types::shared::{
-        IsolationFacts, IsolationLevel, NodeId, NodeSessionId, PlacementDecisionId, ResourceAmount,
-        ResourceClassName, StampedAt,
+        ClusterId, IsolationFacts, IsolationLevel, NodeId, NodeSessionId, PlacementDecisionId,
+        ResourceAmount, ResourceClassName, StampedAt, TenantId,
     };
 
     use super::world::World;
@@ -1581,6 +1526,16 @@ mod ready {
             self.w.ports()
         }
 
+        /// The cluster the request's formation is pinned to: the path's default cluster.
+        pub fn cluster(&self) -> ClusterId {
+            ClusterId(Uuid(self.w.path.cluster_id.clone()))
+        }
+
+        /// The tenant of the account that holds the request's scope.
+        pub fn tenant(&self) -> TenantId {
+            TenantId(Uuid(self.w.path.tenant_id.clone()))
+        }
+
         /// A `Bound`, unassigned placement of the request's instance on the node at
         /// `Container`, decided a second ago, the request `Placed` as `BindPlacement` leaves it.
         pub fn bound(&self) -> PlacementDecisionId {
@@ -1595,8 +1550,8 @@ mod ready {
                         decision_id: decision_id.clone(),
                         request_id: request.request_id.clone(),
                         instance_id: request.instance_id.clone(),
-                        tenant_id: request.tenant_id.clone(),
-                        account_id: request.account_id.clone(),
+                        tenant_id: self.tenant(),
+                        scope_id: request.scope_id.clone(),
                         node_id: self.node.clone(),
                         zone: weft_types::shared::ZoneName("z1".to_owned()),
                         formation_id: request.formation_id.clone(),
@@ -2357,18 +2312,14 @@ mod place_instance {
     use weft_impl::Ports;
     use weft_types::behaviour::{
         BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage, DeviceStorage,
-        NodeSessionStorage, NodeStorage, PlacementDecisionStorage, QuotaStorage,
+        InstanceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage, QuotaStorage,
         SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage,
     };
     use weft_types::claims::{
         BindingData, BindingSnapshot, BindingState, ClaimData, ClaimHolder, ClaimSnapshot,
         ClaimState, InstanceHolder,
     };
-    use weft_types::cluster::{
-        ClusterNodePoolData, ClusterNodePoolSnapshot, ClusterNodePoolState, GroupRole,
-        TopologyGroupData, TopologyGroupSnapshot, TopologyGroupState, TopologyLinkData,
-        TopologyLinkSnapshot, TopologyLinkState,
-    };
+    use weft_types::cluster::{ClusterNodePoolData, ClusterNodePoolSnapshot, ClusterNodePoolState};
     use weft_types::infrastructure::NodeState;
     use weft_types::inventory::{DeviceData, DeviceSnapshot, DeviceState};
     use weft_types::nodes::NodeSessionState;
@@ -2379,11 +2330,16 @@ mod place_instance {
         SchedulingRequestState,
     };
     use weft_types::shared::{
-        AccountId, BindingId, ClaimId, CloudId, ClusterId, ClusterNodePoolId, DeviceId, InstanceId,
-        IsolationLevel, NodeId, NodePoolId, QuotaId, ResourceAmount, ResourceClassName,
-        SchedulingRequestId, Sharing, StampedAt, TenantId, TopologyGroupId, TopologyId,
-        TopologyLinkId, ZoneName,
+        AccountId, BindingId, ClaimId, CloudId, ClusterId, ClusterNodePoolId, DeviceId,
+        FormationId, InstanceId, IsolationLevel, NodeId, NodePoolId, QuotaId, ResourceAmount,
+        ResourceClassName, SchedulingRequestId, ScopeId, Sharing, StampedAt, TenantId,
+        TopologyGroupId, TopologyId, TopologyLinkId, ZoneName,
     };
+    use weft_types::topology::{
+        GroupRole, TopologyGroupData, TopologyGroupSnapshot, TopologyGroupState, TopologyLinkData,
+        TopologyLinkSnapshot, TopologyLinkState,
+    };
+    use weft_types::workloads::InstanceState;
 
     use super::ready::{at, Ready};
 
@@ -2397,9 +2353,10 @@ mod place_instance {
         let node = NodeStorage::get(&r.ports(), &r.node).expect("the node row");
         PlaceInstance {
             request_id: request.request_id.clone(),
-            tenant_id: request.tenant_id.clone(),
-            account_id: request.account_id.clone(),
-            cluster_id: request.cluster_id.clone(),
+            tenant_id: r.tenant(),
+            scope_id: request.scope_id.clone(),
+            cluster_id: r.cluster(),
+            formation_id: request.formation_id.clone(),
             node_id: r.node.clone(),
             node_pool_id: node.data.node_pool_id,
             zone: node.data.zone,
@@ -2422,7 +2379,7 @@ mod place_instance {
         assert_eq!(PlacementDecisionStorage::list(&ports).len(), before);
     }
 
-    fn claim(ports: &mut Ports, account: &AccountId, class: &str, amount: i64) -> ClaimId {
+    fn claim(ports: &mut Ports, scope: &ScopeId, class: &str, amount: i64) -> ClaimId {
         let claim_id = ClaimId(id());
         ClaimStorage::put(
             ports,
@@ -2430,7 +2387,7 @@ mod place_instance {
                 state: ClaimState::Bound,
                 data: ClaimData {
                     claim_id: claim_id.clone(),
-                    account_id: account.clone(),
+                    scope_id: scope.clone(),
                     holder: ClaimHolder::Instance(InstanceHolder {
                         instance_id: InstanceId(id()),
                     }),
@@ -2479,7 +2436,7 @@ mod place_instance {
     fn pool(
         ports: &mut Ports,
         cluster: &ClusterId,
-        account: &AccountId,
+        scope: &ScopeId,
         node_pool: Option<NodePoolId>,
     ) -> ClusterNodePoolId {
         let pool_id = ClusterNodePoolId(id());
@@ -2490,7 +2447,7 @@ mod place_instance {
                 data: ClusterNodePoolData {
                     cluster_node_pool_id: pool_id.clone(),
                     cluster_id: cluster.clone(),
-                    account_id: account.clone(),
+                    scope_id: scope.clone(),
                     name: "pool".to_owned(),
                     zone: ZoneName("z1".to_owned()),
                     machine_type: "m1".to_owned(),
@@ -2517,8 +2474,7 @@ mod place_instance {
 
     fn set_cluster(r: &Ready, change: impl FnOnce(&mut weft_types::cluster::ClusterSnapshot)) {
         let mut ports = r.ports();
-        let mut row =
-            ClusterStorage::get(&ports, &r.request.data.cluster_id).expect("the cluster row");
+        let mut row = ClusterStorage::get(&ports, &r.cluster()).expect("the cluster row");
         change(&mut row);
         ClusterStorage::put(&mut ports, row);
     }
@@ -2562,13 +2518,13 @@ mod place_instance {
     fn place_instance_answers_each_guard_in_its_precedence() {
         let r = Ready::new();
         let mut ports = r.ports();
-        let account = r.request.data.account_id.clone();
-        let cluster = r.request.data.cluster_id.clone();
+        let scope = r.request.data.scope_id.clone();
+        let cluster = r.cluster();
         let mut input = base(&r);
         let node_pool = input.node_pool_id.clone();
 
         // External branches, in declaration order (checked last to first).
-        let gpu = claim(&mut ports, &account, "gpu", 1);
+        let gpu = claim(&mut ports, &scope, "gpu", 1);
         let device = DeviceId(id());
         DeviceStorage::put(
             &mut ports,
@@ -2599,7 +2555,7 @@ mod place_instance {
         refuses(&r, &input, "device-not-wiped");
         set_limit(&r, 0);
         refuses(&r, &input, "quota-exceeded");
-        let cpu = claim(&mut ports, &account, "cpu", 4);
+        let cpu = claim(&mut ports, &scope, "cpu", 4);
         binding(
             &mut ports,
             &cpu,
@@ -2612,7 +2568,7 @@ mod place_instance {
         // The present-related refusals, last to first.
         input.isolation = IsolationLevel::UserKernel;
         refuses(&r, &input, "isolation-not-offered");
-        let own_pool = pool(&mut ports, &cluster, &account, node_pool.clone());
+        let own_pool = pool(&mut ports, &cluster, &scope, node_pool.clone());
         let group = TopologyGroupId(id());
         let peer = TopologyGroupId(id());
         let topology = TopologyId(id());
@@ -2623,10 +2579,8 @@ mod place_instance {
                 data: TopologyGroupData {
                     topology_group_id: group.clone(),
                     topology_id: topology.clone(),
-                    cluster_id: cluster.clone(),
-                    account_id: account.clone(),
                     name: "hub".to_owned(),
-                    node_pools: vec![own_pool.clone()],
+                    node_pools: vec![node_pool.clone().expect("the node's pool")],
                     role: GroupRole::Hub,
                     position: None,
                     parent_group_id: None,
@@ -2640,7 +2594,6 @@ mod place_instance {
                 data: TopologyLinkData {
                     topology_link_id: TopologyLinkId(id()),
                     topology_id: topology,
-                    account_id: account.clone(),
                     from_group_id: group.clone(),
                     to_group_id: peer.clone(),
                     bandwidth_mbps: 1,
@@ -2658,13 +2611,13 @@ mod place_instance {
         TopologyGroupStorage::put(&mut ports, row);
         refuses(&r, &input, "group-not-of-node");
         let other_cluster = ClusterId(id());
-        input.cluster_node_pool_id = Some(pool(&mut ports, &other_cluster, &account, None));
+        input.cluster_node_pool_id = Some(pool(&mut ports, &other_cluster, &scope, None));
         refuses(&r, &input, "cluster-pool-differs");
         let mut row = ClusterNodePoolStorage::get(&ports, &own_pool).expect("the pool");
         row.data.node_pool_id = Some(NodePoolId(id()));
         ClusterNodePoolStorage::put(&mut ports, row);
         refuses(&r, &input, "node-outside-dedicated-pools");
-        pool(&mut ports, &ClusterId(id()), &account, node_pool);
+        pool(&mut ports, &ClusterId(id()), &scope, node_pool);
         refuses(&r, &input, "node-in-other-clusters-pool");
         input.node_pool_id = Some(NodePoolId(id()));
         refuses(&r, &input, "node-pool-differs");
@@ -2714,7 +2667,7 @@ mod place_instance {
             Vec::new(),
         ));
         refuses(&r, &input, "binding-on-other-node");
-        let foreign = claim(&mut ports, &AccountId(id()), "gpu", 1);
+        let foreign = claim(&mut ports, &ScopeId(id()), "gpu", 1);
         input.bindings.push(binding(
             &mut ports,
             &foreign,
@@ -2723,12 +2676,14 @@ mod place_instance {
             Vec::new(),
         ));
         refuses(&r, &input, "binding-of-other-account");
-        set_request(&r, |row| row.data.cluster_id = ClusterId(id()));
+        set_cluster(&r, |row| row.data.formations.clear());
         refuses(&r, &input, "other-cluster");
-        set_request(&r, |row| row.data.account_id = AccountId(id()));
-        refuses(&r, &input, "other-account");
-        set_request(&r, |row| row.data.tenant_id = TenantId(id()));
+        set_request(&r, |row| row.data.formation_id = FormationId(id()));
+        refuses(&r, &input, "other-formation");
+        input.tenant_id = TenantId(id());
         refuses(&r, &input, "other-tenant");
+        set_request(&r, |row| row.data.scope_id = ScopeId(id()));
+        refuses(&r, &input, "other-account");
         reserved(&r, r.request.data.request_id.clone(), TenantId(id()));
         refuses(&r, &input, "already-reserved");
         set_request(&r, |row| row.state = SchedulingRequestState::Unschedulable);
@@ -2756,9 +2711,9 @@ mod place_instance {
     fn place_instance_writes_the_decision_from_the_request_and_the_input() {
         let r = Ready::new();
         let mut ports = r.ports();
-        let account = r.request.data.account_id.clone();
+        let scope = r.request.data.scope_id.clone();
         set_limit(&r, 1);
-        let cpu = claim(&mut ports, &account, "cpu", 4);
+        let cpu = claim(&mut ports, &scope, "cpu", 4);
         binding(
             &mut ports,
             &cpu,
@@ -2803,7 +2758,7 @@ mod place_instance {
         assert_eq!(data.request_id, request.request_id);
         assert_eq!(data.instance_id, request.instance_id);
         assert_eq!(data.tenant_id, input.tenant_id);
-        assert_eq!(data.account_id, request.account_id);
+        assert_eq!(data.scope_id, request.scope_id);
         assert_eq!(data.node_id, r.node);
         assert_eq!(data.zone, input.zone);
         assert_eq!(data.formation_id, request.formation_id);
@@ -2914,8 +2869,8 @@ mod place_instance {
         let r = Ready::new();
         sized(&r, 1, 2);
         let mut ports = r.ports();
-        let account = r.request.data.account_id.clone();
-        let cpu = claim(&mut ports, &account, "cpu", 1);
+        let scope = r.request.data.scope_id.clone();
+        let cpu = claim(&mut ports, &scope, "cpu", 1);
         let named = binding(
             &mut ports,
             &cpu,
@@ -2929,8 +2884,8 @@ mod place_instance {
         let r = Ready::new();
         sized(&r, 1, 2);
         let mut ports = r.ports();
-        let account = r.request.data.account_id.clone();
-        let cpu = claim(&mut ports, &account, "cpu", 1);
+        let scope = r.request.data.scope_id.clone();
+        let cpu = claim(&mut ports, &scope, "cpu", 1);
         binding(
             &mut ports,
             &cpu,
@@ -2940,6 +2895,92 @@ mod place_instance {
         );
         held(&r, 1, PlacementDecisionState::Bound, Vec::new());
         assert_eq!(answer(&r, &base(&r)), "no-capacity", "2 - 1 - 1 leaves 0");
+    }
+
+    /// `quota-exceeded` reads the quota of the account that holds the request's scope and
+    /// every quota above it, the cases `CreateInstance` answered `over-quota` before the blocks
+    /// took it out of the outcome group `quota`: another live instance of the scope counts, a
+    /// quota above the account's bounds it too, with no quota for the class none of it may be
+    /// held, and an instance of another scope does not count.
+    #[test]
+    fn place_instance_admits_by_the_quota_of_the_scope_and_every_quota_above_it() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        // Another live instance of the scope, of the same workload: it and the request claim
+        // 1 cpu each.
+        let mut sibling = InstanceStorage::get(&ports, &r.request.data.instance_id)
+            .expect("the request's instance");
+        sibling.data.instance_id = InstanceId(id());
+        sibling.data.service_id = None;
+        sibling.state = InstanceState::Running;
+        InstanceStorage::put(&mut ports, sibling.clone());
+        set_limit(&r, 1);
+        refuses(&r, &base(&r), "quota-exceeded");
+
+        // A quota above the account's bounds it too.
+        let key = QuotaId(Uuid(r.w.path.quota_id.clone()));
+        let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
+        let parent = QuotaId(id());
+        let mut above = quota.clone();
+        above.data.quota_id = parent.clone();
+        above.data.account_id = AccountId(id());
+        above.data.limit = 1;
+        QuotaStorage::put(&mut ports, above);
+        quota.data.limit = 64;
+        quota.data.parent_quota_id = Some(parent);
+        QuotaStorage::put(&mut ports, quota.clone());
+        refuses(&r, &base(&r), "quota-exceeded");
+
+        // No quota for the class: none of it may be held.
+        QuotaStorage::delete(&mut ports, &key);
+        refuses(&r, &base(&r), "quota-exceeded");
+
+        // An instance of another scope does not count against this scope's quota.
+        quota.data.limit = 1;
+        quota.data.parent_quota_id = None;
+        QuotaStorage::put(&mut ports, quota);
+        sibling.data.scope_id = ScopeId(id());
+        InstanceStorage::put(&mut ports, sibling);
+        assert_eq!(answer(&r, &base(&r)), "placed");
+    }
+
+    /// The quota counts an instance in `Pending`, `Scheduled`, `Starting`, `Running` or
+    /// `Paused` and no other: with a quota of 1 cpu, another instance of the scope in a live
+    /// state leaves no room for the request; in any other state the request is placed.
+    #[test]
+    fn the_quota_counts_the_five_live_states_and_no_other() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut sibling = InstanceStorage::get(&ports, &r.request.data.instance_id)
+            .expect("the request's instance");
+        sibling.data.instance_id = InstanceId(id());
+        sibling.data.service_id = None;
+        set_limit(&r, 1);
+        for state in [
+            InstanceState::Pending,
+            InstanceState::Scheduled,
+            InstanceState::Starting,
+            InstanceState::Running,
+            InstanceState::Paused,
+        ] {
+            sibling.state = state;
+            InstanceStorage::put(&mut ports, sibling.clone());
+            refuses(&r, &base(&r), "quota-exceeded");
+        }
+        for state in [
+            InstanceState::Exited,
+            InstanceState::Failed,
+            InstanceState::Evicted,
+        ] {
+            sibling.state = state;
+            InstanceStorage::put(&mut ports, sibling.clone());
+            assert_eq!(answer(&r, &base(&r)), "placed", "a {state:?} instance");
+            // Let the decision go, so the next state is answered on its own.
+            for mut decision in PlacementDecisionStorage::list(&ports) {
+                decision.state = PlacementDecisionState::Released;
+                PlacementDecisionStorage::put(&mut ports, decision);
+            }
+        }
     }
 }
 
@@ -3146,9 +3187,10 @@ mod adversary_placement {
         let node = NodeStorage::get(&r.ports(), &r.node).expect("the node row");
         PlaceInstance {
             request_id: request.request_id.clone(),
-            tenant_id: request.tenant_id.clone(),
-            account_id: request.account_id.clone(),
-            cluster_id: request.cluster_id.clone(),
+            tenant_id: r.tenant(),
+            scope_id: request.scope_id.clone(),
+            cluster_id: r.cluster(),
+            formation_id: request.formation_id.clone(),
             node_id: r.node.clone(),
             node_pool_id: node.data.node_pool_id,
             zone: node.data.zone,
@@ -3244,7 +3286,7 @@ mod adversary_placement {
                 state: ClaimState::Bound,
                 data: ClaimData {
                     claim_id: claim_id.clone(),
-                    account_id: r.request.data.account_id.clone(),
+                    scope_id: r.request.data.scope_id.clone(),
                     holder: ClaimHolder::Instance(InstanceHolder {
                         instance_id: r.request.data.instance_id.clone(),
                     }),

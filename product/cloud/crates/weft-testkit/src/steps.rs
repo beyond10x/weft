@@ -1,8 +1,9 @@
 //! The operator and tenant steps of the path, each as its own actor with the input of
-//! `sim/experiments/full-setup.yaml` (setup steps `create-cloud` to `grant-quota-acme`), then the
-//! workload definitions (the steps of globex's formation `site` in the default cluster, from
-//! `create-formation-site` to the service, with a `Snippet` package in place of the image).
-//! Each step asserts its accepting outcome and answers the identity the command answered.
+//! `sim/experiments/full-setup.yaml` (setup steps `create-cloud` to `grant-quota-acme`, with
+//! `ConfigureCloud` after `CreateCloud` and the account's scope recorded after `CreateAccount`),
+//! then the workload definitions (the steps of globex's formation `site`, pinned to the default
+//! cluster, from `create-formation-site` to the service, with a `Snippet` package in place of the
+//! image). Each step asserts its accepting outcome and answers the identity the command answered.
 
 use std::io;
 
@@ -24,15 +25,19 @@ pub const DEPLOYER: &str = "weft.actors.Deployer";
 pub mod input {
     use serde_json::{json, Value};
 
-    /// `create-cloud`.
+    /// `create-cloud`: the cloud as the blocks declare it; its access mode and control plane are
+    /// [`configure_cloud`]'s.
     pub fn create_cloud() -> Value {
         json!({
             "name": "sim",
             "placement": "Hosts",
-            "access_mode": "Federated",
             "policy": {"minimum_isolation": "Container"},
-            "control_plane": {"replicas": 3},
         })
+    }
+
+    /// `configure-cloud`: federated access, three control-plane replicas.
+    pub fn configure_cloud(cloud_id: &str) -> Value {
+        json!({"cloud_id": cloud_id, "access_mode": "Federated", "control_plane": {"replicas": 3}})
     }
 
     /// `declare-zone-a` and `declare-zone-b`.
@@ -79,31 +84,37 @@ pub mod input {
     /// The digest of the skeleton's snippet artifact.
     pub const ARTIFACT_DIGEST: &str = "sha256:weft-skeleton-snippet";
 
-    /// `create-formation-site`: formation `site` in `cluster_id` (the default cluster).
-    pub fn create_formation(account_id: &str, cluster_id: &str) -> Value {
-        json!({"account_id": account_id, "name": "site", "zones": ["z1", "z2"], "cluster_id": cluster_id})
+    /// `create-formation-site`: formation `site` of `scope_id`, in no cluster until [`pin_formation`].
+    pub fn create_formation(scope_id: &str) -> Value {
+        json!({"scope_id": scope_id, "name": "site", "zones": ["z1", "z2"]})
+    }
+
+    /// `pin-site`: formation `formation_id` of `scope_id` runs in `cluster_id` (the default
+    /// cluster).
+    pub fn pin_formation(scope_id: &str, cluster_id: &str, formation_id: &str) -> Value {
+        json!({"scope_id": scope_id, "cluster_id": cluster_id, "formation_id": formation_id})
     }
 
     /// `add-component-site`.
-    pub fn add_component(formation_id: &str, account_id: &str) -> Value {
-        json!({"formation_id": formation_id, "account_id": account_id, "name": "site"})
+    pub fn add_component(formation_id: &str, scope_id: &str) -> Value {
+        json!({"formation_id": formation_id, "scope_id": scope_id, "name": "site"})
     }
 
     /// `commit-site`.
-    pub fn commit_revision(formation_id: &str, account_id: &str) -> Value {
-        json!({"formation_id": formation_id, "account_id": account_id})
+    pub fn commit_revision(formation_id: &str, scope_id: &str) -> Value {
+        json!({"formation_id": formation_id, "scope_id": scope_id})
     }
 
     /// `env-site`.
-    pub fn create_environment(formation_id: &str, account_id: &str) -> Value {
-        json!({"formation_id": formation_id, "account_id": account_id, "name": "prod", "protected": false})
+    pub fn create_environment(formation_id: &str, scope_id: &str) -> Value {
+        json!({"formation_id": formation_id, "scope_id": scope_id, "name": "prod", "protected": false})
     }
 
     /// `artifact-globex`, of kind `Snippet` under [`ARTIFACT_DIGEST`].
-    pub fn register_artifact(account_id: &str) -> Value {
+    pub fn register_artifact(scope_id: &str) -> Value {
         json!({
             "artifact_digest": ARTIFACT_DIGEST,
-            "account_id": account_id,
+            "scope_id": scope_id,
             "kind": "Snippet",
             "size_bytes": 9,
             "signature": "sig",
@@ -125,8 +136,8 @@ pub mod input {
     /// What `DefineWorkload` names: the formation, its revision and environment, and the runtime.
     #[derive(Debug, Clone, Copy)]
     pub struct WorkloadOf<'a> {
-        /// The account.
-        pub account_id: &'a str,
+        /// The scope.
+        pub scope_id: &'a str,
         /// The formation.
         pub formation_id: &'a str,
         /// Its committed revision.
@@ -141,7 +152,7 @@ pub mod input {
     /// [`process`], at `Container` isolation, shaped `Service`.
     pub fn define_workload(of: WorkloadOf<'_>) -> Value {
         json!({
-            "account_id": of.account_id,
+            "scope_id": of.scope_id,
             "formation_id": of.formation_id,
             "formation_revision_id": of.formation_revision_id,
             "environment_id": of.environment_id,
@@ -166,10 +177,10 @@ pub mod input {
     }
 
     /// `service-site`: one replica, scaled between 1 and 6 on requests.
-    pub fn define_service(workload_id: &str, account_id: &str) -> Value {
+    pub fn define_service(workload_id: &str, scope_id: &str) -> Value {
         json!({
             "workload_id": workload_id,
-            "account_id": account_id,
+            "scope_id": scope_id,
             "replicas": 1,
             "scale_rule": {"min_replicas": 1, "max_replicas": 6, "metric": "Requests", "target": 10},
             "disruption_budget": null,
@@ -205,15 +216,19 @@ pub struct Path {
     pub tenant_id: String,
     /// `CreateAccount`.
     pub account_id: String,
+    /// The scope the account opened (`OpenScope`, by the binding `account-opens-scope`), which
+    /// `RecordAccountScope` recorded on it.
+    pub scope_id: String,
     /// `GrantTopQuota`.
     pub quota_id: String,
 }
 
-/// Runs the operator and tenant path in the order of the full setup: the cloud, zones `z1` and
-/// `z2`, the priority class, the shared pool, one node, the default cluster, tenant `acme`, its
-/// account and its quota.
+/// Runs the operator and tenant path in the order of the full setup: the cloud and its access
+/// mode and control plane, zones `z1` and `z2`, the priority class, the shared pool, one node,
+/// the default cluster, tenant `acme`, its account, the account's scope and its quota.
 pub fn run_path(client: &Client) -> Path {
     let cloud_id = create_cloud(client);
+    configure_cloud(client, &cloud_id);
     declare_zone(client, &cloud_id, "z1");
     declare_zone(client, &cloud_id, "z2");
     define_priority_class(client);
@@ -222,6 +237,7 @@ pub fn run_path(client: &Client) -> Path {
     let cluster_id = create_default_cluster(client, &cloud_id);
     let tenant_id = create_tenant(client, "acme");
     let account_id = create_account(client, &tenant_id);
+    let scope_id = record_account_scope(client, &account_id);
     let quota_id = grant_top_quota(client, &account_id);
     Path {
         cloud_id,
@@ -230,6 +246,7 @@ pub fn run_path(client: &Client) -> Path {
         cluster_id,
         tenant_id,
         account_id,
+        scope_id,
         quota_id,
     }
 }
@@ -272,6 +289,17 @@ pub fn create_cloud(client: &Client) -> String {
         "created",
     );
     published(&body, "cloud_id")
+}
+
+/// `ConfigureCloud` as ClusterOperator: the access mode and control plane of `cloud_id`, which
+/// `CreateCloud` no longer takes.
+pub fn configure_cloud(client: &Client, cloud_id: &str) {
+    operator(
+        client,
+        "weft.infrastructure.ConfigureCloud",
+        input::configure_cloud(cloud_id),
+        "configured",
+    );
 }
 
 /// `DeclareZone` as ClusterOperator.
@@ -375,6 +403,43 @@ pub fn create_account(client: &Client, tenant_id: &str) -> String {
     published(&accepted(answer, command, "created"), "account_id")
 }
 
+/// The control plane of weft.
+pub const CONTROL_PLANE: &str = "weft.actors.ControlPlane";
+
+/// The scope of `account_id`: the binding `account-opens-scope` opened it when the account was
+/// created, named by the account's identity (`weft.scope.Scopes`); `RecordAccountScope` as the
+/// ControlPlane records it on the account. The scope's identity.
+pub fn record_account_scope(client: &Client, account_id: &str) -> String {
+    let scopes = client
+        .view("weft.scope.Scopes", &[])
+        .unwrap_or_else(|error| panic!("Scopes: the control host did not answer: {error}"));
+    let scope_id = scopes.body["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row["name"] == json!(account_id) && row["state"] == json!("Open"))
+        .and_then(|row| row["scope_id"].as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "no open scope named {account_id} (account-opens-scope): {} {}",
+                scopes.status, scopes.body
+            )
+        })
+        .to_owned();
+    let command = "weft.accounts.RecordAccountScope";
+    accepted(
+        client.command(
+            command,
+            CONTROL_PLANE,
+            json!({}),
+            json!({"account_id": account_id, "scope_id": scope_id}),
+        ),
+        command,
+        "recorded",
+    );
+    scope_id
+}
+
 /// `GrantTopQuota` as ClusterOperator: the quota's identity.
 pub fn grant_top_quota(client: &Client, account_id: &str) -> String {
     let body = operator(
@@ -386,9 +451,15 @@ pub fn grant_top_quota(client: &Client, account_id: &str) -> String {
     published(&body, "quota_id")
 }
 
-/// The caller of a request that acts in `account_id` of `tenant_id`.
-pub fn account_caller(tenant_id: &str, account_id: &str) -> Value {
-    json!({"tenant_id": tenant_id, "account_id": account_id})
+/// The caller of a request that acts in `account_id` of `tenant_id`, and so in the account's
+/// scope `scope_id`: weft's own guards compare `account_id`, the blocks' `scope_id`.
+pub fn account_caller(tenant_id: &str, account_id: &str, scope_id: &str) -> Value {
+    json!({"tenant_id": tenant_id, "account_id": account_id, "scope_id": scope_id})
+}
+
+/// The caller of a request that acts in the account of `path`.
+pub fn path_caller(path: &Path) -> Value {
+    account_caller(&path.tenant_id, &path.account_id, &path.scope_id)
 }
 
 /// `command` as `actor` with `caller`: the body of its accepting outcome `outcome`.
@@ -407,20 +478,28 @@ fn in_account(
     )
 }
 
-/// `CreateFormation` as AccountAdmin: formation `site` of `account_id` in `cluster_id`, its
-/// identity.
-pub fn create_formation(
-    client: &Client,
-    caller: &Value,
-    account_id: &str,
-    cluster_id: &str,
-) -> String {
-    let command = "weft.formations.CreateFormation";
-    let input = input::create_formation(account_id, cluster_id);
+/// `CreateFormation` as AccountAdmin: formation `site` of `scope_id`, its identity.
+pub fn create_formation(client: &Client, caller: &Value, scope_id: &str) -> String {
+    let command = "weft.architecture.CreateFormation";
+    let input = input::create_formation(scope_id);
     published(
         &in_account(client, ACCOUNT_ADMIN, caller, command, input, "created"),
         "formation_id",
     )
+}
+
+/// `PinFormation` as AccountAdmin: `formation_id` of `scope_id` runs in `cluster_id`;
+/// `PlaceInstance` refuses a formation no cluster lists.
+pub fn pin_formation(
+    client: &Client,
+    caller: &Value,
+    scope_id: &str,
+    cluster_id: &str,
+    formation_id: &str,
+) {
+    let command = "weft.cluster.PinFormation";
+    let input = input::pin_formation(scope_id, cluster_id, formation_id);
+    in_account(client, ACCOUNT_ADMIN, caller, command, input, "pinned");
 }
 
 /// `AddComponent` as Deployer: component `site` of `formation_id`, its identity.
@@ -428,10 +507,10 @@ pub fn add_component(
     client: &Client,
     caller: &Value,
     formation_id: &str,
-    account_id: &str,
+    scope_id: &str,
 ) -> String {
-    let command = "weft.formations.AddComponent";
-    let input = input::add_component(formation_id, account_id);
+    let command = "weft.architecture.AddComponent";
+    let input = input::add_component(formation_id, scope_id);
     published(
         &in_account(client, DEPLOYER, caller, command, input, "added"),
         "component_id",
@@ -443,10 +522,10 @@ pub fn commit_revision(
     client: &Client,
     caller: &Value,
     formation_id: &str,
-    account_id: &str,
+    scope_id: &str,
 ) -> String {
-    let command = "weft.formations.CommitRevision";
-    let input = input::commit_revision(formation_id, account_id);
+    let command = "weft.architecture.CommitRevision";
+    let input = input::commit_revision(formation_id, scope_id);
     published(
         &in_account(client, DEPLOYER, caller, command, input, "committed"),
         "revision_id",
@@ -458,10 +537,10 @@ pub fn create_environment(
     client: &Client,
     caller: &Value,
     formation_id: &str,
-    account_id: &str,
+    scope_id: &str,
 ) -> String {
-    let command = "weft.formations.CreateEnvironment";
-    let input = input::create_environment(formation_id, account_id);
+    let command = "weft.architecture.CreateEnvironment";
+    let input = input::create_environment(formation_id, scope_id);
     published(
         &in_account(client, ACCOUNT_ADMIN, caller, command, input, "created"),
         "environment_id",
@@ -469,9 +548,9 @@ pub fn create_environment(
 }
 
 /// `RegisterArtifact` as Deployer: the `Snippet` artifact, its digest.
-pub fn register_artifact(client: &Client, caller: &Value, account_id: &str) -> String {
+pub fn register_artifact(client: &Client, caller: &Value, scope_id: &str) -> String {
     let command = "weft.artifacts.RegisterArtifact";
-    let input = input::register_artifact(account_id);
+    let input = input::register_artifact(scope_id);
     published(
         &in_account(client, DEPLOYER, caller, command, input, "registered"),
         "artifact_digest",
@@ -503,10 +582,10 @@ pub fn define_service(
     client: &Client,
     caller: &Value,
     workload_id: &str,
-    account_id: &str,
+    scope_id: &str,
 ) -> String {
     let command = "weft.workloads.DefineService";
-    let input = input::define_service(workload_id, account_id);
+    let input = input::define_service(workload_id, scope_id);
     published(
         &in_account(client, DEPLOYER, caller, command, input, "defined"),
         "service_id",
@@ -535,27 +614,28 @@ pub struct Definitions {
 }
 
 /// Runs the workload definitions after the operator and tenant `path`, each as its own actor in
-/// the path's account: formation `site` in the default cluster, its component `site`, a
-/// revision, environment `prod`, the `Snippet` artifact, a runtime of `Snippet`, the workload
-/// and its service of one replica.
+/// the path's account and scope: formation `site`, pinned to the default cluster, its component
+/// `site`, a revision, environment `prod`, the `Snippet` artifact, a runtime of `Snippet`, the
+/// workload and its service of one replica.
 pub fn run_definitions(client: &Client, path: &Path) -> Definitions {
-    let caller = account_caller(&path.tenant_id, &path.account_id);
-    let account_id = path.account_id.as_str();
-    let formation_id = create_formation(client, &caller, account_id, &path.cluster_id);
-    let component_id = add_component(client, &caller, &formation_id, account_id);
-    let revision_id = commit_revision(client, &caller, &formation_id, account_id);
-    let environment_id = create_environment(client, &caller, &formation_id, account_id);
-    let artifact_digest = register_artifact(client, &caller, account_id);
+    let caller = path_caller(path);
+    let scope_id = path.scope_id.as_str();
+    let formation_id = create_formation(client, &caller, scope_id);
+    pin_formation(client, &caller, scope_id, &path.cluster_id, &formation_id);
+    let component_id = add_component(client, &caller, &formation_id, scope_id);
+    let revision_id = commit_revision(client, &caller, &formation_id, scope_id);
+    let environment_id = create_environment(client, &caller, &formation_id, scope_id);
+    let artifact_digest = register_artifact(client, &caller, scope_id);
     let runtime_id = register_runtime(client, &["Snippet"]);
     let workload = input::define_workload(input::WorkloadOf {
-        account_id,
+        scope_id,
         formation_id: &formation_id,
         formation_revision_id: &revision_id,
         environment_id: &environment_id,
         runtime_id: &runtime_id,
     });
     let workload_id = define_workload(client, &caller, workload);
-    let service_id = define_service(client, &caller, &workload_id, account_id);
+    let service_id = define_service(client, &caller, &workload_id, scope_id);
     Definitions {
         formation_id,
         component_id,

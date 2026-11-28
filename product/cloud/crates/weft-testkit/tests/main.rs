@@ -132,6 +132,7 @@ mod control_host {
         let client = host.client();
 
         let cloud_id = steps::create_cloud(&client);
+        steps::configure_cloud(&client, &cloud_id);
         steps::declare_zone(&client, &cloud_id, "z1");
         steps::declare_zone(&client, &cloud_id, "z2");
         steps::define_priority_class(&client);
@@ -142,6 +143,7 @@ mod control_host {
         let tenant_id = steps::create_tenant(&client, "acme");
         let after_tenant = host.log_after(before);
         let account_id = steps::create_account(&client, &tenant_id);
+        let scope_id = steps::record_account_scope(&client, &account_id);
         let quota_id = steps::grant_top_quota(&client, &account_id);
         let ids = steps::Path {
             cloud_id,
@@ -150,6 +152,7 @@ mod control_host {
             cluster_id,
             tenant_id,
             account_id,
+            scope_id,
             quota_id,
         };
 
@@ -241,6 +244,7 @@ mod control_host {
         steps::declare_zone(&client, &cloud_id, "z1");
         let tenant_id = steps::create_tenant(&client, "acme");
         let account_id = steps::create_account(&client, &tenant_id);
+        let scope_id = steps::record_account_scope(&client, &account_id);
         let clusters = || client.view("weft.cluster.Clusters", &[]).ok_body(200)["rows"].clone();
         let before = clusters();
 
@@ -248,9 +252,9 @@ mod control_host {
             .command(
                 "weft.cluster.CreateCluster",
                 "weft.actors.TenantOwner",
-                json!({"tenant_id": tenant_id, "account_id": account_id}),
+                steps::account_caller(&tenant_id, &account_id, &scope_id),
                 json!({
-                    "account_id": account_id,
+                    "scope_id": scope_id,
                     "cloud_id": cloud_id,
                     "name": "acme-main",
                     "control_plane": "Shared",
@@ -1098,30 +1102,40 @@ mod definitions {
         let ids = steps::run_definitions(&client, &path);
         let view = |name: &str, params: &[(&str, &str)]| client.view(name, params).ok_body(200);
 
-        // 1. The formation in the default cluster, its component, revision and environment, and
-        // the artifact.
+        // 1. The formation, pinned to the default cluster, its component, revision and environment,
+        // and the artifact.
         let formations = view(
-            "weft.formations.Formations",
-            &[("account_id", &path.account_id)],
+            "weft.architecture.Formations",
+            &[("scope_id", &path.scope_id)],
         );
         let formation = row(&formations, "formation_id", &ids.formation_id);
         assert_eq!(
-            (formation["name"].clone(), formation["cluster_id"].clone()),
-            (json!("site"), json!(path.cluster_id)),
+            (formation["name"].clone(), formation["scope_id"].clone()),
+            (json!("site"), json!(path.scope_id)),
             "{formation}"
         );
+        let cluster = row(
+            &view("weft.cluster.Clusters", &[]),
+            "cluster_id",
+            &path.cluster_id,
+        );
+        assert_eq!(
+            cluster["formations"],
+            json!([ids.formation_id]),
+            "{cluster}"
+        );
         let in_formation = [("formation_id", ids.formation_id.as_str())];
-        let components = view("weft.formations.FormationComponents", &in_formation);
+        let components = view("weft.architecture.FormationComponents", &in_formation);
         let component = row(&components, "component_id", &ids.component_id);
         assert_eq!(component["name"], json!("site"), "{component}");
-        let revisions = view("weft.formations.FormationRevisions", &in_formation);
+        let revisions = view("weft.architecture.FormationRevisions", &in_formation);
         let revision = row(&revisions, "revision_id", &ids.revision_id);
         assert_eq!(
             revision["formation_id"],
             json!(ids.formation_id),
             "{revision}"
         );
-        let environments = view("weft.formations.Environments", &in_formation);
+        let environments = view("weft.architecture.Environments", &in_formation);
         let environment = row(&environments, "environment_id", &ids.environment_id);
         assert_eq!(environment["name"], json!("prod"), "{environment}");
         let artifacts = view("weft.artifacts.Artifacts", &[]);
@@ -1131,10 +1145,10 @@ mod definitions {
             json!(input::ARTIFACT_DIGEST),
             "{artifact}"
         );
-        // `Artifacts` has no `kind`; the account's `ArtifactList` shows it.
+        // `Artifacts` has no `kind`; the scope's `ArtifactList` shows it.
         let listed = view(
             "weft.artifacts.ArtifactList",
-            &[("account_id", &path.account_id)],
+            &[("scope_id", &path.scope_id)],
         );
         let artifact = row(&listed, "artifact_digest", &ids.artifact_digest);
         assert_eq!(artifact["kind"], json!("Snippet"), "{artifact}");
@@ -1185,18 +1199,18 @@ mod definitions {
         let host = ControlHost::start();
         let client = host.client();
         let path = steps::run_path(&client);
-        let caller = steps::account_caller(&path.tenant_id, &path.account_id);
-        let account_id = path.account_id.as_str();
-        let formation_id = steps::create_formation(&client, &caller, account_id, &path.cluster_id);
-        steps::add_component(&client, &caller, &formation_id, account_id);
-        let revision_id = steps::commit_revision(&client, &caller, &formation_id, account_id);
-        let environment_id = steps::create_environment(&client, &caller, &formation_id, account_id);
-        steps::register_artifact(&client, &caller, account_id);
+        let caller = steps::path_caller(&path);
+        let scope_id = path.scope_id.as_str();
+        let formation_id = steps::create_formation(&client, &caller, scope_id);
+        steps::add_component(&client, &caller, &formation_id, scope_id);
+        let revision_id = steps::commit_revision(&client, &caller, &formation_id, scope_id);
+        let environment_id = steps::create_environment(&client, &caller, &formation_id, scope_id);
+        steps::register_artifact(&client, &caller, scope_id);
         let image_runtime = steps::register_runtime(&client, &["Image"]);
         let snippet_runtime = steps::register_runtime(&client, &["Snippet"]);
         let request = |runtime_id: &str| {
             input::define_workload(input::WorkloadOf {
-                account_id,
+                scope_id,
                 formation_id: &formation_id,
                 formation_revision_id: &revision_id,
                 environment_id: &environment_id,
@@ -1251,25 +1265,29 @@ mod definitions {
         use weft_testkit::steps::{self, input, Definitions, Path};
         use weft_types::behaviour::{
             AccountStorage, ArtifactStorage, ClusterStorage, ComponentStorage, EnvironmentStorage,
-            FormationRevisionStorage, FormationStorage, QuotaStorage, RuntimeStorage,
+            FormationRevisionStorage, FormationStorage, QuotaStorage, RuntimeStorage, ScopeStorage,
             ServiceStorage, WorkloadStorage,
         };
         use weft_types::primitives::Uuid;
         use weft_types::shared::{
-            AccountId, ArtifactDigest, ClusterId, EnvironmentId, FormationId, RuntimeId, WorkloadId,
+            AccountId, ArtifactDigest, ClusterId, EnvironmentId, FormationId, RuntimeId, ScopeId,
+            WorkloadId,
         };
         use weft_types::workloads::obligations::CreateInstanceBehavior;
 
-        const CREATE_FORMATION: &str = "weft.formations.CreateFormation";
-        const ADD_COMPONENT: &str = "weft.formations.AddComponent";
-        const COMMIT_REVISION: &str = "weft.formations.CommitRevision";
-        const CREATE_ENVIRONMENT: &str = "weft.formations.CreateEnvironment";
+        const CREATE_FORMATION: &str = "weft.architecture.CreateFormation";
+        const ADD_COMPONENT: &str = "weft.architecture.AddComponent";
+        const COMMIT_REVISION: &str = "weft.architecture.CommitRevision";
+        const CREATE_ENVIRONMENT: &str = "weft.architecture.CreateEnvironment";
         const REGISTER_ARTIFACT: &str = "weft.artifacts.RegisterArtifact";
         const DEFINE_WORKLOAD: &str = "weft.workloads.DefineWorkload";
         const DEFINE_SERVICE: &str = "weft.workloads.DefineService";
+        const PIN_FORMATION: &str = "weft.cluster.PinFormation";
+        const RECORD_ACCOUNT_SCOPE: &str = "weft.accounts.RecordAccountScope";
 
-        /// The path and the definitions of [`steps::run_definitions`] in account `acme`, and a
-        /// second tenant `globex` with its account, on a control host served from this process.
+        /// The path and the definitions of [`steps::run_definitions`] in account `acme` and its
+        /// scope, and a second tenant `globex` with its account and scope, on a control host served
+        /// from this process.
         struct World {
             host: Arc<weft_bin::Host>,
             client: Client,
@@ -1277,8 +1295,8 @@ mod definitions {
             ids: Definitions,
             /// A caller acting in `acme`'s account.
             caller: Value,
-            /// `globex`'s account.
-            other_account: String,
+            /// The scope of `globex`'s account.
+            other_scope: String,
             /// A caller acting in `globex`'s account.
             other: Value,
             _dir: weft_testkit::TempDir,
@@ -1300,24 +1318,26 @@ mod definitions {
                 std::thread::spawn(move || serving.serve(&listener, true));
                 let path = steps::run_path(&client);
                 let ids = steps::run_definitions(&client, &path);
-                let caller = steps::account_caller(&path.tenant_id, &path.account_id);
+                let caller = steps::path_caller(&path);
                 let other_tenant = steps::create_tenant(&client, "globex");
                 let other_account = steps::create_account(&client, &other_tenant);
-                let other = steps::account_caller(&other_tenant, &other_account);
+                let other_scope = steps::record_account_scope(&client, &other_account);
+                let other = steps::account_caller(&other_tenant, &other_account, &other_scope);
                 Self {
                     host,
                     client,
                     path,
                     ids,
                     caller,
-                    other_account,
+                    other_scope,
                     other,
                     _dir: dir,
                 }
             }
 
-            fn acme(&self) -> &str {
-                &self.path.account_id
+            /// The scope of `acme`'s account.
+            fn scope(&self) -> &str {
+                &self.path.scope_id
             }
 
             fn ports(&self) -> Ports {
@@ -1405,7 +1425,7 @@ mod definitions {
                     .expect("the control host answers");
                 let outcome = answer.body["outcome"].as_str().unwrap_or_default();
                 assert!(
-                    ["not-callers-account", "formation-of-other-account"].contains(&outcome),
+                    ["not-callers-scope", "formation-of-other-scope"].contains(&outcome),
                     "{command} {input}: {} {}",
                     answer.status,
                     answer.body
@@ -1425,7 +1445,7 @@ mod definitions {
             /// A formation of `acme` named `name` in the default cluster, with one component when
             /// `component`: its identity.
             fn formation(&self, name: &str, component: bool) -> String {
-                let input = json!({"account_id": self.acme(), "name": name, "zones": [], "cluster_id": self.path.cluster_id});
+                let input = json!({"scope_id": self.scope(), "name": name, "zones": []});
                 let body = self.accepts(
                     steps::ACCOUNT_ADMIN,
                     &self.caller,
@@ -1435,7 +1455,7 @@ mod definitions {
                 );
                 let id = published(&body, "formation_id");
                 if component {
-                    steps::add_component(&self.client, &self.caller, &id, self.acme());
+                    steps::add_component(&self.client, &self.caller, &id, self.scope());
                 }
                 id
             }
@@ -1443,7 +1463,7 @@ mod definitions {
             /// `AddComponent` of a component `name` to `acme`'s formation `formation`.
             fn component(&self, formation: &str, name: &str) {
                 let input =
-                    json!({"formation_id": formation, "account_id": self.acme(), "name": name});
+                    json!({"formation_id": formation, "scope_id": self.scope(), "name": name});
                 self.accepts(
                     steps::DEPLOYER,
                     &self.caller,
@@ -1458,7 +1478,7 @@ mod definitions {
             fn environment(
                 &self,
                 of: &str,
-                change: impl FnOnce(&mut weft_types::formations::EnvironmentSnapshot),
+                change: impl FnOnce(&mut weft_types::architecture::EnvironmentSnapshot),
             ) -> String {
                 let mut ports = self.ports();
                 let key = EnvironmentId(Uuid(of.to_owned()));
@@ -1475,7 +1495,7 @@ mod definitions {
                 let mut ports = self.ports();
                 let key = FormationId(Uuid(id.to_owned()));
                 let mut row = FormationStorage::get(&ports, &key).expect("the formation row");
-                row.state = weft_types::formations::FormationState::Retired;
+                row.state = weft_types::architecture::FormationState::Retired;
                 FormationStorage::put(&mut ports, row);
             }
 
@@ -1514,7 +1534,7 @@ mod definitions {
             /// The request of the skeleton's workload in `acme`'s formation `site`.
             fn workload_request(&self) -> Value {
                 input::define_workload(input::WorkloadOf {
-                    account_id: self.acme(),
+                    scope_id: self.scope(),
                     formation_id: &self.ids.formation_id,
                     formation_revision_id: &self.ids.revision_id,
                     environment_id: &self.ids.environment_id,
@@ -1597,6 +1617,14 @@ mod definitions {
             ServiceStorage::list(ports).len()
         }
 
+        /// The pins of every cluster: how many formations the clusters list together.
+        fn pinned(ports: &Ports) -> usize {
+            ClusterStorage::list(ports)
+                .iter()
+                .map(|cluster| cluster.data.formations.len())
+                .sum()
+        }
+
         #[test]
         fn create_formation_answers_each_guard_in_declaration_order() {
             let w = World::new();
@@ -1610,88 +1638,198 @@ mod definitions {
                     formations,
                 );
             };
-            let request = |account: &str, name: &str, cluster: &str| json!({"account_id": account, "name": name, "zones": ["z1"], "cluster_id": cluster});
-            let default = w.path.cluster_id.clone();
+            let request =
+                |scope: &str, name: &str| json!({"scope_id": scope, "name": name, "zones": ["z1"]});
 
-            // no-such-account: an account no row holds, the caller acting in it; and a closed one.
+            // no-such-scope: a scope no row holds, the caller acting in it; and a closed one.
             let nobody = mint();
-            let nobody_caller = steps::account_caller(&w.path.tenant_id, &nobody);
-            refuses(
-                &nobody_caller,
-                request(&nobody, "a", &default),
-                "no-such-account",
-            );
+            let nobody_caller = steps::account_caller(&w.path.tenant_id, &mint(), &nobody);
+            refuses(&nobody_caller, request(&nobody, "a"), "no-such-scope");
             let closing_tenant = steps::create_tenant(&w.client, "initech");
-            let closing = steps::create_account(&w.client, &closing_tenant);
+            let closing_account = steps::create_account(&w.client, &closing_tenant);
+            let closing = steps::record_account_scope(&w.client, &closing_account);
             let mut ports = w.ports();
-            let key = AccountId(Uuid(closing.clone()));
-            let mut account = AccountStorage::get(&ports, &key).expect("the account row");
-            account.state = weft_types::accounts::AccountState::Closed;
-            AccountStorage::put(&mut ports, account);
-            let closing_caller = steps::account_caller(&closing_tenant, &closing);
-            refuses(
-                &closing_caller,
-                request(&closing, "a", &default),
-                "no-such-account",
-            );
+            let key = ScopeId(Uuid(closing.clone()));
+            let mut scope = ScopeStorage::get(&ports, &key).expect("the scope row");
+            scope.state = weft_types::scope::ScopeState::Closed;
+            ScopeStorage::put(&mut ports, scope);
+            let closing_caller = steps::account_caller(&closing_tenant, &closing_account, &closing);
+            refuses(&closing_caller, request(&closing, "a"), "no-such-scope");
 
-            // not-callers-account.
-            refuses(
-                &w.other,
-                request(w.acme(), "a", &default),
-                "not-callers-account",
-            );
+            // not-callers-scope.
+            refuses(&w.other, request(w.scope(), "a"), "not-callers-scope");
 
-            // no-such-cluster, then a deleted one, then one of another account.
-            refuses(
-                &w.caller,
-                request(w.acme(), "a", &mint()),
-                "no-such-cluster",
-            );
-            let deleted = w.cluster(|row| row.state = weft_types::cluster::ClusterState::Deleted);
-            refuses(
-                &w.caller,
-                request(w.acme(), "a", &deleted),
-                "cluster-deleted",
-            );
-            let globex = AccountId(Uuid(w.other_account.clone()));
-            let foreign = w.cluster(|row| row.data.account_id = Some(globex));
-            refuses(
-                &w.caller,
-                request(w.acme(), "a", &foreign),
-                "cluster-of-other-account",
-            );
-            let acme = AccountId(Uuid(w.acme().to_owned()));
-            let own = w.cluster(|row| row.data.account_id = Some(acme));
             let body = w.accepts(
                 steps::ACCOUNT_ADMIN,
                 &w.caller,
                 CREATE_FORMATION,
-                &request(w.acme(), "own", &own),
+                &request(w.scope(), "own"),
                 "created",
             );
 
-            // The row: the values sent, its internal domain, Active.
+            // The row: the values sent, its internal domain, Active, in no cluster yet.
             let id = FormationId(Uuid(published(&body, "formation_id")));
             let row = FormationStorage::get(&w.ports(), &id).expect("the formation row");
-            assert_eq!(row.state, weft_types::formations::FormationState::Active);
+            assert_eq!(row.state, weft_types::architecture::FormationState::Active);
             assert_eq!(row.data.internal_domain, "own.internal");
-            assert_eq!(row.data.cluster_id, ClusterId(Uuid(own)));
+            assert_eq!(row.data.scope_id, ScopeId(Uuid(w.scope().to_owned())));
             assert_eq!(
                 row.data.zones,
                 vec![weft_types::shared::ZoneName("z1".to_owned())]
             );
             assert!(row.data.quota_slice.is_empty());
+            assert!(
+                !ClusterStorage::list(&w.ports())
+                    .iter()
+                    .any(|cluster| cluster.data.formations.contains(&id)),
+                "a new formation is pinned to no cluster"
+            );
 
-            // name-taken: `site` again in `acme`; in `globex`'s account the name is free.
-            refuses(&w.caller, request(w.acme(), "site", &default), "name-taken");
+            // name-taken: `site` again in `acme`; in `globex`'s scope the name is free.
+            refuses(&w.caller, request(w.scope(), "site"), "name-taken");
             w.accepts(
                 steps::ACCOUNT_ADMIN,
                 &w.other,
                 CREATE_FORMATION,
-                &request(&w.other_account, "site", &default),
+                &request(&w.other_scope, "site"),
                 "created",
             );
+        }
+
+        /// The guards the blocks cut from `CreateFormation` (the formation's cluster) are
+        /// `PinFormation`'s, each denying by default.
+        #[test]
+        fn pin_formation_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::ACCOUNT_ADMIN,
+                    caller,
+                    PIN_FORMATION,
+                    &input,
+                    outcome,
+                    pinned,
+                );
+            };
+            let request = |scope: &str, cluster: &str, formation: &str| json!({"scope_id": scope, "cluster_id": cluster, "formation_id": formation});
+            let default = w.path.cluster_id.clone();
+            let fresh = w.formation("fresh", false);
+
+            // not-callers-account: the caller acts in another scope.
+            refuses(
+                &w.other,
+                request(w.scope(), &default, &fresh),
+                "not-callers-account",
+            );
+            // no-such-cluster, no-such-formation.
+            refuses(
+                &w.caller,
+                request(w.scope(), &mint(), &fresh),
+                "no-such-cluster",
+            );
+            refuses(
+                &w.caller,
+                request(w.scope(), &default, &mint()),
+                "no-such-formation",
+            );
+            // formation-foreign: `globex`'s formation named from `globex`'s scope... by `acme`.
+            let globex = steps::create_formation(&w.client, &w.other, &w.other_scope);
+            refuses(
+                &w.caller,
+                request(w.scope(), &default, &globex),
+                "formation-foreign",
+            );
+            // cluster-foreign: a cluster of another scope, and a deleted one.
+            let other_scope = ScopeId(Uuid(w.other_scope.clone()));
+            let foreign = w.cluster(|row| row.data.scope_id = Some(other_scope));
+            refuses(
+                &w.caller,
+                request(w.scope(), &foreign, &fresh),
+                "cluster-foreign",
+            );
+            let deleted = w.cluster(|row| row.state = weft_types::cluster::ClusterState::Deleted);
+            refuses(
+                &w.caller,
+                request(w.scope(), &deleted, &fresh),
+                "cluster-foreign",
+            );
+            // formation-retired.
+            let retired = w.formation("retired", false);
+            w.retire_formation(&retired);
+            refuses(
+                &w.caller,
+                request(w.scope(), &default, &retired),
+                "formation-retired",
+            );
+            // already-pinned: `site` runs in the default cluster; another cluster of its own
+            // scope does not take it a second time.
+            let acme = ScopeId(Uuid(w.scope().to_owned()));
+            let own = w.cluster(|row| {
+                row.data.scope_id = Some(acme);
+                row.data.formations.clear();
+            });
+            refuses(
+                &w.caller,
+                request(w.scope(), &own, &w.ids.formation_id),
+                "already-pinned",
+            );
+
+            // pinned: into a cluster of its own scope; the cluster lists it.
+            let body = w.accepts(
+                steps::ACCOUNT_ADMIN,
+                &w.caller,
+                PIN_FORMATION,
+                &request(w.scope(), &own, &fresh),
+                "pinned",
+            );
+            assert_eq!(
+                body["published"][0]["payload"],
+                json!({"cluster_id": own, "formation_id": fresh}),
+                "{body}"
+            );
+            let row =
+                ClusterStorage::get(&w.ports(), &ClusterId(Uuid(own))).expect("the cluster row");
+            assert_eq!(row.data.formations, vec![FormationId(Uuid(fresh))]);
+        }
+
+        /// `RecordAccountScope` records one scope on one account, both ways unique.
+        #[test]
+        fn record_account_scope_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let record = |account: &str, scope: &str| {
+                w.outcome(
+                    steps::CONTROL_PLANE,
+                    &json!({}),
+                    RECORD_ACCOUNT_SCOPE,
+                    &json!({"account_id": account, "scope_id": scope}),
+                )
+            };
+            let tenant = steps::create_tenant(&w.client, "initech");
+            let account = steps::create_account(&w.client, &tenant);
+            let opened = ScopeStorage::list(&w.ports())
+                .into_iter()
+                .find(|scope| scope.data.name == account)
+                .expect("account-opens-scope opened the account's scope");
+            let opened = opened.data.scope_id.0 .0;
+            let held = |account: &str| {
+                AccountStorage::get(&w.ports(), &AccountId(Uuid(account.to_owned())))
+                    .expect("the account row")
+                    .data
+                    .scope_id
+            };
+
+            assert_eq!(record(&mint(), &opened), "no-such-account");
+            assert_eq!(record(&account, &mint()), "no-such-scope");
+            // scope-taken: `acme`'s scope is held by `acme`'s account.
+            assert_eq!(record(&account, w.scope()), "scope-taken");
+            assert_eq!(held(&account), None);
+
+            assert_eq!(record(&account, &opened), "recorded");
+            assert_eq!(held(&account), Some(ScopeId(Uuid(opened.clone()))));
+            // scope-taken: the account holds a scope already, the same one or another.
+            assert_eq!(record(&account, &opened), "scope-taken");
+            assert_eq!(record(&account, &w.other_scope), "scope-taken");
+            assert_eq!(held(&account), Some(ScopeId(Uuid(opened))));
         }
 
         #[test]
@@ -1707,29 +1845,29 @@ mod definitions {
                     components,
                 );
             };
-            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "account_id": account, "name": name});
+            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "scope_id": account, "name": name});
             let site = w.ids.formation_id.clone();
 
             refuses(
                 &w.other,
-                request(&site, w.acme(), "a"),
-                "not-callers-account",
+                request(&site, w.scope(), "a"),
+                "not-callers-scope",
             );
             refuses(
                 &w.caller,
-                request(&mint(), w.acme(), "a"),
+                request(&mint(), w.scope(), "a"),
                 "no-such-formation",
             );
-            let other_account = w.other_account.clone();
+            let other_account = w.other_scope.clone();
             refuses(
                 &w.other,
                 request(&site, &other_account, "a"),
-                "formation-of-other-account",
+                "formation-of-other-scope",
             );
             let retired = w.formation("retired", true);
             w.retire_formation(&retired);
-            refuses(&w.caller, request(&retired, w.acme(), "a"), "retired");
-            refuses(&w.caller, request(&site, w.acme(), "site"), "name-taken");
+            refuses(&w.caller, request(&retired, w.scope(), "a"), "retired");
+            refuses(&w.caller, request(&site, w.scope(), "site"), "name-taken");
 
             // In another formation the name is free; the row has its internal name.
             let other = w.formation("other", false);
@@ -1737,7 +1875,7 @@ mod definitions {
                 steps::DEPLOYER,
                 &w.caller,
                 ADD_COMPONENT,
-                &request(&other, w.acme(), "site"),
+                &request(&other, w.scope(), "site"),
                 "added",
             );
             assert_eq!(
@@ -1764,22 +1902,22 @@ mod definitions {
                     revisions,
                 );
             };
-            let request = |formation: &str, account: &str| json!({"formation_id": formation, "account_id": account});
+            let request = |formation: &str, account: &str| json!({"formation_id": formation, "scope_id": account});
             let site = w.ids.formation_id.clone();
 
-            refuses(&w.other, request(&site, w.acme()), "not-callers-account");
-            refuses(&w.caller, request(&mint(), w.acme()), "no-such-formation");
-            let other_account = w.other_account.clone();
+            refuses(&w.other, request(&site, w.scope()), "not-callers-scope");
+            refuses(&w.caller, request(&mint(), w.scope()), "no-such-formation");
+            let other_account = w.other_scope.clone();
             refuses(
                 &w.other,
                 request(&site, &other_account),
-                "formation-of-other-account",
+                "formation-of-other-scope",
             );
             let retired = w.formation("retired", true);
             w.retire_formation(&retired);
-            refuses(&w.caller, request(&retired, w.acme()), "retired");
+            refuses(&w.caller, request(&retired, w.scope()), "retired");
             let bare = w.formation("bare", false);
-            refuses(&w.caller, request(&bare, w.acme()), "empty");
+            refuses(&w.caller, request(&bare, w.scope()), "empty");
 
             // The first revision of `site` froze it before environment `prod`: the second,
             // number 2, has another digest; the third, of the same document, the second's; a
@@ -1789,7 +1927,7 @@ mod definitions {
                     steps::DEPLOYER,
                     &w.caller,
                     COMMIT_REVISION,
-                    &request(formation, w.acme()),
+                    &request(formation, w.scope()),
                     "committed",
                 );
                 let payload = body["published"][0]["payload"].clone();
@@ -1808,12 +1946,12 @@ mod definitions {
             assert_eq!(number, json!(2));
             assert_ne!(digest, json!(first.data.document_digest.0));
             assert_eq!(commit(&w.ids.formation_id), (json!(3), digest.clone()));
-            steps::add_component(&w.client, &w.caller, &bare, w.acme());
+            steps::add_component(&w.client, &w.caller, &bare, w.scope());
             w.accepts(
                 steps::DEPLOYER,
                 &w.caller,
                 ADD_COMPONENT,
-                &json!({"formation_id": w.ids.formation_id, "account_id": w.acme(), "name": "api"}),
+                &json!({"formation_id": w.ids.formation_id, "scope_id": w.scope(), "name": "api"}),
                 "added",
             );
             let (number, fourth) = commit(&w.ids.formation_id);
@@ -1834,8 +1972,8 @@ mod definitions {
         #[test]
         fn a_deployer_of_another_account_gets_no_such_formation_adding_a_component() {
             let w = World::new();
-            for account in [w.other_account.clone(), w.acme().to_owned()] {
-                let input = json!({"formation_id": w.ids.formation_id, "account_id": account, "name": "intruder"});
+            for account in [w.other_scope.clone(), w.scope().to_owned()] {
+                let input = json!({"formation_id": w.ids.formation_id, "scope_id": account, "name": "intruder"});
                 w.isolated(ADD_COMPONENT, &input);
             }
         }
@@ -1845,8 +1983,8 @@ mod definitions {
         #[test]
         fn a_deployer_of_another_account_gets_no_such_formation_committing_a_revision() {
             let w = World::new();
-            for account in [w.other_account.clone(), w.acme().to_owned()] {
-                let input = json!({"formation_id": w.ids.formation_id, "account_id": account});
+            for account in [w.other_scope.clone(), w.scope().to_owned()] {
+                let input = json!({"formation_id": w.ids.formation_id, "scope_id": account});
                 w.isolated(COMMIT_REVISION, &input);
             }
         }
@@ -1864,48 +2002,54 @@ mod definitions {
                     environments,
                 );
             };
-            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "account_id": account, "name": name, "protected": true});
+            let request = |formation: &str, account: &str, name: &str| json!({"formation_id": formation, "scope_id": account, "name": name, "protected": true});
             let site = w.ids.formation_id.clone();
 
             refuses(
                 &w.other,
-                request(&site, w.acme(), "staging"),
-                "not-callers-account",
+                request(&site, w.scope(), "staging"),
+                "not-callers-scope",
             );
             refuses(
                 &w.caller,
-                request(&mint(), w.acme(), "staging"),
+                request(&mint(), w.scope(), "staging"),
                 "no-such-formation",
             );
-            let globex =
-                steps::create_formation(&w.client, &w.other, &w.other_account, &w.path.cluster_id);
+            let globex = steps::create_formation(&w.client, &w.other, &w.other_scope);
             refuses(
                 &w.caller,
-                request(&globex, w.acme(), "staging"),
-                "formation-of-other-account",
+                request(&globex, w.scope(), "staging"),
+                "formation-of-other-scope",
             );
             let retired = w.formation("retired", false);
             w.retire_formation(&retired);
-            refuses(&w.caller, request(&retired, w.acme(), "staging"), "retired");
-            refuses(&w.caller, request(&site, w.acme(), "prod"), "name-taken");
+            refuses(
+                &w.caller,
+                request(&retired, w.scope(), "staging"),
+                "retired",
+            );
+            refuses(&w.caller, request(&site, w.scope(), "prod"), "name-taken");
 
             let body = w.accepts(
                 steps::ACCOUNT_ADMIN,
                 &w.caller,
                 CREATE_ENVIRONMENT,
-                &request(&site, w.acme(), "staging"),
+                &request(&site, w.scope(), "staging"),
                 "created",
             );
             let id = weft_types::shared::EnvironmentId(Uuid(published(&body, "environment_id")));
             let row = EnvironmentStorage::get(&w.ports(), &id).expect("the environment row");
             assert!(row.data.protected);
-            assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
+            assert_eq!(row.data.scope_id, ScopeId(Uuid(w.scope().to_owned())));
             assert_eq!(
                 row.data.origin,
-                weft_types::formations::EnvironmentOrigin::Manual
+                weft_types::architecture::EnvironmentOrigin::Manual
             );
             assert_eq!(row.data.name.0, "staging");
-            assert_eq!(row.state, weft_types::formations::EnvironmentState::Active);
+            assert_eq!(
+                row.state,
+                weft_types::architecture::EnvironmentState::Active
+            );
         }
 
         #[test]
@@ -1922,12 +2066,12 @@ mod definitions {
                 );
             };
             let base = with(
-                &input::register_artifact(w.acme()),
+                &input::register_artifact(w.scope()),
                 "/artifact_digest",
                 json!("sha256:next"),
             );
 
-            refuses(&w.other, base.clone(), "not-callers-account");
+            refuses(&w.other, base.clone(), "not-callers-scope");
             refuses(&w.caller, with(&base, "/signature", json!("")), "unsigned");
             // Both unsigned and of a negative size: the first declared answers.
             let unsigned_negative = with(
@@ -1947,7 +2091,7 @@ mod definitions {
                 with(&base, "/built_from", json!("sha256:none")),
                 "built-from-missing",
             );
-            w.artifact(&w.other, &w.other_account, "sha256:globex", "Snippet");
+            w.artifact(&w.other, &w.other_scope, "sha256:globex", "Snippet");
             refuses(
                 &w.caller,
                 with(&base, "/built_from", json!("sha256:globex")),
@@ -1960,7 +2104,7 @@ mod definitions {
             );
             // One digest for the whole cluster: another account's registration of it exists too.
             let theirs = with(
-                &input::register_artifact(&w.other_account),
+                &input::register_artifact(&w.other_scope),
                 "/artifact_digest",
                 json!(input::ARTIFACT_DIGEST),
             );
@@ -1982,7 +2126,7 @@ mod definitions {
                 row.data.built_from,
                 Some(ArtifactDigest(input::ARTIFACT_DIGEST.to_owned()))
             );
-            assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
+            assert_eq!(row.data.scope_id, ScopeId(Uuid(w.scope().to_owned())));
         }
 
         #[test]
@@ -2007,7 +2151,7 @@ mod definitions {
             let sidecar = with(&input::process(), "/role", json!("Sidecar"));
 
             // The input guards.
-            refuses(&w.other, base.clone(), "not-callers-account");
+            refuses(&w.other, base.clone(), "not-callers-scope");
             refuses(
                 &w.caller,
                 with(&base, "/package_kind", json!("Agent")),
@@ -2076,9 +2220,8 @@ mod definitions {
 
             // Existence, in declaration order, ahead of every predicate: another account's
             // formation and no runtime answer `no-runtime`.
-            let globex =
-                steps::create_formation(&w.client, &w.other, &w.other_account, &w.path.cluster_id);
-            steps::add_component(&w.client, &w.other, &globex, &w.other_account);
+            let globex = steps::create_formation(&w.client, &w.other, &w.other_scope);
+            steps::add_component(&w.client, &w.other, &globex, &w.other_scope);
             refuses(
                 &w.caller,
                 with(&base, "/formation_id", json!(mint())),
@@ -2134,9 +2277,9 @@ mod definitions {
                 with(&base, "/component", json!("elsewhere")),
                 "component-missing",
             );
-            let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.acme());
+            let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.scope());
             let other_environment =
-                steps::create_environment(&w.client, &w.caller, &other, w.acme());
+                steps::create_environment(&w.client, &w.caller, &other, w.scope());
             refuses(
                 &w.caller,
                 with(&base, "/environment_id", json!(other_environment)),
@@ -2161,7 +2304,7 @@ mod definitions {
             // A retired environment, then a retired formation: after the foreign checks, ahead
             // of the runtime's state.
             let retired_environment = w.environment(&w.ids.environment_id, |row| {
-                row.state = weft_types::formations::EnvironmentState::Retired
+                row.state = weft_types::architecture::EnvironmentState::Retired
             });
             let in_retired_environment = with(&base, "/environment_id", json!(retired_environment));
             refuses(
@@ -2188,7 +2331,7 @@ mod definitions {
                 "formation-retired",
             );
             let other_retired_environment = w.environment(&other_environment, |row| {
-                row.state = weft_types::formations::EnvironmentState::Retired
+                row.state = weft_types::architecture::EnvironmentState::Retired
             });
             refuses(
                 &w.caller,
@@ -2233,13 +2376,13 @@ mod definitions {
                 with(&base, "/artifact_digest", json!("sha256:none")),
                 "no-artifact",
             );
-            w.artifact(&w.other, &w.other_account, "sha256:globex", "Snippet");
+            w.artifact(&w.other, &w.other_scope, "sha256:globex", "Snippet");
             refuses(
                 &w.caller,
                 with(&base, "/artifact_digest", json!("sha256:globex")),
                 "artifact-foreign",
             );
-            w.artifact(&w.caller, w.acme(), "sha256:revoked", "Snippet");
+            w.artifact(&w.caller, w.scope(), "sha256:revoked", "Snippet");
             let mut ports = w.ports();
             let key = ArtifactDigest("sha256:revoked".to_owned());
             let mut artifact = ArtifactStorage::get(&ports, &key).expect("the artifact row");
@@ -2250,7 +2393,7 @@ mod definitions {
                 with(&base, "/artifact_digest", json!("sha256:revoked")),
                 "artifact-revoked",
             );
-            w.artifact(&w.caller, w.acme(), "sha256:image", "Image");
+            w.artifact(&w.caller, w.scope(), "sha256:image", "Image");
             refuses(
                 &w.caller,
                 with(&base, "/artifact_digest", json!("sha256:image")),
@@ -2312,7 +2455,7 @@ mod definitions {
                 &w.caller,
                 with(&w.workload_request(), "/component", json!("second")),
             );
-            let base = input::define_service(&second, w.acme());
+            let base = input::define_service(&second, w.scope());
             let bounds = |min: i64, max: i64, replicas: i64| {
                 with(
                     &with(
@@ -2326,7 +2469,7 @@ mod definitions {
             };
             let sleep = json!({"idle_after": "PT5M", "kind": "Stop"});
 
-            refuses(&w.other, base.clone(), "not-callers-account");
+            refuses(&w.other, base.clone(), "not-callers-scope");
             refuses(&w.caller, bounds(-1, 6, 1), "bad-bounds");
             refuses(&w.caller, bounds(3, 2, 2), "bad-bounds");
             refuses(&w.caller, bounds(2, 6, 1), "bad-bounds");
@@ -2342,12 +2485,12 @@ mod definitions {
                 with(&base, "/workload_id", json!(mint())),
                 "no-workload",
             );
-            let globex = AccountId(Uuid(w.other_account.clone()));
-            let foreign = w.workload(&second, |row| row.data.account_id = globex);
+            let globex = ScopeId(Uuid(w.other_scope.clone()));
+            let foreign = w.workload(&second, |row| row.data.scope_id = globex);
             refuses(
                 &w.caller,
                 with(&base, "/workload_id", json!(foreign)),
-                "workload-of-other-account",
+                "workload-of-other-scope",
             );
             let retired = w.workload(&second, |row| {
                 row.state = weft_types::workloads::WorkloadState::Retired
@@ -2390,7 +2533,7 @@ mod definitions {
             let row = ServiceStorage::get(&w.ports(), &id).expect("the service row");
             assert_eq!(row.state, weft_types::workloads::ServiceState::Awake);
             assert_eq!((row.data.replicas, row.data.running_replicas), (1, 0));
-            assert_eq!(row.data.account_id, AccountId(Uuid(w.acme().to_owned())));
+            assert_eq!(row.data.scope_id, ScopeId(Uuid(w.scope().to_owned())));
             assert_eq!(row.data.workload_id, WorkloadId(Uuid(second)));
             assert!(row.data.sleep_snapshots.is_empty() && row.data.backoff_until.is_none());
         }
@@ -2486,7 +2629,7 @@ mod definitions {
             let second = w.workload(&w.ids.workload_id, |_| {});
             let request = |workload: &str, replicas: i64| {
                 with(
-                    &input::define_service(workload, w.acme()),
+                    &input::define_service(workload, w.scope()),
                     "/replicas",
                     json!(replicas),
                 )
@@ -2556,7 +2699,7 @@ mod definitions {
                     steps::DEPLOYER,
                     &w.caller,
                     COMMIT_REVISION,
-                    &json!({"formation_id": formation, "account_id": w.acme()}),
+                    &json!({"formation_id": formation, "scope_id": w.scope()}),
                     "committed",
                 );
                 let payload = payload(&body);
@@ -2624,7 +2767,7 @@ mod definitions {
                 );
                 let sent = payload(&body);
                 for field in [
-                    "account_id",
+                    "scope_id",
                     "formation_id",
                     "environment_id",
                     "component",
@@ -2687,7 +2830,7 @@ mod definitions {
                     &w.caller,
                     with(&w.workload_request(), "/component", json!("sleeper")),
                 );
-                let base = steps::input::define_service(&workload, w.acme());
+                let base = steps::input::define_service(&workload, w.scope());
                 let request = with(
                     &with(
                         &with(&base, "/scale_rule/min_replicas", json!(0)),
@@ -2728,7 +2871,7 @@ mod definitions {
             #[test]
             fn the_formation_and_artifact_events_carry_the_values_sent() {
                 let w = World::new();
-                let formation = json!({"account_id": w.acme(), "name": "events", "zones": [], "cluster_id": w.path.cluster_id});
+                let formation = json!({"scope_id": w.scope(), "name": "events", "zones": []});
                 let body = w.accepts(
                     steps::ACCOUNT_ADMIN,
                     &w.caller,
@@ -2738,8 +2881,8 @@ mod definitions {
                 );
                 let sent = payload(&body);
                 assert_eq!(
-                    (sent["account_id"].clone(), sent["name"].clone()),
-                    (json!(w.acme()), json!("events")),
+                    (sent["scope_id"].clone(), sent["name"].clone()),
+                    (json!(w.scope()), json!("events")),
                     "{body}"
                 );
                 let id = published(&body, "formation_id");
@@ -2748,7 +2891,7 @@ mod definitions {
                     steps::DEPLOYER,
                     &w.caller,
                     ADD_COMPONENT,
-                    &json!({"formation_id": id, "account_id": w.acme(), "name": "api"}),
+                    &json!({"formation_id": id, "scope_id": w.scope(), "name": "api"}),
                     "added",
                 );
                 let sent = payload(&body);
@@ -2762,7 +2905,7 @@ mod definitions {
                     steps::ACCOUNT_ADMIN,
                     &w.caller,
                     CREATE_ENVIRONMENT,
-                    &json!({"formation_id": id, "account_id": w.acme(), "name": "staging", "protected": false}),
+                    &json!({"formation_id": id, "scope_id": w.scope(), "name": "staging", "protected": false}),
                     "created",
                 );
                 let sent = payload(&body);
@@ -2772,7 +2915,7 @@ mod definitions {
                     "{body}"
                 );
 
-                let mut artifact = steps::input::register_artifact(w.acme());
+                let mut artifact = steps::input::register_artifact(w.scope());
                 artifact["artifact_digest"] = json!("sha256:events");
                 artifact["kind"] = json!("Wasm");
                 artifact["signer_key_id"] = json!("k-events");
@@ -2784,7 +2927,7 @@ mod definitions {
                     "registered",
                 );
                 let sent = payload(&body);
-                for field in ["artifact_digest", "account_id", "kind", "signer_key_id"] {
+                for field in ["artifact_digest", "scope_id", "kind", "signer_key_id"] {
                     assert_eq!(
                         sent[field], artifact[field],
                         "ArtifactRegistered.{field}: {body}"
@@ -2795,7 +2938,7 @@ mod definitions {
                     steps::DEPLOYER,
                     &w.caller,
                     COMMIT_REVISION,
-                    &json!({"formation_id": id, "account_id": w.acme()}),
+                    &json!({"formation_id": id, "scope_id": w.scope()}),
                     "committed",
                 );
                 let sent = payload(&body);
@@ -2818,7 +2961,7 @@ mod definitions {
                 let site = w.ids.formation_id.clone();
                 let (_, before) = commit(&w, &site);
                 let other = w.formation("neighbour", true);
-                steps::create_environment(&w.client, &w.caller, &other, w.acme());
+                steps::create_environment(&w.client, &w.caller, &other, w.scope());
                 let (number, after) = commit(&w, &site);
                 assert_eq!(number, json!(3));
                 assert_eq!(
@@ -2841,7 +2984,7 @@ mod definitions {
                         steps::DEPLOYER,
                         &w.caller,
                         ADD_COMPONENT,
-                        &json!({"formation_id": twin, "account_id": w.acme(), "name": name}),
+                        &json!({"formation_id": twin, "scope_id": w.scope(), "name": name}),
                         "added",
                     );
                 }
@@ -2849,7 +2992,7 @@ mod definitions {
                     steps::ACCOUNT_ADMIN,
                     &w.caller,
                     CREATE_ENVIRONMENT,
-                    &json!({"formation_id": twin, "account_id": w.acme(), "name": "prod", "protected": true}),
+                    &json!({"formation_id": twin, "scope_id": w.scope(), "name": "prod", "protected": true}),
                     "created",
                 );
                 let (number, digest) = commit(&w, &twin);
@@ -2886,6 +3029,7 @@ mod skeleton {
     /// node agent's two records of its instance.
     const REQUESTS: &[&str] = &[
         "weft.infrastructure.CreateCloud",
+        "weft.infrastructure.ConfigureCloud",
         "weft.infrastructure.DeclareZone",
         "weft.infrastructure.DefinePriorityClass",
         "weft.workloads.RegisterRuntime",
@@ -2898,10 +3042,12 @@ mod skeleton {
         "weft.infrastructure.RecordNodeObservation",
         "weft.nodes.OpenNodeSession",
         "weft.accounts.CreateAccount",
-        "weft.formations.CreateFormation",
-        "weft.formations.AddComponent",
-        "weft.formations.CommitRevision",
-        "weft.formations.CreateEnvironment",
+        "weft.accounts.RecordAccountScope",
+        "weft.architecture.CreateFormation",
+        "weft.cluster.PinFormation",
+        "weft.architecture.AddComponent",
+        "weft.architecture.CommitRevision",
+        "weft.architecture.CreateEnvironment",
         "weft.artifacts.RegisterArtifact",
         "weft.workloads.DefineWorkload",
         "weft.workloads.DefineService",

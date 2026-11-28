@@ -12,6 +12,7 @@
 //! - [`bindings`]: the bindings of the path delivered by hand, with their per-refusal policies.
 //! - [`quota`]: the `over-quota` decision of the outcome group `quota`.
 //! - [`conversions`]: the conversions of `ess/components.yaml` the path needs.
+//! - [`transformations`]: the binding transformations the generated system owes.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -22,6 +23,7 @@ pub mod conversions;
 pub mod log;
 pub mod quota;
 pub mod storage;
+pub mod transformations;
 
 /// What `build.rs` writes from the generated code: the storage port, the `Row` enum, the codecs
 /// and the stub of every obligation without a file of `src/behaviours/`. Its text follows from
@@ -47,7 +49,7 @@ pub type System = weft_system::System<
     Behaviours,
     Behaviours,
     Behaviours,
-    weft_system::obligations::Unimplemented,
+    transformations::Transformations,
 >;
 
 /// The storage and context ports. Clones share the same store and context.
@@ -105,7 +107,7 @@ impl Ports {
 }
 
 /// The system over `ports`: every component's behaviours are the generated ones over a clone of
-/// `ports`, and the one binding transformation the system owes answers the generated stub.
+/// `ports`, and the binding transformations the system owes are [`transformations::Transformations`].
 pub fn system(ports: &Ports) -> System {
     let behaviours = || weft_types::behaviour::Generated::new(ports.clone());
     weft_system::System::new(
@@ -113,6 +115,6 @@ pub fn system(ports: &Ports) -> System {
         weft_control::WeftControl::new(behaviours()),
         weft_edge::WeftEdge::new(behaviours()),
         weft_node::WeftNode::new(behaviours()),
-        weft_system::obligations::Unimplemented,
+        transformations::Transformations,
     )
 }

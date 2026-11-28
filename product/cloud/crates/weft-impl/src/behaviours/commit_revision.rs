@@ -1,6 +1,6 @@
-//! `weft.formations.CommitRevision` (`PLAN.md` § Obligations, `ess/4-applications/formations.yaml`),
-//! in declaration order: `not-callers-account` (a caller acting in no account counts as another
-//! account's), `no-such-formation`, `formation-of-other-account`, `retired`, `empty` (the
+//! `weft.architecture.CommitRevision` (`PLAN.md` § Obligations, `ess/cloud/9-composition/architecture.yaml`),
+//! in declaration order: `not-callers-scope` (a caller acting in no scope counts as another
+//! scope's), `no-such-formation`, `formation-of-other-scope`, `retired`, `empty` (the
 //! formation has no component), `committed` otherwise.
 //!
 //! The specification leaves two values to the implementation:
@@ -16,14 +16,14 @@
 
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use weft_types::behaviour::{
-    ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage,
-};
-use weft_types::formations::obligations::CommitRevisionBehavior;
-use weft_types::formations::{
+use weft_types::architecture::obligations::CommitRevisionBehavior;
+use weft_types::architecture::{
     CommitRevision, CommitRevisionOutcome, EmptyFormation, FormationRevisionData,
     FormationRevisionSnapshot, FormationRevisionState, FormationSnapshot, FormationState,
     FormationStateConflict, NoSuchFormation, RevisionCommitted,
+};
+use weft_types::behaviour::{
+    ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage, FormationStorage,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -37,8 +37,8 @@ impl CommitRevisionBehavior for Ports {
         &mut self,
         input: CommitRevision,
     ) -> Result<CommitRevisionOutcome, UnmetObligation> {
-        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(CommitRevisionOutcome::NotCallersAccount {
+        if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
+            return Ok(CommitRevisionOutcome::NotCallersScope {
                 error: NoSuchFormation,
             });
         }
@@ -47,8 +47,8 @@ impl CommitRevisionBehavior for Ports {
                 error: NoSuchFormation,
             });
         };
-        if formation.data.account_id != input.account_id {
-            return Ok(CommitRevisionOutcome::FormationOfOtherAccount {
+        if formation.data.scope_id != input.scope_id {
+            return Ok(CommitRevisionOutcome::FormationOfOtherScope {
                 error: NoSuchFormation,
             });
         }

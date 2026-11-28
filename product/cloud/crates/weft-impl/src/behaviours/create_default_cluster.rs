@@ -1,8 +1,8 @@
 //! `weft.cluster.CreateDefaultCluster` (`PLAN.md` § Obligations, `ess/3-resources/cluster.yaml`),
 //! in declaration order: `no-zones`, `unknown-cloud`, `zone-unusable` (a named zone retired or of
 //! another cloud; a zone that does not exist is not refused here), `default-exists` (a cluster of
-//! the cloud without an account that is not deleted), `created` otherwise, with a shared control
-//! plane.
+//! the cloud without a scope that is not deleted), `created` otherwise, with a shared control
+//! plane and no formation pinned.
 
 use weft_types::behaviour::{CloudStorage, ClusterStorage, ZoneStorage};
 use weft_types::cluster::obligations::CreateDefaultClusterBehavior;
@@ -40,7 +40,7 @@ impl CreateDefaultClusterBehavior for Ports {
         }
         if ClusterStorage::list(self).iter().any(|row| {
             row.data.cloud_id == input.cloud_id
-                && row.data.account_id.is_none()
+                && row.data.scope_id.is_none()
                 && row.state != ClusterState::Deleted
         }) {
             return Ok(CreateDefaultClusterOutcome::DefaultExists {
@@ -55,11 +55,12 @@ impl CreateDefaultClusterBehavior for Ports {
                 data: ClusterData {
                     cluster_id: cluster_id.clone(),
                     cloud_id: input.cloud_id.clone(),
-                    account_id: None,
+                    scope_id: None,
                     name: input.name.clone(),
                     control_plane: ControlPlaneMode::Shared,
                     min_isolation: input.min_isolation,
                     zones: input.zones.clone(),
+                    formations: Vec::new(),
                 },
             },
         );

@@ -55,6 +55,7 @@ impl CreateAccountBehavior for Ports {
                     account_id: account_id.clone(),
                     tenant_id: input.tenant_id.clone(),
                     parent_account_id: None,
+                    scope_id: None,
                     name: input.name.clone(),
                 },
             },

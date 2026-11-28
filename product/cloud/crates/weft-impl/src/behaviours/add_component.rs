@@ -1,16 +1,16 @@
-//! `weft.formations.AddComponent` (`PLAN.md` § Obligations, `ess/4-applications/formations.yaml`), in
-//! declaration order: `not-callers-account` (a caller acting in no account counts as another
-//! account's), `no-such-formation`, `formation-of-other-account`, `retired`, `name-taken` (a
+//! `weft.architecture.AddComponent` (`PLAN.md` § Obligations, `ess/cloud/9-composition/architecture.yaml`), in
+//! declaration order: `not-callers-scope` (a caller acting in no scope counts as another
+//! scope's), `no-such-formation`, `formation-of-other-scope`, `retired`, `name-taken` (a
 //! component of the formation with the name), `added` otherwise: not on the border, its internal
 //! name `<name>.<formation's internal domain>` (`orders.shop.internal`).
 
-use weft_types::behaviour::{ComponentStorage, Context, FormationStorage};
-use weft_types::formations::obligations::AddComponentBehavior;
-use weft_types::formations::{
+use weft_types::architecture::obligations::AddComponentBehavior;
+use weft_types::architecture::{
     AddComponent, AddComponentOutcome, ComponentAdded, ComponentData, ComponentNameTaken,
     ComponentSnapshot, ComponentState, FormationState, FormationStateConflict, InternalName,
     NoSuchFormation,
 };
+use weft_types::behaviour::{ComponentStorage, Context, FormationStorage};
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
 use weft_types::shared::ComponentId;
@@ -23,8 +23,8 @@ impl AddComponentBehavior for Ports {
         &mut self,
         input: AddComponent,
     ) -> Result<AddComponentOutcome, UnmetObligation> {
-        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(AddComponentOutcome::NotCallersAccount {
+        if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
+            return Ok(AddComponentOutcome::NotCallersScope {
                 error: NoSuchFormation,
             });
         }
@@ -33,8 +33,8 @@ impl AddComponentBehavior for Ports {
                 error: NoSuchFormation,
             });
         };
-        if formation.data.account_id != input.account_id {
-            return Ok(AddComponentOutcome::FormationOfOtherAccount {
+        if formation.data.scope_id != input.scope_id {
+            return Ok(AddComponentOutcome::FormationOfOtherScope {
                 error: NoSuchFormation,
             });
         }

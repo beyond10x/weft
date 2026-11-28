@@ -1,17 +1,17 @@
-//! `weft.formations.CreateEnvironment` (`PLAN.md` § Obligations,
-//! `ess/4-applications/formations.yaml`), in declaration order: `not-callers-account` (a caller
-//! acting in no account counts as another account's), `no-such-formation`,
-//! `formation-of-other-account`, `retired`, `name-taken` (an environment of the formation with
+//! `weft.architecture.CreateEnvironment` (`PLAN.md` § Obligations,
+//! `ess/cloud/9-composition/architecture.yaml`), in declaration order: `not-callers-scope` (a caller
+//! acting in no scope counts as another scope's), `no-such-formation`,
+//! `formation-of-other-scope`, `retired`, `name-taken` (an environment of the formation with
 //! the name, in any state), `created` otherwise: `Active`, made by hand (`Manual`), in the
-//! formation's account, with no quota slice and no preview source.
+//! formation's scope, with no quota slice and no preview source.
 
-use weft_types::behaviour::{Context, EnvironmentStorage, FormationStorage};
-use weft_types::formations::obligations::CreateEnvironmentBehavior;
-use weft_types::formations::{
+use weft_types::architecture::obligations::CreateEnvironmentBehavior;
+use weft_types::architecture::{
     CreateEnvironment, CreateEnvironmentOutcome, EnvironmentCreated, EnvironmentData,
     EnvironmentNameTaken, EnvironmentOrigin, EnvironmentSnapshot, EnvironmentState, FormationState,
     FormationStateConflict, NoSuchFormation,
 };
+use weft_types::behaviour::{Context, EnvironmentStorage, FormationStorage};
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
 use weft_types::shared::EnvironmentId;
@@ -24,8 +24,8 @@ impl CreateEnvironmentBehavior for Ports {
         &mut self,
         input: CreateEnvironment,
     ) -> Result<CreateEnvironmentOutcome, UnmetObligation> {
-        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(CreateEnvironmentOutcome::NotCallersAccount {
+        if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
+            return Ok(CreateEnvironmentOutcome::NotCallersScope {
                 error: NoSuchFormation,
             });
         }
@@ -34,8 +34,8 @@ impl CreateEnvironmentBehavior for Ports {
                 error: NoSuchFormation,
             });
         };
-        if formation.data.account_id != input.account_id {
-            return Ok(CreateEnvironmentOutcome::FormationOfOtherAccount {
+        if formation.data.scope_id != input.scope_id {
+            return Ok(CreateEnvironmentOutcome::FormationOfOtherScope {
                 error: NoSuchFormation,
             });
         }
@@ -60,7 +60,7 @@ impl CreateEnvironmentBehavior for Ports {
                 data: EnvironmentData {
                     environment_id: environment_id.clone(),
                     formation_id: input.formation_id.clone(),
-                    account_id: formation.data.account_id,
+                    scope_id: formation.data.scope_id,
                     name: input.name.clone(),
                     quota_slice: Vec::new(),
                     origin: EnvironmentOrigin::Manual,

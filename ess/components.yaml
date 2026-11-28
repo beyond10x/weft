@@ -1262,7 +1262,8 @@ bindings:
       # workload-retired: harmless; a retired workload takes no new instance, and its service is
       # retired with it or replaced by the new revision's.
       drop: [replica-live, workload-retired]
-      # over-quota is transient (a quota raised or freed admits it). no-workload, no-service and
+      # CreateInstance has no over-quota (the blocks took it out of the outcome group quota;
+      # PlaceInstance admits by quota). no-workload, no-service and
       # the foreign-* refusals cannot follow (RequestReplica read the service, which names the
       # workload); no-job, no-invocation, no-box, no-session and no-warm-pool read inputs this
       # binding leaves absent. A transport failure is retried.
