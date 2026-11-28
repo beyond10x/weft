@@ -220,8 +220,8 @@ impl<'a> Follower<'a> {
     }
 
     /// The same follower with `records` as the node's own records (`weft.node`). Without them,
-    /// each `StartProcess`, `RestartProcess` and `StopProcess` is refused and logged, and the
-    /// process runs either way.
+    /// each `StartProcess`, `RestartProcess` and `StopProcess` is refused, logged and reported,
+    /// and the process runs either way.
     #[must_use]
     pub fn records(mut self, records: &'a (dyn NodeRecords + Sync)) -> Self {
         self.records = records;

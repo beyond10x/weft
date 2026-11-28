@@ -19,7 +19,7 @@ implements it.
 | Part | Where | Status |
 |---|---|---|
 | The domain model: 28 domains in 10 layers of weft's own files over cloudspec's vendored blocks | [`ess/`](https://github.com/beyond10x/weft/tree/main/ess) | Exists, valid |
-| Components and reconciliation bindings: `weft-api`, `weft-control`, `weft-node`, `weft-edge` | [`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml) | Exists, valid |
+| Components and reconciliation bindings: `weft-api`, `weft-control`, `weft-edge` | [`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml) | Exists, valid |
 | The node channel and the exec channel | [`protocols/`](https://github.com/beyond10x/weft/tree/main/protocols) | Exists |
 | cloudspec-sim: explores and simulates the specification in memory; a tool of cloudspec at a pinned revision | [`crates/cloudspec-sim`](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim) | Exists |
 | Experiments: a full setup, node loss, duplicate delivery and others | [`sim/experiments/`](https://github.com/beyond10x/weft/tree/main/sim/experiments) | Exist |
@@ -42,14 +42,14 @@ The plan, not yet built:
 
 ## The planes
 
-The specification splits weft into four planes and four server components
+The specification splits weft into four planes: three server components and the node agent
 ([concepts: nodes and clusters](concepts/nodes-and-clusters.md)):
 
 | Plane | Component | Does |
 |---|---|---|
 | Management | `weft-api` | The user API: logins, tokens, tenants, accounts, formations. Called by the CLI and by CI. |
 | Control | `weft-control` | State, scheduling, identity, secret delivery; translation is cloudspec's. Decides; runs no workload. |
-| Worker | `weft-node` | One agent per node; starts, observes and stops instances. Holds no state the control plane does not know. |
+| Worker | node agent | One agent per node; starts, observes and stops instances. Holds no state the control plane does not know: its records (`weft.node`) are `weft-control`'s. |
 | Data | `weft-edge` | The gateway in front of public endpoints; holds a request while a sleeping service wakes. |
 
 ```mermaid

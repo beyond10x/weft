@@ -3,7 +3,7 @@
 //!
 //! - [`Ports`]: the storage port on SQLite ([`storage`], one table per entity, one database file)
 //!   and the context port ([`context`]: the clock, identities minted as UUIDv4, the `external:`
-//!   decider, the caller's attributes). One `Ports` is shared by the four components of the
+//!   decider, the caller's attributes). One `Ports` is shared by the three components of the
 //!   [`System`]; clones share one store and one context.
 //! - The obligations of `src/behaviours/`, one file each; every other obligation answers the
 //!   generated stub, `UnmetObligation` (`build.rs`).
@@ -46,13 +46,8 @@ include!(concat!(env!("OUT_DIR"), "/weft_impl_behaviours.rs"));
 pub type Behaviours = weft_types::behaviour::Generated<Ports>;
 
 /// The `weft` system with weft's ports behind every component.
-pub type System = weft_system::System<
-    Behaviours,
-    Behaviours,
-    Behaviours,
-    Behaviours,
-    transformations::Transformations,
->;
+pub type System =
+    weft_system::System<Behaviours, Behaviours, Behaviours, transformations::Transformations>;
 
 /// The storage and context ports. Clones share the same store and context.
 #[derive(Clone)]
@@ -116,7 +111,6 @@ pub fn system(ports: &Ports) -> System {
         weft_api::WeftApi::new(behaviours()),
         weft_control::WeftControl::new(behaviours()),
         weft_edge::WeftEdge::new(behaviours()),
-        weft_node::WeftNode::new(behaviours()),
         transformations::Transformations,
     )
 }

@@ -204,16 +204,16 @@ cmp -s "$pages/components.md" "$work/cells/pages/components.md" &&
 DOCS_SPEC_ESS=ess DOCS_SPEC_PAGES=$work/cells/pages DOCS_SPEC_GEN=$work/cells/docs-spec-pages.sh expect cells 1 'components table: cells differ'
 
 # placement: the generated placement bullets say what the IR shows. In a copy of the IR,
-# weft-control no longer accepts its first command and weft-node accepts the first command of
+# weft-control no longer accepts its first command and weft-edge accepts the first command of
 # weft-api; the generator's --check must then fail the tree's page with both changed bullets.
 ess specify compile --path ess --format json > "$work/placement-base.json" 2> /dev/null || exit 2
 jq '(.components["weft-control"].accepts) |= .[1:]
-  | (.components["weft-node"].accepts) += [.components["weft-api"].accepts[0]]' "$work/placement-base.json" > "$work/placement-moved.json" || exit 2
+  | (.components["weft-edge"].accepts) += [.components["weft-api"].accepts[0]]' "$work/placement-base.json" > "$work/placement-moved.json" || exit 2
 DOCS_SPEC_IR=$work/placement-moved.json tools/docs-spec-pages.sh --check > "$work/placement-gen.out" 2>&1
 got=$?
 if [ "$got" = 1 ] &&
   grep -qF '> - Domains with commands that do not sit with exactly one component accepting all of them: `' "$work/placement-gen.out" &&
-  grep -qF '> - Components that accept commands of a domain they do not own: `weft-node`.' "$work/placement-gen.out"; then
+  grep -qF '> - Components that accept commands of a domain they do not own: `weft-edge`.' "$work/placement-gen.out"; then
   echo "test-docs-spec-pages: ok: placement (exit $got)"
 else
   echo "test-docs-spec-pages: placement: the generator's --check exit $got, want 1 with both changed bullets"
