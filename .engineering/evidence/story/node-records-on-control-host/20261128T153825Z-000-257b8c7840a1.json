@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T15:38:25Z",
+  "actor": "human:operator",
+  "artifact": "story:node-records-on-control-host",
+  "kind": "story",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the owner's pick D-N1 = A relayed by the operator: the control host serves the weft.node records; weft-node moves to the control-host component"
+  }
+}
