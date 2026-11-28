@@ -15,12 +15,18 @@
 //!   are kept under its source digest ([`weft_impl::documents`]) in the same transaction. A
 //!   refusal of the command keeps no bytes. The endpoint answers what the command answers.
 //!
-//! A request the endpoint refuses itself (`400` no `formation_id`, `403` a caller acting in no
-//! scope, `404` not a path of the endpoint, `405` not `POST`) is logged as a request line too,
-//! with no operation, and writes nothing.
+//! `POST /cloudspec/plans/<plan_id>/apply` applies the plan of a cloudspec source and rolls out
+//! its snippet parts ([`cloudspec_apply`]).
+//!
+//! A request the endpoint refuses itself (`400` no `formation_id` or no strategy, `403` a caller
+//! acting in no scope, `404` not a path of the endpoint, `405` not `POST`, `422` a refused file
+//! or a plan with no source) is logged as a request line too, with no operation, and writes
+//! nothing.
 
 use serde_json::json;
 use weft_bin::Host;
+
+use crate::cloudspec_apply;
 use weft_cloudspec::Submission;
 use weft_impl::context::CallerAttributes;
 use weft_server::http::{self, Request, Response};
@@ -49,10 +55,19 @@ pub fn answer(host: &Host, request: &Request, trust_callers: bool) -> Response {
             }
         }
         SUBMISSIONS => http::method_not_allowed("POST"),
-        other => Response::refusal(
-            404,
-            &format!("`{other}` is not a path of the cloudspec endpoint"),
-        ),
+        other => match cloudspec_apply::plan_of(other) {
+            Some(plan_id) if request.method == "POST" => {
+                match cloudspec_apply::apply(host, request, plan_id, caller.as_ref(), attributes) {
+                    Ok(answer) => return answer,
+                    Err(refused) => refused,
+                }
+            }
+            Some(_) => http::method_not_allowed("POST"),
+            None => Response::refusal(
+                404,
+                &format!("`{other}` is not a path of the cloudspec endpoint"),
+            ),
+        },
     };
     host.log().request(None, actor, refused.status);
     refused
