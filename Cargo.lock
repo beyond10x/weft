@@ -1447,6 +1447,7 @@ name = "weft-bin"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "weft-cloudspec",
  "weft-controllers",
  "weft-impl",
  "weft-server",
@@ -1459,6 +1460,14 @@ name = "weft-client"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+]
+
+[[package]]
+name = "weft-cloudspec"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1500,6 +1509,7 @@ dependencies = [
  "time",
  "uuid",
  "weft-api",
+ "weft-cloudspec",
  "weft-control",
  "weft-edge",
  "weft-node",

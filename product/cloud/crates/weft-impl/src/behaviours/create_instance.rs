@@ -11,15 +11,16 @@
 //!    `Running`, `Paused`) of the same service and index;
 //! 3. `created` otherwise: a `Pending` instance with the workload's scope, artifact, isolation
 //!    as its minimum, processes and restart policy, and `InstanceCreated` with the workload's
-//!    formation, claims and priority and the formation's zones.
+//!    identity, claims and priority and the zones of the formation an assignment
+//!    (`weft.architecture.ComponentWorkload`) ties the workload to (none: any zone).
 //!
 //! The blocks take `CreateInstance` out of the outcome group `quota`: an instance is created
 //! without a quota check, and `weft.scheduling.PlaceInstance` (`quota-exceeded`, weft's run-time
 //! admission) refuses to place one past its scope's quota.
 
 use weft_types::behaviour::{
-    BoxStorage, FormationStorage, InstanceStorage, InvocationStorage, JobStorage, ServiceStorage,
-    SessionStorage, WarmPoolStorage, WorkloadStorage,
+    BoxStorage, ComponentWorkloadStorage, FormationStorage, InstanceStorage, InvocationStorage,
+    JobStorage, ServiceStorage, SessionStorage, WarmPoolStorage, WorkloadStorage,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -141,7 +142,12 @@ impl CreateInstanceBehavior for Ports {
 
         let workload = workload.data;
 
-        let zones = FormationStorage::get(self, &workload.formation_id)
+        // The zones of the formation an assignment ties the workload to (`weft.architecture.ComponentWorkload`;
+        // the workload names no formation since story:cloud-blocks-layer-refactor-pin); none: any zone.
+        let zones = ComponentWorkloadStorage::list(self)
+            .into_iter()
+            .find(|row| row.data.workload_id == input.workload_id)
+            .and_then(|row| FormationStorage::get(self, &row.data.formation_id))
             .map(|formation| formation.data.zones)
             .unwrap_or_default();
         let instance_id = InstanceId(Uuid(mint()));
@@ -150,7 +156,7 @@ impl CreateInstanceBehavior for Ports {
             workload_id: input.workload_id.clone(),
             minimum_isolation: workload.isolation,
             scope_id: workload.scope_id.clone(),
-            formation_id: workload.formation_id.clone(),
+            identity: workload.identity.clone(),
             claims: workload.claims.clone(),
             service_id: input.service_id.clone(),
             replica_index: input.replica_index,

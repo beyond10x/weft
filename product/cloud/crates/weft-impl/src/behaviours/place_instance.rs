@@ -9,21 +9,24 @@
 //!    `already-reserved`, `other-account` (the request's scope is not the input's),
 //!    `other-tenant` (no account of the input's tenant holds the input's scope),
 //!    `instance-of-other-scope` (the request's instance is missing or of another scope; answers
-//!    `NotFound`), `other-formation`, `instance-of-other-formation` (the workload of the
-//!    request's instance is missing or of another formation; answers `NotFound`),
+//!    `NotFound`), `instance-of-other-formation` (no `weft.architecture.ComponentWorkload`
+//!    assigns the workload of the request's instance to the formation; answers `NotFound`),
 //!    `other-cluster` (the cluster's `formations` do not list the formation:
 //!    a formation is placed only in the cluster `weft.cluster.PinFormation` pinned it to),
 //!    `binding-of-other-account`, `binding-on-other-node`, `below-microvm`, `below-user-kernel`,
-//!    `below-container`, `below-cluster-microvm`, `below-cluster-user-kernel`,
-//!    `below-cluster-container`, `outside-cluster-zones`, `outside-zones`, `shared-kernel`,
+//!    `below-container`, `below-process-sandbox`, `below-cluster-microvm`,
+//!    `below-cluster-user-kernel`, `below-cluster-container`, `below-cluster-process-sandbox`
+//!    (`None`, no sandbox, is the weakest level, below `ProcessSandbox`),
+//!    `outside-cluster-zones`, `outside-zones`, `shared-kernel`,
 //!    `node-not-schedulable`, `node-not-connected`, `node-zone-differs`, `node-in-other-cloud`,
 //!    `node-pool-differs`, `node-in-other-clusters-pool`, `node-outside-dedicated-pools`,
 //!    `cluster-pool-differs`, `group-not-of-node`, `crosses-closed-link`,
 //!    `isolation-not-offered`;
 //! 4. the external branches, in declaration order, decided from the rows of the same store:
 //!    - `no-capacity`: for a class the request claims, the node's free capacity is less than
-//!      the request claims. Free capacity is the node's observed capacity minus the claims of
-//!      the requests of the node's live decisions (`Reserved`, `Bound`, `Evicting`, the set
+//!      the request claims. Free capacity is the node's observed capacity (the newest
+//!      `weft.inventory.NodeCapacity` of the node by `observed_at`) minus the claims of the
+//!      requests of the node's live decisions (`Reserved`, `Bound`, `Evicting`, the set
 //!      `holds` names) and minus the claims of the node's live bindings (`Reserved`,
 //!      `Active`) that neither one of those decisions nor this placement's input names, so no
 //!      claim is taken twice; a node with no observed capacity has none;
@@ -33,15 +36,18 @@
 //!    - `device-not-wiped`: a `Wiping` device of the node that a binding of the placement, on
 //!      that node, names;
 //! 5. `placed`, the branch the contract takes otherwise: a `Reserved` decision with the
-//!    request's instance, scope, minimum isolation, formation, gang and priority, and
+//!    request's instance, scope, minimum isolation, gang and priority, the input's formation,
+//!    the topology
+//!    of the input's group (`topology_id`), and
 //!    `InstancePlaced`.
 
 use std::collections::HashMap;
 
 use weft_types::behaviour::{
     AccountStorage, BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage,
-    DeviceStorage, InstanceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage,
-    SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage, WorkloadStorage,
+    ComponentWorkloadStorage, DeviceStorage, InstanceStorage, NodeCapacityStorage,
+    NodeSessionStorage, NodeStorage, PlacementDecisionStorage, SchedulingRequestStorage,
+    TopologyGroupStorage, TopologyLinkStorage,
 };
 use weft_types::claims::BindingState;
 use weft_types::cluster::ClusterNodePoolState;
@@ -59,7 +65,7 @@ use weft_types::scheduling::{
     RequestReserved, SchedulingRequestState, StateConflict, TenantKernelShared, TopologyMismatch,
     ZoneMismatch,
 };
-use weft_types::shared::{BindingId, IsolationLevel, PlacementDecisionId};
+use weft_types::shared::{BindingId, IsolationLevel, NodeId, PlacementDecisionId, ResourceAmount};
 use weft_types::topology::{TopologyGroupState, TopologyLinkState};
 
 use crate::context::{instant, mint};
@@ -73,6 +79,17 @@ fn holds(state: PlacementDecisionState) -> bool {
             | PlacementDecisionState::Bound
             | PlacementDecisionState::Evicting
     )
+}
+
+/// The capacity of `node`: the amounts of its newest `weft.inventory.NodeCapacity` row by
+/// `observed_at` (story:cloud-blocks-layer-refactor-pin: split out of
+/// `weft.infrastructure.Node`), or `None` before its first report.
+fn newest_capacity(ports: &Ports, node: &NodeId) -> Option<Vec<ResourceAmount>> {
+    NodeCapacityStorage::list(ports)
+        .into_iter()
+        .filter(|row| &row.data.node_id == node)
+        .max_by_key(|row| instant(&row.data.observed_at))
+        .map(|row| row.data.capacity)
 }
 
 /// Whether an instance at `isolation` shares the node's kernel (every level but `MicroVm`).
@@ -138,16 +155,13 @@ impl PlaceInstanceBehavior for Ports {
         let Some(instance) = instance else {
             return Ok(PlaceInstanceOutcome::InstanceOfOtherScope { error: NotFound });
         };
-        if request.data.formation_id != input.formation_id {
-            return Ok(PlaceInstanceOutcome::OtherFormation {
-                error: RequestMismatch,
-            });
-        }
-        // Deny by default: an instance whose workload row is missing, or is of another
-        // formation, is answered as a missing request.
-        if WorkloadStorage::get(self, &instance.data.workload_id)
-            .is_none_or(|workload| workload.data.formation_id != input.formation_id)
-        {
+        // Deny by default: an instance whose workload no assignment of the formation names
+        // (`weft.architecture.ComponentWorkload`; the request and the workload name no
+        // formation) is answered as a missing request.
+        if !ComponentWorkloadStorage::list(self).iter().any(|row| {
+            row.data.workload_id == instance.data.workload_id
+                && row.data.formation_id == input.formation_id
+        }) {
             return Ok(PlaceInstanceOutcome::InstanceOfOtherFormation { error: NotFound });
         }
         // Deny by default: a formation the cluster does not list (one not pinned to it, by
@@ -188,13 +202,20 @@ impl PlaceInstanceBehavior for Ports {
         let isolation = input.isolation;
         let weaker_than_microvm = matches!(
             isolation,
-            IsolationLevel::UserKernel | IsolationLevel::Container | IsolationLevel::ProcessSandbox
+            IsolationLevel::UserKernel
+                | IsolationLevel::Container
+                | IsolationLevel::ProcessSandbox
+                | IsolationLevel::None
         );
         let weaker_than_user_kernel = matches!(
             isolation,
-            IsolationLevel::Container | IsolationLevel::ProcessSandbox
+            IsolationLevel::Container | IsolationLevel::ProcessSandbox | IsolationLevel::None
         );
-        let weaker_than_container = matches!(isolation, IsolationLevel::ProcessSandbox);
+        let weaker_than_container = matches!(
+            isolation,
+            IsolationLevel::ProcessSandbox | IsolationLevel::None
+        );
+        let weaker_than_process_sandbox = isolation == IsolationLevel::None;
         let minimum = request.data.min_isolation;
         if weaker_than_microvm && minimum == IsolationLevel::MicroVm {
             return Ok(PlaceInstanceOutcome::BelowMicrovm {
@@ -211,6 +232,11 @@ impl PlaceInstanceBehavior for Ports {
                 error: IsolationTooWeak,
             });
         }
+        if weaker_than_process_sandbox && minimum == IsolationLevel::ProcessSandbox {
+            return Ok(PlaceInstanceOutcome::BelowProcessSandbox {
+                error: IsolationTooWeak,
+            });
+        }
         let cluster_minimum = cluster.data.min_isolation;
         if weaker_than_microvm && cluster_minimum == IsolationLevel::MicroVm {
             return Ok(PlaceInstanceOutcome::BelowClusterMicrovm {
@@ -224,6 +250,11 @@ impl PlaceInstanceBehavior for Ports {
         }
         if weaker_than_container && cluster_minimum == IsolationLevel::Container {
             return Ok(PlaceInstanceOutcome::BelowClusterContainer {
+                error: IsolationTooWeak,
+            });
+        }
+        if weaker_than_process_sandbox && cluster_minimum == IsolationLevel::ProcessSandbox {
+            return Ok(PlaceInstanceOutcome::BelowClusterProcessSandbox {
                 error: IsolationTooWeak,
             });
         }
@@ -352,11 +383,11 @@ impl PlaceInstanceBehavior for Ports {
             });
         }
 
-        // no-capacity: the node's observed capacity minus the claims of its live decisions and
-        // minus the claims of its live bindings that none of those decisions and not this
-        // placement names: each claim is taken once.
+        // no-capacity: the node's observed capacity (its newest `weft.inventory.NodeCapacity`)
+        // minus the claims of its live decisions and minus the claims of its live bindings that
+        // none of those decisions and not this placement names: each claim is taken once.
         let mut free: HashMap<String, i64> = HashMap::new();
-        for amount in node.data.capacity.iter().flatten() {
+        for amount in newest_capacity(self, &input.node_id).iter().flatten() {
             *free.entry(amount.resource_class.0.clone()).or_default() += amount.amount;
         }
         let mut counted: Vec<&BindingId> = input.bindings.iter().collect();
@@ -427,6 +458,11 @@ impl PlaceInstanceBehavior for Ports {
 
         let decision_id = PlacementDecisionId(Uuid(mint()));
         let data = request.data;
+        // `topology_id: {related: {via: input.topology_group_id, field: topology_id}}`: the
+        // topology of the group, absent with the group (or with its row).
+        let topology_id = input.topology_group_id.as_ref().and_then(|group| {
+            TopologyGroupStorage::get(self, group).map(|row| row.data.topology_id)
+        });
         PlacementDecisionStorage::put(
             self,
             PlacementDecisionSnapshot {
@@ -439,8 +475,9 @@ impl PlaceInstanceBehavior for Ports {
                     scope_id: data.scope_id,
                     node_id: input.node_id.clone(),
                     zone: input.zone,
-                    formation_id: data.formation_id,
+                    formation_id: input.formation_id,
                     topology_group_id: input.topology_group_id,
+                    topology_id,
                     isolation,
                     min_isolation: data.min_isolation,
                     assigned: false,

@@ -83,7 +83,6 @@ impl ProvisionPoolNodeBehavior for Ports {
                     role: NodeRole::Worker,
                     join_token_expires_at: input.join_token_expires_at.clone(),
                     join_token_used: false,
-                    capacity: None,
                     isolation_facts: None,
                     observed_at: None,
                 },

@@ -84,9 +84,10 @@ pub mod input {
     /// The digest of the skeleton's snippet artifact.
     pub const ARTIFACT_DIGEST: &str = "sha256:weft-skeleton-snippet";
 
-    /// `create-formation-site`: formation `site` of `scope_id`, in no cluster until [`pin_formation`].
+    /// `create-formation-site`: formation `site` of `scope_id`, with no parity constraint, in no
+    /// cluster until [`pin_formation`].
     pub fn create_formation(scope_id: &str) -> Value {
-        json!({"scope_id": scope_id, "name": "site", "zones": ["z1", "z2"]})
+        json!({"scope_id": scope_id, "name": "site", "zones": ["z1", "z2"], "parity": []})
     }
 
     /// `pin-site`: formation `formation_id` of `scope_id` runs in `cluster_id` (the default
@@ -133,7 +134,10 @@ pub mod input {
         json!({"name": "main", "role": "Main", "command": ["sh", "-c", "echo weft"], "environment": {}, "checks": []})
     }
 
-    /// What `DefineWorkload` names: the formation, its revision and environment, and the runtime.
+    /// What `DefineWorkload` and `AssignWorkload` name: the formation, its revision and
+    /// environment, and the runtime. `DefineWorkload` names the formation and environment only
+    /// in the workload identity ([`workload_identity`]; the workload names no formation since
+    /// story:cloud-blocks-layer-refactor-pin); `AssignWorkload` ties the workload to them.
     #[derive(Debug, Clone, Copy)]
     pub struct WorkloadOf<'a> {
         /// The scope.
@@ -153,9 +157,7 @@ pub mod input {
     pub fn define_workload(of: WorkloadOf<'_>) -> Value {
         json!({
             "scope_id": of.scope_id,
-            "formation_id": of.formation_id,
-            "formation_revision_id": of.formation_revision_id,
-            "environment_id": of.environment_id,
+            "identity": workload_identity(of),
             "component": "site",
             "package_kind": "Snippet",
             "artifact_digest": ARTIFACT_DIGEST,
@@ -173,6 +175,29 @@ pub mod input {
                 "backoff_window_seconds": 600,
             },
             "priority": "standard",
+        })
+    }
+
+    /// The component-level workload identity of component `site` (`weft.shared.WorkloadIdentity`,
+    /// the path without the instance segment): `<scope>/<formation>/<environment>/site`, each
+    /// segment the record's identity (the identity block's OPEN: names or ids; taken here: ids).
+    pub fn workload_identity(of: WorkloadOf<'_>) -> String {
+        format!(
+            "{}/{}/{}/site",
+            of.scope_id, of.formation_id, of.environment_id
+        )
+    }
+
+    /// `AssignWorkload`: `workload_id` realizes `component_id` of the revision in the
+    /// environment of `of`.
+    pub fn assign_workload(of: WorkloadOf<'_>, component_id: &str, workload_id: &str) -> Value {
+        json!({
+            "formation_id": of.formation_id,
+            "scope_id": of.scope_id,
+            "formation_revision_id": of.formation_revision_id,
+            "environment_id": of.environment_id,
+            "component_id": component_id,
+            "workload_id": workload_id,
         })
     }
 
@@ -577,6 +602,15 @@ pub fn define_workload(client: &Client, caller: &Value, input: Value) -> String 
     )
 }
 
+/// `AssignWorkload` as Deployer with `input` (`assigned`): the assignment's identity.
+pub fn assign_workload(client: &Client, caller: &Value, input: Value) -> String {
+    let command = "weft.architecture.AssignWorkload";
+    published(
+        &in_account(client, DEPLOYER, caller, command, input, "assigned"),
+        "component_workload_id",
+    )
+}
+
 /// `DefineService` as Deployer: one replica of `workload_id`, the service's identity.
 pub fn define_service(
     client: &Client,
@@ -616,7 +650,8 @@ pub struct Definitions {
 /// Runs the workload definitions after the operator and tenant `path`, each as its own actor in
 /// the path's account and scope: formation `site`, pinned to the default cluster, its component
 /// `site`, a revision, environment `prod`, the `Snippet` artifact, a runtime of `Snippet`, the
-/// workload and its service of one replica.
+/// workload, its assignment to the component (`AssignWorkload`, which `PlaceInstance` reads
+/// for the formation) and its service of one replica.
 pub fn run_definitions(client: &Client, path: &Path) -> Definitions {
     let caller = path_caller(path);
     let scope_id = path.scope_id.as_str();
@@ -627,14 +662,19 @@ pub fn run_definitions(client: &Client, path: &Path) -> Definitions {
     let environment_id = create_environment(client, &caller, &formation_id, scope_id);
     let artifact_digest = register_artifact(client, &caller, scope_id);
     let runtime_id = register_runtime(client, &["Snippet"]);
-    let workload = input::define_workload(input::WorkloadOf {
+    let of = input::WorkloadOf {
         scope_id,
         formation_id: &formation_id,
         formation_revision_id: &revision_id,
         environment_id: &environment_id,
         runtime_id: &runtime_id,
-    });
-    let workload_id = define_workload(client, &caller, workload);
+    };
+    let workload_id = define_workload(client, &caller, input::define_workload(of));
+    assign_workload(
+        client,
+        &caller,
+        input::assign_workload(of, &component_id, &workload_id),
+    );
     let service_id = define_service(client, &caller, &workload_id, scope_id);
     Definitions {
         formation_id,

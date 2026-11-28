@@ -57,6 +57,11 @@ entities:
         type: weft.shared.FormationId
       - name: topology_group_id
         type: Optional<weft.shared.TopologyGroupId>
+      # story:cloudspec-submission-pin: the topology of the decision's cluster, the one its group
+      # belongs to (absent with the group), so a reader of a decision's row reads that topology's
+      # links (weft.topology.TopologyLinks takes topology_id; cloudspec-sim's check closed-link).
+      - name: topology_id
+        type: Optional<weft.shared.TopologyId>
       # The level the node runs the instance at; at least the request's minimum (§10).
       - name: isolation
         type: weft.shared.IsolationLevel
@@ -96,6 +101,7 @@ entities:
     relations:
       - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: topology_group, kind: references, target: weft.topology.TopologyGroup, cardinality: one, via: topology_group_id}
+      - {name: topology, kind: references, target: weft.topology.Topology, cardinality: one, via: topology_id}
       - name: request
         kind: references
         target: weft.scheduling.SchedulingRequest
@@ -269,7 +275,7 @@ commands:
   # state, capacity, isolation facts and zone: cluster; quota: accounts and metering; device
   # wipe: resources) are named external refusals; each refuses, none falls back.
   # OPEN: does UserKernel (a user-space kernel such as gVisor) count as an instance's own kernel
-  # for the tenant rule? Taken: no, only MicroVm does; UserKernel, Container and ProcessSandbox
+  # for the tenant rule? Taken: no, only MicroVm does; UserKernel, Container, ProcessSandbox and None
   # instances of different tenants never share a node.
   # design:tenant-clusters step 3: a placement stays inside its request's cluster (cloud, node
   # pools, zones, minimum isolation; guards below).
@@ -292,8 +298,9 @@ commands:
       # the vendored SchedulingRequest holds no cluster (cloudspec C2); the cluster is the one whose
       # `formations` lists the request's formation (weft.cluster.PinFormation), `other-cluster`.
       - {name: cluster_id, type: weft.shared.ClusterId}
-      # D-e A: the request's formation, as the request row holds it (`other-formation`), so
-      # `other-cluster` reads the cluster's list without a second walk.
+      # D-e A: the request's formation, the one weft.architecture.ComponentWorkload assigns the
+      # request's instance's workload to (`instance-of-other-formation`), so `other-cluster` reads the
+      # cluster's list without a second walk.
       - {name: formation_id, type: weft.shared.FormationId}
       - {name: node_id, type: weft.shared.NodeId}
       # design:tenant-clusters step 3: the node's pool as weft.infrastructure.Node holds it (absent
@@ -376,16 +383,16 @@ commands:
                     that: {all: ["i.instance_id == instance_id", "i.scope_id == input.scope_id"]}
           exists: true
         error: weft.scheduling.NotFound
-      # D-e A: the formation named is the request's.
-      - name: other-formation
-        when_related: {via: input.request_id, predicate: formation_id != input.formation_id}
-        error: weft.scheduling.RequestMismatch
       # The request's instance runs a workload of the formation named (cloudspec dropped
       # SubmitSchedulingRequest's `formation-not-instances`), so a request cannot carry an
-      # instance into another formation's cluster. A walk of the request's instance with two
+      # instance into another formation's cluster. story:cloud-blocks-layer-refactor-pin
+      # (cloudspec layer rule): neither the request nor the workload names a formation, so the
+      # formation is the one weft.architecture.ComponentWorkload assigns the instance's workload
+      # to, and this guard is the only tie of `formation_id` (weft's `other-formation`, which read
+      # the request's formation, is gone with it). A walk of the request's instance with two
       # sibling walks, each one level deep (ESS 0.99.2 nests no second walk inside the first). An
-      # instance whose workload row is missing is refused (default deny). Answers as a missing
-      # request, like `instance-of-other-scope`.
+      # instance whose workload no formation assigns is refused (default deny). Answers as a
+      # missing request, like `instance-of-other-scope`.
       - name: instance-of-other-formation
         when_related:
           entity: weft.workloads.Instance
@@ -397,7 +404,7 @@ commands:
                   that: {all: ["q.request_id == input.request_id", "q.instance_id == instance_id"]}
               - not:
                   exists:
-                    in: {entity: weft.workloads.Workload}
+                    in: {entity: weft.architecture.ComponentWorkload}
                     as: w
                     that: {all: ["w.workload_id == workload_id", "w.formation_id == input.formation_id"]}
           exists: true
@@ -437,16 +444,23 @@ commands:
           exists: true
         error: weft.scheduling.RequestMismatch
       - name: below-microvm
-        when: {isolation: [UserKernel, Container, ProcessSandbox]}
+        when: {isolation: [UserKernel, Container, ProcessSandbox, None]}
         when_related: {via: input.request_id, predicate: min_isolation == MicroVm}
         error: weft.scheduling.IsolationTooWeak
       - name: below-user-kernel
-        when: {isolation: [Container, ProcessSandbox]}
+        when: {isolation: [Container, ProcessSandbox, None]}
         when_related: {via: input.request_id, predicate: min_isolation == UserKernel}
         error: weft.scheduling.IsolationTooWeak
       - name: below-container
-        when: {isolation: [ProcessSandbox]}
+        when: {isolation: [ProcessSandbox, None]}
         when_related: {via: input.request_id, predicate: min_isolation == Container}
+        error: weft.scheduling.IsolationTooWeak
+      # story:cloudspec-submission-pin: cloudspec's `None` (no sandbox) is the weakest level, below
+      # ProcessSandbox, so every minimum but None refuses it (default deny); `None` shares the
+      # node's kernel (shared-kernel).
+      - name: below-process-sandbox
+        when: {isolation: [None]}
+        when_related: {via: input.request_id, predicate: min_isolation == ProcessSandbox}
         error: weft.scheduling.IsolationTooWeak
       # design:tenant-clusters step 3: "a cluster's minimum isolation raises a workload's minimum,
       # never lowers it". The cluster's minimum is read when the instance is placed, beside the
@@ -455,16 +469,20 @@ commands:
       # stays the request's; should it carry the stronger of request and cluster? Taken: no, the
       # placed `isolation` already satisfies both.
       - name: below-cluster-microvm
-        when: {isolation: [UserKernel, Container, ProcessSandbox]}
+        when: {isolation: [UserKernel, Container, ProcessSandbox, None]}
         when_related: {via: input.cluster_id, predicate: min_isolation == MicroVm}
         error: weft.scheduling.IsolationTooWeak
       - name: below-cluster-user-kernel
-        when: {isolation: [Container, ProcessSandbox]}
+        when: {isolation: [Container, ProcessSandbox, None]}
         when_related: {via: input.cluster_id, predicate: min_isolation == UserKernel}
         error: weft.scheduling.IsolationTooWeak
       - name: below-cluster-container
-        when: {isolation: [ProcessSandbox]}
+        when: {isolation: [ProcessSandbox, None]}
         when_related: {via: input.cluster_id, predicate: min_isolation == Container}
+        error: weft.scheduling.IsolationTooWeak
+      - name: below-cluster-process-sandbox
+        when: {isolation: [None]}
+        when_related: {via: input.cluster_id, predicate: min_isolation == ProcessSandbox}
         error: weft.scheduling.IsolationTooWeak
       # design:tenant-clusters step 2 "zones it may use": a placement outside the cluster's zones is
       # refused, beside the formation's zones (`outside-zones`). A cluster has at least one zone
@@ -481,14 +499,14 @@ commands:
           predicate: {all: ["zones.count > 0", {not: {exists: {in: zones, as: z, that: "z == input.zone"}}}]}
         error: weft.scheduling.ZoneMismatch
       - name: shared-kernel
-        when: {isolation: [UserKernel, Container, ProcessSandbox]}
+        when: {isolation: [UserKernel, Container, ProcessSandbox, None]}
         when_related:
           entity: weft.scheduling.PlacementDecision
           where:
             all:
               - "node_id == input.node_id"
               - "tenant_id != input.tenant_id"
-              - {isolation: [UserKernel, Container, ProcessSandbox]}
+              - {isolation: [UserKernel, Container, ProcessSandbox, None]}
               - {state: [Reserved, Bound, Evicting]}
           exists: true
         error: weft.scheduling.TenantKernelShared
@@ -684,8 +702,9 @@ commands:
           min_isolation: {related: {via: input.request_id, field: min_isolation}}
           assigned: false
           bindings: input.bindings
-          formation_id: {related: {via: input.request_id, field: formation_id}}
+          formation_id: input.formation_id
           topology_group_id: input.topology_group_id
+          topology_id: {related: {via: input.topology_group_id, field: topology_id}}
           gang_id: {related: {via: input.request_id, field: gang_id}}
           priority_value: {related: {via: input.request_id, field: priority_value}}
           preemptible: {related: {via: input.request_id, field: preemptible}}
@@ -891,6 +910,18 @@ commands:
         error: weft.scheduling.StateConflict
 
 views:
+  # story:cloud-blocks-layer-refactor-pin (cloudspec layer rule): neither a request nor a workload
+  # names its formation; the Scheduler reads here which formation each workload is assigned to
+  # (weft.architecture.ComponentWorkload), the `formation_id` PlaceInstance takes and
+  # `instance-of-other-formation` checks.
+  - name: weft.scheduling.WorkloadFormations
+    source: weft.architecture.ComponentWorkload
+    consistency: read_your_writes
+    fields:
+      - {name: component_workload_id, type: weft.shared.ComponentWorkloadId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: formation_id, type: weft.shared.FormationId}
+
   # §10: every placement decision.
   - name: weft.scheduling.PlacementDecisions
     source: weft.scheduling.PlacementDecision
@@ -907,6 +938,7 @@ views:
       # here, and weft-sim's check `closed-link` the pairs of a formation's groups.
       - {name: formation_id, type: weft.shared.FormationId}
       - {name: topology_group_id, type: Optional<weft.shared.TopologyGroupId>}
+      - {name: topology_id, type: Optional<weft.shared.TopologyId>}
       - {name: isolation, type: weft.shared.IsolationLevel}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: assigned, type: Boolean}

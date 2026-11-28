@@ -400,8 +400,8 @@ actors:
       - weft.architecture.RemoveFromBorder
       - weft.edge.AddEndpoint
       - weft.edge.RemoveEndpoint
-      - weft.edge.AddRoute
-      - weft.edge.RemoveRoute
+      - weft.architecture.AddRoute
+      - weft.architecture.RemoveRoute
       - weft.architecture.CreateConfig
       - weft.architecture.ChangeConfig
       - weft.architecture.RemoveConfig
@@ -416,6 +416,7 @@ actors:
       # workloads: every user command. Invoke, SubmitJob and CancelJob are counted as user
       # commands (CLI `weft invoke`, workloads.yaml); the draft's list names no invocation or job.
       - weft.workloads.DefineWorkload
+      - weft.architecture.AssignWorkload # story:cloud-blocks-layer-refactor-pin: ties the workload to its component (cloudspec layer rule)
       - weft.workloads.RetireWorkload
       - weft.workloads.DefineService
       - weft.workloads.ScaleService
@@ -473,6 +474,7 @@ actors:
       - weft.deployments.WithdrawDeploymentSource
       - weft.deployments.TranslateSource
       - weft.deployments.CreatePlan
+      - weft.deployments.PlanFromSource
       - weft.deployments.PlanRollback
       - weft.deployments.DiscardPlan
       - weft.deployments.ApplyPlan
@@ -581,8 +583,8 @@ actors:
       - weft.architecture.RemoveFromBorder
       - weft.edge.AddEndpoint
       - weft.edge.RemoveEndpoint
-      - weft.edge.AddRoute
-      - weft.edge.RemoveRoute
+      - weft.architecture.AddRoute
+      - weft.architecture.RemoveRoute
       - weft.architecture.CreateConfig
       - weft.architecture.ChangeConfig
       - weft.architecture.RemoveConfig
@@ -596,6 +598,7 @@ actors:
       - weft.architecture.RemoveScale
       # workloads: as Deployer, without OpenExec and AttachSession.
       - weft.workloads.DefineWorkload
+      - weft.architecture.AssignWorkload # story:cloud-blocks-layer-refactor-pin: ties the workload to its component (cloudspec layer rule)
       - weft.workloads.RetireWorkload
       - weft.workloads.DefineService
       - weft.workloads.ScaleService
@@ -651,6 +654,7 @@ actors:
       - weft.deployments.WithdrawDeploymentSource
       - weft.deployments.TranslateSource
       - weft.deployments.CreatePlan
+      - weft.deployments.PlanFromSource
       - weft.deployments.PlanRollback
       - weft.deployments.DiscardPlan
       - weft.deployments.ApplyPlan
@@ -701,6 +705,7 @@ actors:
       # cluster
       - weft.infrastructure.JoinNode # a node not yet joined, with a join token
       - weft.infrastructure.RecordNodeObservation # own node only
+      - weft.inventory.ReportNodeCapacity # own node only; the capacity RecordNodeObservation carried (cloudspec layer rule)
       # inventory
       - weft.inventory.ReportDevice
       - weft.inventory.ReportDeviceWiped
@@ -800,6 +805,7 @@ actors:
       - weft.workloads.WakesOverdue
       - weft.scheduling.UnassignedPlacements
       - weft.scheduling.OverdueUnassignedPlacements # integrator, 2026-11-26
+      - weft.scheduling.WorkloadFormations # story:cloud-blocks-layer-refactor-pin
       - weft.nodes.StoppedActiveAssignments
       # cluster (decided)
       - weft.infrastructure.RequestNodePoolScaleUp
@@ -872,7 +878,7 @@ actors:
       - weft.architecture.AddLink
       - weft.architecture.AddToBorder
       - weft.edge.AddEndpoint
-      - weft.edge.AddRoute
+      - weft.architecture.AddRoute
       - weft.architecture.CreateConfig
       - weft.architecture.MountConfig
       - weft.architecture.SetConfigOverride

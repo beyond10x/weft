@@ -74,7 +74,10 @@ impl Store {
             .execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;")
             .map_err(fail)?;
         let mut schema = String::from("BEGIN;\n");
-        for entity in crate::ENTITIES.iter().chain([&JOIN_TOKENS]) {
+        for entity in crate::ENTITIES
+            .iter()
+            .chain([&JOIN_TOKENS, &crate::documents::TABLE])
+        {
             schema.push_str(&format!(
                 "CREATE TABLE IF NOT EXISTS {} (key TEXT COLLATE BINARY PRIMARY KEY NOT NULL, row TEXT NOT NULL) WITHOUT ROWID;\n",
                 table(entity)

@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T11:22:48Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-pin",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "plan-critic panel findings applied in revision 6; both cloudspec blockers cleared by cloudspec#13 f57337466c7c"
+  }
+}

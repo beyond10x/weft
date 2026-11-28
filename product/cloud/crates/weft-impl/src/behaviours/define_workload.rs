@@ -2,32 +2,27 @@
 //! in the selection precedence of its contract:
 //!
 //! 1. the input guards in declaration order: `not-callers-scope` (a caller acting in no
-//!    scope counts as another scope's), `spec-kind`, `box-package`, `no-main`,
+//!    scope counts as another scope's), `spec-kind`, `box-package`, `run-as-missing`
+//!    (isolation `None` with no host user in `run_as`), `no-main`,
 //!    `invalid-check`, `invalid-restart-policy`, and the external `settings-shape-mismatch`
 //!    (`before_row`: the tag of `settings` names another shape than `shape`);
-//! 2. every existence check before every predicate, in declaration order:
-//!    `formation-missing`, `environment-missing`, `revision-missing`, `no-runtime`,
-//!    `component-missing` (no `weft.architecture.Component` of the formation has the name);
-//! 3. the predicates on those rows: `formation-foreign`, `environment-foreign`,
-//!    `revision-foreign`, `formation-retired`, `environment-retired`, `runtime-retired`,
-//!    `runtime-kind`, `below-runtime-isolation`;
-//! 4. the external branches ahead of `defined`, decided from the `weft.artifacts.Artifact` row
+//! 2. `no-runtime`, then the predicates on the runtime: `runtime-retired`, `runtime-kind`,
+//!    `below-runtime-isolation` (story:cloud-blocks-layer-refactor-pin: the checks of the
+//!    formation, environment, revision and component are `weft.architecture.AssignWorkload`'s,
+//!    the workload names only its component-level `identity`);
+//! 3. the external branches ahead of `defined`, decided from the `weft.artifacts.Artifact` row
 //!    of the same store: `no-artifact`, `artifact-foreign` (registered to another scope),
 //!    `artifact-revoked`, `artifact-kind` (an artifact kind other than the package kind, the
 //!    same variant name);
-//! 5. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
+//! 4. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
 //!    the same store ([`crate::quota::exceeded_alone`]): the claims of one instance of the
 //!    workload alone would take the scope's quota, or a quota above it, past its limit. What the
 //!    scope's live instances hold does not count; `CreateInstance` asks for each instance. It
 //!    is answered before `defined`, the branch the contract takes "otherwise" (its default);
-//! 6. `defined`: a `Defined` workload with the values sent.
+//! 5. `defined`: a `Defined` workload with the values sent.
 
-use weft_types::architecture::{EnvironmentState, FormationState};
 use weft_types::artifacts::{ArtifactKind, ArtifactState};
-use weft_types::behaviour::{
-    ArtifactStorage, ComponentStorage, Context, EnvironmentStorage, FormationRevisionStorage,
-    FormationStorage, RuntimeStorage, WorkloadStorage,
-};
+use weft_types::behaviour::{ArtifactStorage, Context, RuntimeStorage, WorkloadStorage};
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
 use weft_types::shared::{IsolationLevel, WorkloadId};
@@ -36,8 +31,8 @@ use weft_types::workloads::{
     ArtifactIsRevoked, ArtifactKindMismatch, ArtifactNotFound, BoxPackageKind, Check, CheckKind,
     DefineWorkload, DefineWorkloadOutcome, InvalidCheck, InvalidRestartPolicy,
     IsolationBelowMinimum, NoMainProcess, NotFound, PackageKind, ProcessRole, QuotaExceeded,
-    RestartPolicy, RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound, RuntimeState,
-    SettingsShapeMismatch, ShapeKind, ShapeSettings, SpecKindNotRunnable, StateConflict,
+    RestartPolicy, RunAsMissing, RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound,
+    RuntimeState, SettingsShapeMismatch, ShapeKind, ShapeSettings, SpecKindNotRunnable,
     WorkloadData, WorkloadDefined, WorkloadSnapshot, WorkloadState,
 };
 
@@ -74,6 +69,11 @@ impl DefineWorkloadBehavior for Ports {
                 error: BoxPackageKind,
             });
         }
+        if input.isolation == IsolationLevel::None && input.run_as.is_none() {
+            return Ok(DefineWorkloadOutcome::RunAsMissing {
+                error: RunAsMissing,
+            });
+        }
         if !input
             .processes
             .iter()
@@ -103,46 +103,11 @@ impl DefineWorkloadBehavior for Ports {
             });
         }
 
-        let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
-            return Ok(DefineWorkloadOutcome::FormationMissing { error: NotFound });
-        };
-        let Some(environment) = EnvironmentStorage::get(self, &input.environment_id) else {
-            return Ok(DefineWorkloadOutcome::EnvironmentMissing { error: NotFound });
-        };
-        let Some(revision) = FormationRevisionStorage::get(self, &input.formation_revision_id)
-        else {
-            return Ok(DefineWorkloadOutcome::RevisionMissing { error: NotFound });
-        };
         let Some(runtime) = RuntimeStorage::get(self, &input.runtime_id) else {
             return Ok(DefineWorkloadOutcome::NoRuntime {
                 error: RuntimeNotFound,
             });
         };
-        if !ComponentStorage::list(self).iter().any(|row| {
-            row.data.formation_id == input.formation_id && row.data.name == input.component
-        }) {
-            return Ok(DefineWorkloadOutcome::ComponentMissing { error: NotFound });
-        }
-
-        if formation.data.scope_id != input.scope_id {
-            return Ok(DefineWorkloadOutcome::FormationForeign { error: NotFound });
-        }
-        if environment.data.formation_id != input.formation_id {
-            return Ok(DefineWorkloadOutcome::EnvironmentForeign { error: NotFound });
-        }
-        if revision.data.formation_id != input.formation_id {
-            return Ok(DefineWorkloadOutcome::RevisionForeign { error: NotFound });
-        }
-        if formation.state == FormationState::Retired {
-            return Ok(DefineWorkloadOutcome::FormationRetired {
-                error: StateConflict,
-            });
-        }
-        if environment.state == EnvironmentState::Retired {
-            return Ok(DefineWorkloadOutcome::EnvironmentRetired {
-                error: StateConflict,
-            });
-        }
         if runtime.state == RuntimeState::Retired {
             return Ok(DefineWorkloadOutcome::RuntimeRetired {
                 error: RuntimeIsRetired,
@@ -189,8 +154,7 @@ impl DefineWorkloadBehavior for Ports {
         let defined = WorkloadDefined {
             workload_id: workload_id.clone(),
             scope_id: input.scope_id.clone(),
-            formation_id: input.formation_id.clone(),
-            environment_id: input.environment_id.clone(),
+            identity: input.identity.clone(),
             component: input.component.clone(),
             package_kind: input.package_kind,
             artifact_digest: input.artifact_digest.clone(),
@@ -204,14 +168,22 @@ impl DefineWorkloadBehavior for Ports {
                 data: WorkloadData {
                     workload_id,
                     scope_id: input.scope_id,
-                    formation_id: input.formation_id,
-                    formation_revision_id: input.formation_revision_id,
-                    environment_id: input.environment_id,
+                    identity: input.identity,
                     component: input.component,
                     package_kind: input.package_kind,
                     artifact_digest: input.artifact_digest,
                     runtime_id: input.runtime_id,
                     isolation: input.isolation,
+                    run_as: input.run_as,
+                    upgrade: input.upgrade,
+                    volumes: input.volumes,
+                    ports: input.ports,
+                    limits: input.limits,
+                    process_priority: input.process_priority,
+                    stop: input.stop,
+                    prestart: input.prestart,
+                    restart: input.restart,
+                    environment_files: input.environment_files,
                     shape: input.shape,
                     settings: input.settings,
                     claims: input.claims,
@@ -267,7 +239,8 @@ fn settings_shape(settings: &ShapeSettings) -> ShapeKind {
 }
 
 /// The predicate of `below-runtime-isolation`: `isolation` is weaker than the runtime's
-/// `minimum`, as the specification lists the weaker levels for each minimum.
+/// `minimum`, as the specification lists the weaker levels for each minimum (`None`, no sandbox,
+/// is the weakest).
 fn below(isolation: IsolationLevel, minimum: IsolationLevel) -> bool {
     match minimum {
         IsolationLevel::MicroVm => isolation != IsolationLevel::MicroVm,
@@ -275,8 +248,12 @@ fn below(isolation: IsolationLevel, minimum: IsolationLevel) -> bool {
             isolation,
             IsolationLevel::MicroVm | IsolationLevel::UserKernel
         ),
-        IsolationLevel::Container => isolation == IsolationLevel::ProcessSandbox,
-        IsolationLevel::ProcessSandbox => false,
+        IsolationLevel::Container => matches!(
+            isolation,
+            IsolationLevel::ProcessSandbox | IsolationLevel::None
+        ),
+        IsolationLevel::ProcessSandbox => isolation == IsolationLevel::None,
+        IsolationLevel::None => false,
     }
 }
 
@@ -296,5 +273,7 @@ fn artifact_kind(kind: PackageKind) -> ArtifactKind {
         PackageKind::Agent => ArtifactKind::Agent,
         PackageKind::Training => ArtifactKind::Training,
         PackageKind::Graph => ArtifactKind::Graph,
+        PackageKind::WebBundle => ArtifactKind::WebBundle,
+        PackageKind::BuildContext => ArtifactKind::BuildContext,
     }
 }

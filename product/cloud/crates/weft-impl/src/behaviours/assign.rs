@@ -34,13 +34,15 @@ use weft_types::shared::{AssignmentId, IsolationLevel};
 use crate::context::{instant, mint};
 use crate::{conversions, Ports};
 
-/// The strength of `level`: `ProcessSandbox` is the weakest, `MicroVm` the strongest.
+/// The strength of `level`: `None` (no sandbox, cloudspec's weakest level) is the weakest, below
+/// `ProcessSandbox`, and `MicroVm` the strongest.
 fn rank(level: IsolationLevel) -> u8 {
     match level {
-        IsolationLevel::ProcessSandbox => 0,
-        IsolationLevel::Container => 1,
-        IsolationLevel::UserKernel => 2,
-        IsolationLevel::MicroVm => 3,
+        IsolationLevel::None => 0,
+        IsolationLevel::ProcessSandbox => 1,
+        IsolationLevel::Container => 2,
+        IsolationLevel::UserKernel => 3,
+        IsolationLevel::MicroVm => 4,
     }
 }
 

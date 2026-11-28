@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-sim-pin
 kind: story
-status: proposed
+status: active
 title: One pin serves cloudspec-sim and the blocks, and the simulator inputs name the renamed commands
 relations:
 - decomposes: epic:cloud-blocks
@@ -13,9 +13,12 @@ scope:
   path: sim/experiments
 - confidence: cited
   path: sim/relations/globex-defines-in-shop.yaml
-revision: 4
+- confidence: cited
+  path: tools/sim-relations.sh
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 4, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

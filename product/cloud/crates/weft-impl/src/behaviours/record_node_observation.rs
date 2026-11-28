@@ -6,7 +6,9 @@
 //!   A5); until then a request carries no node identity to compare, so this outcome is never
 //!   taken here;
 //! - `no-such-node` for a node without a row;
-//! - `ready` for a `Joining` node: it moves to `Ready` with what was observed;
+//! - `ready` for a `Joining` node: it moves to `Ready` with what was observed (its isolation
+//!   facts; its capacity is `weft.inventory.ReportNodeCapacity`'s since
+//!   story:cloud-blocks-layer-refactor-pin);
 //! - `observed` for a `Ready`, `Cordoned` or `Draining` node: what was observed is updated;
 //! - `not-joined` otherwise (`Provisioning`, `Gone`).
 
@@ -40,7 +42,6 @@ impl RecordNodeObservationBehavior for Ports {
         if ready {
             node.state = NodeState::Ready;
         }
-        node.data.capacity = Some(input.capacity.clone());
         node.data.isolation_facts = Some(input.isolation_facts.clone());
         node.data.observed_at = Some(input.observed_at.clone());
         NodeStorage::put(self, node);
@@ -48,7 +49,6 @@ impl RecordNodeObservationBehavior for Ports {
             RecordNodeObservationOutcome::Ready {
                 node_ready: NodeReady {
                     node_id: input.node_id,
-                    capacity: input.capacity,
                     isolation_facts: input.isolation_facts,
                     observed_at: input.observed_at,
                 },
@@ -57,7 +57,6 @@ impl RecordNodeObservationBehavior for Ports {
             RecordNodeObservationOutcome::Observed {
                 node_observed: NodeObserved {
                     node_id: input.node_id,
-                    capacity: input.capacity,
                     isolation_facts: input.isolation_facts,
                     observed_at: input.observed_at,
                 },

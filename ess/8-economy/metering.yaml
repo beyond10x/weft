@@ -1045,14 +1045,12 @@ commands:
           where: {all: [volume_id == input.volume_id, scope_id != input.scope_id]}
           exists: true
         error: weft.metering.UnitOfAnotherAccount
-      # An endpoint lies in one formation; usage of it names that formation.
-      - name: endpoint-of-another-formation
+      # An endpoint lies in one scope (cloudspec layer rule: an endpoint belongs to a scope, not to
+      # a formation; story:cloud-blocks-layer-refactor-pin); usage of it names that scope.
+      - name: endpoint-of-another-account
         when_related:
           entity: weft.edge.Endpoint
-          where:
-            all:
-              - endpoint_id == input.endpoint_id
-              - any: [not defined(input.formation_id), formation_id != input.formation_id]
+          where: {all: [endpoint_id == input.endpoint_id, scope_id != input.scope_id]}
           exists: true
         error: weft.metering.UnitOfAnotherAccount
       - name: service-instance-of-another-account

@@ -1,7 +1,7 @@
 version: '3'
 
 vars:
-  CLOUDSPEC_REV: a485b7f459abd66261af25b558fb92df90570545
+  CLOUDSPEC_REV: 59129ebfcdbef65bbde498b749fb91c6ff5563b2
   CLOUDSPEC_SIM: target/cloudspec-sim/bin/cloudspec-sim
 
 tasks:

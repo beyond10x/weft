@@ -21,7 +21,7 @@ Actor: `weft.actors.ClusterOperator`, the operator who runs the cloud. Document:
 | Page | Shows | Commands |
 |---|---|---|
 | Overview | Counts of nodes, node pools, tenants and requests, the clouds with their access mode and control plane, requests that cannot be placed, agent sessions that are not open, preemptions and drains | Create a cloud, then configure its access mode and control plane; scale the control plane, set the cloud policy |
-| Nodes, node detail | Every node with its zone, pool, role, capacity, isolation facts and state. On one node: its devices, agent sessions, observations, placements, claim bindings and drains | Provision, cordon, uncordon, drain, remove, reset a device, cancel a drain, issue a join token |
+| Nodes, node detail | Every node with its zone, pool, role, isolation facts and state. On one node: its devices, agent sessions, capacity reports, observations, placements, claim bindings and drains | Provision, cordon, uncordon, drain, remove, reset a device, cancel a drain, issue a join token |
 | Node pools | Pools with their desired size drawn between the minimum and the maximum, and their scale requests | Create, edit, scale up and down, delete |
 | Zones, join tokens, inventory | Zones, nodes waiting to join, resource classes and free devices | Declare and retire a zone, issue a join token, provision a pool node, define and retire a resource class |
 | Requests, placements, priority classes | Scheduling requests grouped by state with the scope that asked, gangs, placement decisions and priority classes | Define and retire a priority class |
@@ -37,11 +37,11 @@ list and on usage and cost. A tenant's engineer ships and runs workloads there. 
 | Page | Shows | Commands |
 |---|---|---|
 | Overview | Formations, instances, managed services, spend by meter, alerts and services with their running replicas | |
-| Formations, formation detail | Formations as cards; on one formation its revisions, components, workloads and environments, then its network (links only for now: the network page has no border-route and endpoint sections until it is decided how weft-edge is reached) and config (configs, mounts, service bindings) | Create, pin to a cluster (a formation is placed nowhere until it is pinned), retire, commit a revision, remove a component or link, unbind a service |
-| Workloads, services, instances | Workloads of a formation, services with a replica bar, instances grouped by state. On one instance: its record, identity documents, log streams with their lines, observations, assignments and exec sessions | Scale a service, retire a workload, pause, resume, snapshot and stop an instance, cancel a job |
+| Formations, formation detail | Formations as cards; on one formation its revisions, components, the workloads assigned to it and environments, then its network (links and border routes; no endpoint section until it is decided how weft-edge is reached) and config (configs, mounts) | Create, pin to a cluster (a formation is placed nowhere until it is pinned), retire, commit a revision, remove a component or link |
+| Workloads, services, instances | Workloads of the account with their identity, services with a replica bar, instances grouped by state. On one instance: its record, identity documents, log streams with their lines, observations, assignments and exec sessions | Scale a service, retire a workload, pause, resume, snapshot and stop an instance, cancel a job |
 | Releases, release detail | Releases of an environment, plans, rollout steps with a ready-replica bar, drift | Apply or discard a plan, roll back |
-| Catalog, managed services | Offerings and products as cards; managed service instances with bindings, backups and restores | Provision, back up, restore, deprovision |
-| Secrets | Secret references and, under each row, its grants. A secret value is never shown | Create, add a version, grant |
+| Catalog, managed services | Offerings and products as cards; managed service instances with the workload identities bound to them, backups and restores | Provision, back up, restore, deprovision, unbind a service |
+| Secrets | Secret references with their path and, under each row, its grants. A secret value is never shown | Create, add a version, grant |
 | Usage and cost | Spend by meter for a time window, usage by meter (CSV export), budgets with a spend bar, statements | Set, change and remove a budget |
 
 ## Run them locally

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-policies
 kind: story
-status: proposed
+status: implemented
 title: Bindings, owners and scope grants follow the vendored domains, and the combined spec validates
 relations:
 - decomposes: epic:cloud-blocks
@@ -15,9 +15,11 @@ scope:
   path: ess/6-delivery/deployments.yaml
 - confidence: cited
   path: ess/components.yaml
-revision: 5
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T09:00:36Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T13:47:54Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
@@ -45,7 +47,8 @@ Decomposes `epic:cloud-blocks`: policies and owners after the move; the combined
    `weft.services`.
 3. The compiled model has a binding from `weft.accounts.AccountCreated` to `weft.scope.OpenScope`
    and grants of `OpenScope` and `CloseScope` to weft actors (`story:cloud-blocks-account-scope`).
-4. Run one at a time, outside the test step (about 80 s each), `slot --timeout 30m
+4. Moved to `story:cloud-blocks-synth-domain-time` (2026-11-28): these runs exceeded the 30-minute
+   pool limit on the vendored spec. Former text: run one at a time, outside the test step, `slot --timeout 30m
    tools/synth-domain.sh <name>` reports 0 failed scenarios of the domain for `accounts`,
    `scheduling`, `access` and `infrastructure`; the `scheduling` suite holds a scenario in which
    `PlaceInstance` on a node outside the formation's cluster ends in that refusal

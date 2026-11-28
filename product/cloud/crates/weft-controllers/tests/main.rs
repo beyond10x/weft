@@ -4,13 +4,15 @@
 //!   the two hand-run bindings of R1, on the `weft` binary and in-process;
 //! - [`obligations`]: `weft.workloads.CreateInstance` and `weft.scheduling.SubmitSchedulingRequest`,
 //!   each guard in the selection precedence of its contract;
+//! - [`open_scope`]: `weft.scope.OpenScope` with a placement (`placement-form`).
 //! - [`runner`]: the runner of the hand-run bindings on a state file of its own;
 //! - [`adversary`]: the cases of the adversary pass;
 //! - [`placement`], [`repair`] and [`r4_bindings`]: the acceptance of
 //!   `story:skeleton-controllers`, the Scheduler's decision step, the R4 level step and the four
 //!   hand-run bindings of R4, in-process on a world whose node is made schedulable ([`ready`]);
 //! - [`place_instance`] and [`assign`]: `weft.scheduling.PlaceInstance` and `weft.nodes.Assign`,
-//!   each guard in the selection precedence of its contract.
+//!   each guard in the selection precedence of its contract;
+//! - [`open_scope`]: `weft.scope.OpenScope` with a placement (`placement-form`).
 
 /// What both modules share: a control host in this process after the operator and tenant path
 /// and the workload definitions, and readers of its views and log.
@@ -102,7 +104,8 @@ mod replicas {
     use weft_testkit::steps;
     use weft_testkit::ControlHost;
     use weft_types::behaviour::{
-        FormationStorage, InstanceStorage, QuotaStorage, ServiceStorage, WorkloadStorage,
+        ComponentWorkloadStorage, FormationStorage, InstanceStorage, QuotaStorage, ServiceStorage,
+        WorkloadStorage,
     };
     use weft_types::primitives::Uuid;
     use weft_types::shared::{QuotaId, ServiceId, WorkloadId};
@@ -129,14 +132,18 @@ mod replicas {
         let instance = &instances[0].data;
         let workload =
             WorkloadStorage::get(ports, &instance.workload_id).expect("the workload row");
+        let assignment = ComponentWorkloadStorage::list(ports)
+            .into_iter()
+            .find(|row| row.data.workload_id == instance.workload_id)
+            .expect("the workload's assignment");
         let formation =
-            FormationStorage::get(ports, &workload.data.formation_id).expect("the formation row");
+            FormationStorage::get(ports, &assignment.data.formation_id).expect("the formation row");
         InstanceCreated {
             instance_id: instance.instance_id.clone(),
             workload_id: instance.workload_id.clone(),
             minimum_isolation: instance.minimum_isolation,
             scope_id: instance.scope_id.clone(),
-            formation_id: workload.data.formation_id.clone(),
+            identity: workload.data.identity.clone(),
             claims: workload.data.claims.clone(),
             service_id: instance.service_id.clone(),
             replica_index: instance.replica_index,
@@ -176,7 +183,6 @@ mod replicas {
         assert_eq!(requests.len(), 1, "{requests:?}");
         assert_eq!(requests[0]["state"], json!("Pending"));
         assert_eq!(requests[0]["scope_id"], json!(path.scope_id));
-        assert_eq!(requests[0]["formation_id"], json!(ids.formation_id));
     }
 
     /// Statement 2: a replayed `ReplicaRequested` of a live replica is answered `replica-live`
@@ -567,6 +573,7 @@ mod obligations {
     use weft_types::shared::{
         BoxId, FormationId, GangId, InstanceId, InvocationId, JobId, PrincipalId,
         PriorityClassName, QuotaId, ScopeId, ServiceId, SessionId, WarmPoolId, WorkloadId,
+        WorkloadIdentity,
     };
     use weft_types::workloads::obligations::CreateInstanceBehavior;
     use weft_types::workloads::{
@@ -712,7 +719,6 @@ mod obligations {
                         gpus: 0,
                     },
                     volume_id: None,
-                    endpoint_id: None,
                     instance_id: None,
                     cordoned: false,
                     lease_holder: None,
@@ -951,16 +957,17 @@ mod obligations {
         assert_eq!(event.workload_id, workload.data.workload_id);
         assert_eq!(event.minimum_isolation, workload.data.isolation);
         assert_eq!(event.scope_id, data.scope_id);
-        assert_eq!(
-            event.formation_id,
-            FormationId(Uuid(w.ids.formation_id.clone()))
-        );
+        assert_eq!(event.identity, workload.data.identity);
         assert_eq!(event.claims, workload.data.claims);
         assert_eq!(event.service_id, data.service_id);
         assert_eq!(event.replica_index, Some(0));
         assert_eq!(event.job_id, None);
-        let formation = weft_types::behaviour::FormationStorage::get(&ports, &event.formation_id)
-            .expect("the formation row");
+        // The zones are the formation's the workload is assigned to (`AssignWorkload`).
+        let formation = weft_types::behaviour::FormationStorage::get(
+            &ports,
+            &FormationId(Uuid(w.ids.formation_id.clone())),
+        )
+        .expect("the formation row");
         assert!(!formation.data.zones.is_empty());
         assert_eq!(event.zones, formation.data.zones);
         assert_eq!(event.priority, PriorityClassName("standard".to_owned()));
@@ -971,7 +978,7 @@ mod obligations {
         SubmitSchedulingRequest {
             instance_id: created.instance_id.clone(),
             scope_id: created.scope_id.clone(),
-            formation_id: created.formation_id.clone(),
+            identity: Some(created.identity.clone()),
             claims: created.claims.clone(),
             min_isolation: created.minimum_isolation,
             zones: created.zones.clone(),
@@ -1022,8 +1029,6 @@ mod obligations {
         let globex_tenant = steps::create_tenant(client, "globex");
         let globex = steps::create_account(client, &globex_tenant);
         let globex_scope = steps::record_account_scope(client, &globex);
-        let globex_caller = steps::account_caller(&globex_tenant, &globex, &globex_scope);
-        let globex_formation = steps::create_formation(client, &globex_caller, &globex_scope);
 
         // The input guard.
         declines(
@@ -1039,7 +1044,6 @@ mod obligations {
         // Existence, in declaration order, ahead of every predicate.
         let missing = SubmitSchedulingRequest {
             scope_id: ScopeId(id()),
-            formation_id: FormationId(id()),
             priority: PriorityClassName("nope".to_owned()),
             gang_id: Some(GangId(id())),
             ..base.clone()
@@ -1047,11 +1051,6 @@ mod obligations {
         declines(&w, missing.clone(), "unknown-scope");
         let missing = SubmitSchedulingRequest {
             scope_id: ScopeId(Uuid(globex_scope.clone())),
-            ..missing
-        };
-        declines(&w, missing.clone(), "unknown-formation");
-        let missing = SubmitSchedulingRequest {
-            formation_id: base.formation_id.clone(),
             ..missing
         };
         declines(&w, missing.clone(), "unknown-priority");
@@ -1063,24 +1062,6 @@ mod obligations {
 
         // The predicates, in declaration order.
         let closed = gang(&w, &w.path.scope_id, GangState::Bound);
-        declines(
-            &w,
-            SubmitSchedulingRequest {
-                formation_id: FormationId(Uuid(globex_formation)),
-                gang_id: Some(closed.clone()),
-                ..base.clone()
-            },
-            "formation-of-other-scope",
-        );
-        declines(
-            &w,
-            SubmitSchedulingRequest {
-                scope_id: ScopeId(Uuid(globex_scope.clone())),
-                gang_id: Some(closed.clone()),
-                ..base.clone()
-            },
-            "formation-of-other-scope",
-        );
         let mut ports = w.ports();
         let standard = PriorityClassName("standard".to_owned());
         let mut class =
@@ -1113,6 +1094,33 @@ mod obligations {
                 ..base.clone()
             },
             "gang-of-other-scope",
+        );
+
+        // The external branches of scope isolation, after every predicate
+        // (story:cloud-blocks-layer-refactor-pin).
+        declines(
+            &w,
+            SubmitSchedulingRequest {
+                instance_id: InstanceId(id()),
+                ..base.clone()
+            },
+            "no-such-instance",
+        );
+        declines(
+            &w,
+            SubmitSchedulingRequest {
+                scope_id: ScopeId(Uuid(globex_scope.clone())),
+                ..base.clone()
+            },
+            "instance-of-other-scope",
+        );
+        declines(
+            &w,
+            SubmitSchedulingRequest {
+                identity: Some(WorkloadIdentity("another/identity".to_owned())),
+                ..base.clone()
+            },
+            "identity-not-instances",
         );
 
         // Requested once; a second request while it is pending is `already-requested`, also
@@ -1153,7 +1161,7 @@ mod obligations {
     }
 
     #[test]
-    fn submit_scheduling_request_writes_what_the_priority_class_formation_and_scope_name() {
+    fn submit_scheduling_request_writes_what_the_priority_class_and_scope_name() {
         let w = World::new();
         let ports = w.ports();
         let base = submission(&creates(&w, replica(&w)));
@@ -1169,7 +1177,6 @@ mod obligations {
         let data = &row.data;
         assert_eq!(data.instance_id, base.instance_id);
         assert_eq!(data.scope_id, base.scope_id);
-        assert_eq!(data.formation_id, base.formation_id);
         assert_eq!(data.claims, base.claims);
         assert_eq!(data.min_isolation, base.min_isolation);
         assert_eq!(data.zones, base.zones);
@@ -1473,9 +1480,11 @@ mod ready {
     use weft_impl::context::{instant, mint, timestamp, Clock};
     use weft_impl::Ports;
     use weft_types::behaviour::{
-        NodeSessionStorage, NodeStorage, PlacementDecisionStorage, SchedulingRequestStorage,
+        NodeCapacityStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage,
+        SchedulingRequestStorage,
     };
     use weft_types::infrastructure::NodeState;
+    use weft_types::inventory::{NodeCapacityData, NodeCapacitySnapshot, NodeCapacityState};
     use weft_types::nodes::{NodeSessionData, NodeSessionSnapshot, NodeSessionState};
     use weft_types::primitives::{Timestamp, Uuid};
     use weft_types::scheduling::{
@@ -1483,8 +1492,8 @@ mod ready {
         SchedulingRequestSnapshot, SchedulingRequestState,
     };
     use weft_types::shared::{
-        ClusterId, IsolationFacts, IsolationLevel, NodeId, NodeSessionId, PlacementDecisionId,
-        ResourceAmount, ResourceClassName, StampedAt, TenantId,
+        ClusterId, FormationId, IsolationFacts, IsolationLevel, NodeCapacityId, NodeId,
+        NodeSessionId, PlacementDecisionId, ResourceAmount, ResourceClassName, StampedAt, TenantId,
     };
 
     use super::world::World;
@@ -1537,6 +1546,12 @@ mod ready {
             TenantId(Uuid(self.w.path.tenant_id.clone()))
         }
 
+        /// The formation the request's workload is assigned to (`AssignWorkload`): the
+        /// definitions' formation.
+        pub fn formation(&self) -> FormationId {
+            FormationId(Uuid(self.w.ids.formation_id.clone()))
+        }
+
         /// A `Bound`, unassigned placement of the request's instance on the node at
         /// `Container`, decided a second ago, the request `Placed` as `BindPlacement` leaves it.
         pub fn bound(&self) -> PlacementDecisionId {
@@ -1555,8 +1570,9 @@ mod ready {
                         scope_id: request.scope_id.clone(),
                         node_id: self.node.clone(),
                         zone: weft_types::shared::ZoneName("z1".to_owned()),
-                        formation_id: request.formation_id.clone(),
+                        formation_id: self.formation(),
                         topology_group_id: None,
+                        topology_id: None,
                         isolation: IsolationLevel::Container,
                         min_isolation: request.min_isolation,
                         assigned: false,
@@ -1594,10 +1610,6 @@ mod ready {
         let mut ports = ports.clone();
         let mut row = NodeStorage::get(&ports, node).expect("the node row");
         row.state = NodeState::Ready;
-        row.data.capacity = Some(vec![ResourceAmount {
-            resource_class: ResourceClassName("cpu".to_owned()),
-            amount: 4,
-        }]);
         row.data.isolation_facts = Some(IsolationFacts {
             kvm_present: false,
             cgroups_delegated: true,
@@ -1606,15 +1618,57 @@ mod ready {
             levels: levels.to_vec(),
         });
         NodeStorage::put(&mut ports, row);
+        set_capacity(&ports, node, 4);
     }
 
-    /// A copy of `like` under the identity `id`, in its pool and zone, with an open session.
+    /// Sets the observed `cpu` capacity of `node` to `amount`: its one
+    /// `weft.inventory.NodeCapacity` row (the blocks split the capacity out of the node,
+    /// story:cloud-blocks-layer-refactor-pin), under an identity of the node's own, so a second
+    /// call replaces the first.
+    pub fn set_capacity(ports: &Ports, node: &NodeId, amount: i64) {
+        let mut ports = ports.clone();
+        NodeCapacityStorage::put(
+            &mut ports,
+            NodeCapacitySnapshot {
+                state: NodeCapacityState::Reported,
+                data: NodeCapacityData {
+                    capacity_id: NodeCapacityId(Uuid(format!("capacity-{}", node.0 .0))),
+                    node_id: node.clone(),
+                    capacity: vec![ResourceAmount {
+                        resource_class: ResourceClassName("cpu".to_owned()),
+                        amount,
+                    }],
+                    observed_at: at(-1),
+                },
+            },
+        );
+    }
+
+    /// The observed `cpu` capacity of `node`, where one is recorded.
+    pub fn cpu_capacity(ports: &Ports, node: &NodeId) -> Option<i64> {
+        NodeCapacityStorage::list(ports)
+            .into_iter()
+            .find(|row| &row.data.node_id == node)
+            .and_then(|row| {
+                row.data
+                    .capacity
+                    .iter()
+                    .find(|amount| amount.resource_class.0 == "cpu")
+                    .map(|amount| amount.amount)
+            })
+    }
+
+    /// A copy of `like` under the identity `id`, in its pool and zone, with its capacity and an
+    /// open session.
     pub fn another_node(ports: &Ports, like: &NodeId, id: &str) -> NodeId {
         let mut writer = ports.clone();
         let mut row = NodeStorage::get(ports, like).expect("the node row");
         let node = NodeId(Uuid(id.to_owned()));
         row.data.node_id = node.clone();
         NodeStorage::put(&mut writer, row);
+        if let Some(amount) = cpu_capacity(ports, like) {
+            set_capacity(ports, &node, amount);
+        }
         open_session(ports, &node);
         node
     }
@@ -1674,7 +1728,7 @@ mod placement {
     use weft_types::shared::{GangId, IsolationLevel, PlacementDecisionId, QuotaId, ZoneName};
     use weft_types::workloads::InstanceState;
 
-    use super::ready::{another_node, between, make_ready, now, Ready};
+    use super::ready::{another_node, between, make_ready, now, set_capacity, Ready};
     use super::world::request_lines;
 
     /// A node identity that sorts before any minted one in the view's order.
@@ -1780,8 +1834,8 @@ mod placement {
     }
 
     /// The weakest level the request admits is tried first, and no level below its minimum: a
-    /// node offering `MicroVm`, `ProcessSandbox` and `Container` places a `Container` request
-    /// at `Container`, in one `PlaceInstance`.
+    /// node offering `MicroVm`, `None`, `ProcessSandbox` and `Container` places a `Container`
+    /// request at `Container`, in one `PlaceInstance`.
     #[test]
     fn the_weakest_admitted_level_is_placed_first() {
         let r = Ready::new();
@@ -1790,6 +1844,7 @@ mod placement {
             &r.node,
             &[
                 IsolationLevel::MicroVm,
+                IsolationLevel::None,
                 IsolationLevel::ProcessSandbox,
                 IsolationLevel::Container,
             ],
@@ -1798,6 +1853,31 @@ mod placement {
         let rows = decisions(&r);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].isolation, IsolationLevel::Container);
+    }
+
+    /// `None` (no sandbox) is the weakest level: a request and a cluster of minimum `None` on a
+    /// node offering `Container` and `None` are placed at `None`, in one `PlaceInstance`.
+    #[test]
+    fn a_request_of_minimum_none_is_placed_at_none_first() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut request = SchedulingRequestStorage::get(&ports, &r.request.data.request_id)
+            .expect("the request row");
+        request.data.min_isolation = IsolationLevel::None;
+        SchedulingRequestStorage::put(&mut ports, request);
+        let mut cluster = weft_types::behaviour::ClusterStorage::get(&ports, &r.cluster())
+            .expect("the cluster row");
+        cluster.data.min_isolation = IsolationLevel::None;
+        weft_types::behaviour::ClusterStorage::put(&mut ports, cluster);
+        make_ready(
+            &ports,
+            &r.node,
+            &[IsolationLevel::Container, IsolationLevel::None],
+        );
+        assert_eq!(tick(&r), 1);
+        let rows = decisions(&r);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].isolation, IsolationLevel::None);
     }
 
     /// Only the levels a node offers are tried: a node offering only `MicroVm` places a
@@ -1848,12 +1928,7 @@ mod placement {
     fn a_replica_the_first_node_has_no_room_for_is_placed_on_the_next() {
         let r = Ready::new();
         let mut ports = r.ports();
-        let mut row = weft_types::behaviour::NodeStorage::get(&ports, &r.node).expect("the row");
-        row.data.capacity = Some(vec![weft_types::shared::ResourceAmount {
-            resource_class: weft_types::shared::ResourceClassName("cpu".to_owned()),
-            amount: 1,
-        }]);
-        weft_types::behaviour::NodeStorage::put(&mut ports, row);
+        set_capacity(&ports, &r.node, 1);
         let first = another_node(&ports, &r.node, FIRST);
         let key = weft_types::shared::ServiceId(Uuid(r.w.ids.service_id.clone()));
         let mut service =
@@ -2312,9 +2387,10 @@ mod place_instance {
     use weft_impl::context::mint;
     use weft_impl::Ports;
     use weft_types::behaviour::{
-        BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage, DeviceStorage,
-        InstanceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage, QuotaStorage,
-        SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage, WorkloadStorage,
+        BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage,
+        ComponentWorkloadStorage, DeviceStorage, InstanceStorage, NodeSessionStorage, NodeStorage,
+        PlacementDecisionStorage, QuotaStorage, SchedulingRequestStorage, TopologyGroupStorage,
+        TopologyLinkStorage,
     };
     use weft_types::claims::{
         BindingData, BindingSnapshot, BindingState, ClaimData, ClaimHolder, ClaimSnapshot,
@@ -2332,9 +2408,9 @@ mod place_instance {
     };
     use weft_types::shared::{
         AccountId, BindingId, ClaimId, CloudId, ClusterId, ClusterNodePoolId, DeviceId,
-        FormationId, InstanceId, IsolationLevel, NodeId, NodePoolId, QuotaId, ResourceAmount,
-        ResourceClassName, SchedulingRequestId, ScopeId, Sharing, StampedAt, TenantId,
-        TopologyGroupId, TopologyId, TopologyLinkId, ZoneName,
+        FormationId, InstanceId, IsolationLevel, NodeId, NodePoolId, QuotaId, ResourceClassName,
+        SchedulingRequestId, ScopeId, Sharing, StampedAt, TenantId, TopologyGroupId, TopologyId,
+        TopologyLinkId, ZoneName,
     };
     use weft_types::topology::{
         GroupRole, TopologyGroupData, TopologyGroupSnapshot, TopologyGroupState, TopologyLinkData,
@@ -2342,7 +2418,7 @@ mod place_instance {
     };
     use weft_types::workloads::InstanceState;
 
-    use super::ready::{at, Ready};
+    use super::ready::{at, set_capacity, Ready};
 
     fn id() -> Uuid {
         Uuid(mint())
@@ -2357,7 +2433,7 @@ mod place_instance {
             tenant_id: r.tenant(),
             scope_id: request.scope_id.clone(),
             cluster_id: r.cluster(),
-            formation_id: request.formation_id.clone(),
+            formation_id: r.formation(),
             node_id: r.node.clone(),
             node_pool_id: node.data.node_pool_id,
             zone: node.data.zone,
@@ -2681,13 +2757,13 @@ mod place_instance {
         refuses(&r, &input, "other-cluster");
         let mut instance = InstanceStorage::get(&ports, &r.request.data.instance_id)
             .expect("the request's instance");
-        let mut workload = WorkloadStorage::get(&ports, &instance.data.workload_id)
-            .expect("the instance's workload");
-        workload.data.formation_id = FormationId(id());
-        WorkloadStorage::put(&mut ports, workload);
+        for mut assignment in ComponentWorkloadStorage::list(&ports) {
+            if assignment.data.workload_id == instance.data.workload_id {
+                assignment.data.formation_id = FormationId(id());
+                ComponentWorkloadStorage::put(&mut ports, assignment);
+            }
+        }
         refuses(&r, &input, "instance-of-other-formation");
-        set_request(&r, |row| row.data.formation_id = FormationId(id()));
-        refuses(&r, &input, "other-formation");
         instance.data.scope_id = ScopeId(id());
         InstanceStorage::put(&mut ports, instance);
         refuses(&r, &input, "instance-of-other-scope");
@@ -2739,12 +2815,7 @@ mod place_instance {
             BindingState::Active,
             Vec::new(),
         );
-        set_node(&r, |row| {
-            row.data.capacity = Some(vec![ResourceAmount {
-                resource_class: ResourceClassName("cpu".to_owned()),
-                amount: 1,
-            }]);
-        });
+        set_capacity(&ports, &r.node, 1);
         let input = base(&r);
         let placed = match PlaceInstanceBehavior::place_instance(&mut ports, input.clone())
             .expect("an outcome")
@@ -2772,8 +2843,9 @@ mod place_instance {
         assert_eq!(data.scope_id, request.scope_id);
         assert_eq!(data.node_id, r.node);
         assert_eq!(data.zone, input.zone);
-        assert_eq!(data.formation_id, request.formation_id);
+        assert_eq!(data.formation_id, r.formation());
         assert_eq!(data.topology_group_id, None);
+        assert_eq!(data.topology_id, None);
         assert_eq!(data.isolation, IsolationLevel::Container);
         assert_eq!(data.min_isolation, request.min_isolation);
         assert!(!data.assigned);
@@ -2794,6 +2866,96 @@ mod place_instance {
         );
         let request = SchedulingRequestStorage::get(&ports, &request.request_id).expect("it");
         assert_eq!(request.state, SchedulingRequestState::Pending);
+    }
+
+    /// A placement at `None` (no sandbox, the weakest level) is refused under every minimum
+    /// stronger than `None`, the request's and the cluster's, `ProcessSandbox` included; a
+    /// minimum of `None` takes it as far as the node's facts (default deny).
+    #[test]
+    fn a_placement_at_none_is_below_every_stronger_minimum() {
+        let r = Ready::new();
+        let mut input = base(&r);
+        input.isolation = IsolationLevel::None;
+        set_cluster(&r, |row| row.data.min_isolation = IsolationLevel::None);
+        for (minimum, outcome) in [
+            (IsolationLevel::MicroVm, "below-microvm"),
+            (IsolationLevel::UserKernel, "below-user-kernel"),
+            (IsolationLevel::Container, "below-container"),
+            (IsolationLevel::ProcessSandbox, "below-process-sandbox"),
+        ] {
+            set_request(&r, |row| row.data.min_isolation = minimum);
+            refuses(&r, &input, outcome);
+        }
+        set_request(&r, |row| row.data.min_isolation = IsolationLevel::None);
+        for (minimum, outcome) in [
+            (IsolationLevel::MicroVm, "below-cluster-microvm"),
+            (IsolationLevel::UserKernel, "below-cluster-user-kernel"),
+            (IsolationLevel::Container, "below-cluster-container"),
+            (
+                IsolationLevel::ProcessSandbox,
+                "below-cluster-process-sandbox",
+            ),
+        ] {
+            set_cluster(&r, |row| row.data.min_isolation = minimum);
+            refuses(&r, &input, outcome);
+        }
+        set_cluster(&r, |row| row.data.min_isolation = IsolationLevel::None);
+        refuses(&r, &input, "isolation-not-offered");
+    }
+
+    /// A decision placed in a topology group records the group's topology as `topology_id`,
+    /// and the view `PlacementDecisions` shows it: cloudspec-sim's `closed-link` reads the
+    /// topology's links (`TopologyLinks`, by `topology_id`) from a decision's row.
+    #[test]
+    fn a_placement_in_a_group_records_the_groups_topology() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut input = base(&r);
+        let node_pool = input.node_pool_id.clone().expect("the node's pool");
+        let own_pool = pool(
+            &mut ports,
+            &r.cluster(),
+            &r.request.data.scope_id,
+            Some(node_pool.clone()),
+        );
+        let group = TopologyGroupId(id());
+        let topology = TopologyId(id());
+        TopologyGroupStorage::put(
+            &mut ports,
+            TopologyGroupSnapshot {
+                state: TopologyGroupState::Active,
+                data: TopologyGroupData {
+                    topology_group_id: group.clone(),
+                    topology_id: topology.clone(),
+                    name: "a".to_owned(),
+                    node_pools: vec![node_pool],
+                    role: GroupRole::Hub,
+                    position: None,
+                    parent_group_id: None,
+                },
+            },
+        );
+        input.cluster_node_pool_id = Some(own_pool);
+        input.topology_group_id = Some(group.clone());
+        let placed =
+            match PlaceInstanceBehavior::place_instance(&mut ports, input).expect("an outcome") {
+                PlaceInstanceOutcome::Placed { instance_placed } => instance_placed,
+                other => panic!("{other:?}"),
+            };
+        let row = PlacementDecisionStorage::get(&ports, &placed.decision_id).expect("the row");
+        assert_eq!(row.data.topology_group_id, Some(group));
+        assert_eq!(row.data.topology_id, Some(topology.clone()));
+        let shown =
+            r.w.process
+                .host()
+                .system()
+                .weft_control
+                .placement_decisions()
+                .expect("the view reads")
+                .into_iter()
+                .find(|row| row.decision_id == placed.decision_id)
+                .expect("the decision's row");
+        assert_eq!(shown.topology_id, Some(topology));
     }
 
     /// The answer of `input`, whatever it writes.
@@ -2848,12 +3010,7 @@ mod place_instance {
                 selector: std::collections::BTreeMap::new(),
             }];
         });
-        set_node(r, |row| {
-            row.data.capacity = Some(vec![ResourceAmount {
-                resource_class: ResourceClassName("cpu".to_owned()),
-                amount: capacity,
-            }]);
-        });
+        set_capacity(&r.ports(), &r.node, capacity);
     }
 
     /// `no-capacity` counts the claims of each decision that holds the node (`Reserved`,
@@ -3045,15 +3202,23 @@ mod place_instance {
     }
 
     /// `instance-of-other-scope` and `instance-of-other-formation` deny by default: a request
-    /// whose instance row is gone, or whose instance's workload row is gone, is answered as a
-    /// missing request, and nothing is placed.
+    /// whose instance row is gone, or whose instance's workload no formation is assigned
+    /// (`weft.architecture.ComponentWorkload`), is answered as a missing request, and nothing is
+    /// placed.
     #[test]
-    fn a_request_whose_instance_or_its_workload_is_gone_is_answered_as_missing() {
+    fn a_request_whose_instance_or_its_assignment_is_gone_is_answered_as_missing() {
         let r = Ready::new();
         let mut ports = r.ports();
         let instance = InstanceStorage::get(&ports, &r.request.data.instance_id)
             .expect("the request's instance");
-        WorkloadStorage::delete(&mut ports, &instance.data.workload_id);
+        for assignment in ComponentWorkloadStorage::list(&ports) {
+            if assignment.data.workload_id == instance.data.workload_id {
+                ComponentWorkloadStorage::delete(
+                    &mut ports,
+                    &assignment.data.component_workload_id,
+                );
+            }
+        }
         refuses(&r, &base(&r), "instance-of-other-formation");
         InstanceStorage::delete(&mut ports, &instance.data.instance_id);
         refuses(&r, &base(&r), "instance-of-other-scope");
@@ -3215,6 +3380,27 @@ mod assign {
             }
         );
     }
+
+    /// `rank()` puts `None` (cloudspec's no-sandbox level) below `ProcessSandbox`: a node that
+    /// offers only `None` takes no placement at `ProcessSandbox`, and a placement at `None` is
+    /// taken by a node that offers only `ProcessSandbox`.
+    #[test]
+    fn assign_ranks_none_below_process_sandbox() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let decision = r.bound();
+        let mut row = PlacementDecisionStorage::get(&ports, &decision).expect("the decision");
+        row.data.isolation = IsolationLevel::ProcessSandbox;
+        PlacementDecisionStorage::put(&mut ports, row.clone());
+        make_ready(&ports, &r.node, &[IsolationLevel::None]);
+        refuses(&r, &input(&r, &decision), "isolation-unavailable");
+
+        row.data.isolation = IsolationLevel::None;
+        PlacementDecisionStorage::put(&mut ports, row);
+        make_ready(&ports, &r.node, &[IsolationLevel::ProcessSandbox]);
+        let answer = AssignBehavior::assign(&mut ports, input(&r, &decision)).expect("an outcome");
+        assert_eq!(outcome_name(&answer), "assigned", "{answer:?}");
+    }
 }
 
 /// The cases of the adversary pass on `story:skeleton-controllers`.
@@ -3236,11 +3422,10 @@ mod adversary_placement {
     use weft_types::scheduling::{PlaceInstance, PlacementDecisionState, SchedulingRequestState};
     use weft_types::shared::{
         AssignmentId, BindingId, ClaimId, InstanceId, IsolationLevel, NodeId, PlacementDecisionId,
-        ResourceAmount, ResourceClassName, SchedulingRequestId, ServiceId, Sharing, StampedAt,
-        TenantId,
+        ResourceClassName, SchedulingRequestId, ServiceId, Sharing, StampedAt, TenantId,
     };
 
-    use super::ready::{at, make_ready, Ready};
+    use super::ready::{at, make_ready, set_capacity, Ready};
 
     fn id() -> Uuid {
         Uuid(mint())
@@ -3248,13 +3433,7 @@ mod adversary_placement {
 
     /// Sets the node's observed `cpu` capacity.
     fn set_cpu(r: &Ready, amount: i64) {
-        let mut ports = r.ports();
-        let mut row = NodeStorage::get(&ports, &r.node).expect("the node row");
-        row.data.capacity = Some(vec![ResourceAmount {
-            resource_class: ResourceClassName("cpu".to_owned()),
-            amount,
-        }]);
-        NodeStorage::put(&mut ports, row);
+        set_capacity(&r.ports(), &r.node, amount);
     }
 
     /// The input that places the world's request on its node at `isolation`.
@@ -3266,7 +3445,7 @@ mod adversary_placement {
             tenant_id: r.tenant(),
             scope_id: request.scope_id.clone(),
             cluster_id: r.cluster(),
-            formation_id: request.formation_id.clone(),
+            formation_id: r.formation(),
             node_id: r.node.clone(),
             node_pool_id: node.data.node_pool_id,
             zone: node.data.zone,
@@ -3728,7 +3907,7 @@ mod adversary_cloud_blocks_rust {
             tenant_id: r.tenant(),
             scope_id: request.data.scope_id.clone(),
             cluster_id: r.cluster(),
-            formation_id: request.data.formation_id.clone(),
+            formation_id: r.formation(),
             node_id: r.node.clone(),
             node_pool_id: node.data.node_pool_id,
             zone: node.data.zone,
@@ -3823,10 +4002,12 @@ mod adversary_cloud_blocks_rust {
 
     /// The blocks dropped `SubmitSchedulingRequest`'s check that the instance is the request's
     /// scope's (`instance-of-other-account`); the story moves the dropped scope checks to
-    /// weft's run-time admission. A ReleaseController of `globex` (granted
-    /// `SubmitSchedulingRequest`) asks to schedule `acme`'s placed instance in its own scope and
-    /// formation: the Scheduler must not place `acme`'s instance as `globex`'s, under
-    /// `globex`'s tenant (which `shared-kernel` then compares) and quota.
+    /// weft's run-time admission, and story:cloud-blocks-layer-refactor-pin brought it back as
+    /// `instance-of-other-scope`. A ReleaseController of `globex` (granted
+    /// `SubmitSchedulingRequest`) asks to schedule `acme`'s placed instance in its own scope, with
+    /// a formation of its own pinned to the cluster: the Scheduler must not place `acme`'s
+    /// instance as `globex`'s, under `globex`'s tenant (which `shared-kernel` then compares) and
+    /// quota.
     #[test]
     fn another_scope_cannot_get_this_scope_s_instance_placed() {
         let r = Ready::new();
@@ -3860,7 +4041,7 @@ mod adversary_cloud_blocks_rust {
                 json!({
                     "instance_id": acme_instance.0 .0,
                     "scope_id": scope,
-                    "formation_id": formation,
+                    "identity": null,
                     "claims": [{"name": "cpu", "class": "cpu", "amount": 1, "selector": {}}],
                     "min_isolation": "Container",
                     "zones": [],
@@ -3930,5 +4111,70 @@ mod adversary_cloud_blocks_rust {
         r.w.process.host().tick();
         assert!(decisions(&r).is_empty(), "{:?}", decisions(&r));
         assert!(r.ports().store().step_waits(STEP).is_empty());
+    }
+}
+
+/// `weft.scope.OpenScope` with a placement (cloudspec's `Scope.placement`): `placement-form` in its
+/// declaration order, ahead of `name-taken`, and what `opened` writes.
+mod open_scope {
+    use weft_impl::bindings::outcome_name;
+    use weft_impl::context::mint;
+    use weft_testkit::InProcess;
+    use weft_types::behaviour::ScopeStorage;
+    use weft_types::scope::obligations::OpenScopeBehavior;
+    use weft_types::scope::{Lease, OpenScope, Placement};
+
+    fn open(process: &InProcess, name: &str, placement: Option<Placement>) -> String {
+        let mut ports = process.ports();
+        let input = OpenScope {
+            name: name.to_owned(),
+            placement,
+        };
+        outcome_name(&OpenScopeBehavior::open_scope(&mut ports, input).expect("an outcome"))
+            .to_owned()
+    }
+
+    fn placement(host: Option<&str>, pool: Option<&str>, lease: Option<i64>) -> Option<Placement> {
+        Some(Placement {
+            host: host.map(str::to_owned),
+            pool: pool.map(str::to_owned),
+            lease: lease.map(|max_hours| Lease { max_hours }),
+        })
+    }
+
+    #[test]
+    fn open_scope_answers_placement_form_ahead_of_name_taken_and_records_the_placement() {
+        let process = InProcess::start();
+        let taken = mint();
+        assert_eq!(open(&process, &taken, None), "opened");
+        let scopes = || ScopeStorage::list(&process.ports()).len();
+        let before = scopes();
+        for (form, name) in [
+            (placement(Some("h"), Some("p"), None), mint()),
+            (placement(None, None, None), mint()),
+            (placement(Some("h"), None, Some(1)), mint()),
+            (placement(None, Some("p"), Some(0)), mint()),
+            (placement(None, None, None), taken.clone()),
+        ] {
+            assert_eq!(
+                open(&process, &name, form.clone()),
+                "placement-form",
+                "{form:?}"
+            );
+        }
+        assert_eq!(scopes(), before);
+        assert_eq!(
+            open(&process, &taken, placement(Some("h"), None, None)),
+            "name-taken"
+        );
+
+        let leased = placement(None, Some("p"), Some(1));
+        let name = mint();
+        assert_eq!(open(&process, &name, leased.clone()), "opened");
+        let row = ScopeStorage::list(&process.ports())
+            .into_iter()
+            .find(|row| row.data.name == name)
+            .expect("the scope row");
+        assert_eq!(row.data.placement, leased);
     }
 }

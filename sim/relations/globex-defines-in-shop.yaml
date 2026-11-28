@@ -1,10 +1,20 @@
 # Steps appended to sim/experiments/full-setup.yaml for the non-interference relation
-# (docs/hardening/pass-3.md, technique 5): globex's Deployer defines a workload in acme's formation
-# shop with globex's scope. Hardening pass 1 W1 refuses it (formation-foreign). Its label holds
-# `globex`, so `--drop globex,site` leaves it out of the derived run with the rest of globex.
-- label: globex-defines-workload-in-shop
+# (docs/hardening/pass-3.md, technique 5): globex's Deployer defines a workload in its own scope
+# and assigns it to the component api of acme's formation shop. A workload names no formation
+# since story:cloud-blocks-layer-refactor-pin; the assignment refuses it
+# (formation-of-other-scope), as hardening pass 1 W1 refused the definition (formation-foreign).
+# Their labels hold `globex`, so `--drop globex,site` leaves them out of the derived run with the
+# rest of globex.
+- label: globex-defines-workload-for-shop
   command: weft.workloads.DefineWorkload
   actor: weft.actors.Deployer
   caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}
-  input: {scope_id: "${scope_b}", formation_id: "${formation_shop}", formation_revision_id: "${rev_shop}", environment_id: "${env_shop}", component: "${shop_c_2}", package_kind: Image, artifact_digest: "sha256:globex", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
-  expect: formation-foreign
+  input: {scope_id: "${scope_b}", identity: globex/intruder/prod/api, component: "${shop_c_2}", package_kind: Image, artifact_digest: "sha256:globex", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
+  expect: defined
+  bind: {globex_intruder_w: workload_id}
+- label: globex-assigns-workload-in-shop
+  command: weft.architecture.AssignWorkload
+  actor: weft.actors.Deployer
+  caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}
+  input: {formation_id: "${formation_shop}", scope_id: "${scope_b}", formation_revision_id: "${rev_shop}", environment_id: "${env_shop}", component_id: "${shop_comp_2}", workload_id: "${globex_intruder_w}"}
+  expect: formation-of-other-scope

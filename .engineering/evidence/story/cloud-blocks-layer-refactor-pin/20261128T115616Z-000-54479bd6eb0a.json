@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T11:56:16Z",
+  "actor": "human:operator",
+  "artifact": "story:cloud-blocks-layer-refactor-pin",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "coordinator: a pin move of the same shape as cloudspec-submission-pin (implemented locally, gate green); no critic panel run"
+  }
+}

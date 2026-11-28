@@ -28,11 +28,12 @@ use weft_impl::System;
 use weft_system::SystemEvent;
 use weft_types::accounts::AccountSnapshot;
 use weft_types::actor::Actor;
-use weft_types::behaviour::AccountStorage;
+use weft_types::behaviour::{AccountStorage, InstanceStorage};
 use weft_types::cluster::{ClusterState, Clusters};
 use weft_types::infrastructure::NodeState;
-use weft_types::scheduling::{PendingRequests, SchedulingRequests};
+use weft_types::scheduling::{PendingRequests, WorkloadFormations};
 use weft_types::shared::{ClusterId, FormationId, IsolationLevel, TenantId};
+use weft_types::workloads::InstanceSnapshot;
 
 use crate::waits::Waits;
 use crate::{outcome, send, Context, Sent};
@@ -54,14 +55,15 @@ pub const REQUEST_REFUSALS: &[&str] = &[
     "other-tenant",
     "other-account",
     "instance-of-other-scope",
-    "other-formation",
     "instance-of-other-formation",
     "other-cluster",
     "quota-exceeded",
 ];
 
-/// The isolation levels from the weakest to the strongest.
-const LEVELS: [IsolationLevel; 4] = [
+/// The isolation levels from the weakest to the strongest. `None` (no sandbox) is the weakest:
+/// only a request of minimum `None` admits it (default deny).
+const LEVELS: [IsolationLevel; 5] = [
+    IsolationLevel::None,
     IsolationLevel::ProcessSandbox,
     IsolationLevel::Container,
     IsolationLevel::UserKernel,
@@ -80,6 +82,7 @@ fn admitted(minimum: IsolationLevel) -> &'static [IsolationLevel] {
 /// The name of `level` in a command's input.
 fn level_name(level: IsolationLevel) -> &'static str {
     match level {
+        IsolationLevel::None => "None",
         IsolationLevel::ProcessSandbox => "ProcessSandbox",
         IsolationLevel::Container => "Container",
         IsolationLevel::UserKernel => "UserKernel",
@@ -97,19 +100,28 @@ struct Ties {
     cluster_id: ClusterId,
 }
 
-/// The ties of the pending request `row`: its formation (`weft.scheduling.SchedulingRequests`),
-/// the cluster not deleted whose `formations` list it (`weft.cluster.Clusters`, the pin of
+/// The ties of the pending request `row`: its formation, the one a
+/// `weft.architecture.ComponentWorkload` assigns the workload of the request's instance to (the
+/// request and the workload name no formation, story:cloud-blocks-layer-refactor-pin), the
+/// cluster not deleted whose `formations` list it (`weft.cluster.Clusters`, the pin of
 /// `weft.cluster.PinFormation`) and the tenant of the account that holds its scope. `None`
-/// where one is missing: a formation not pinned yet, a scope no account records.
+/// where one is missing: an instance or assignment not recorded, a formation not pinned yet, a
+/// scope no account records.
 fn ties(
     row: &PendingRequests,
-    requests: &[SchedulingRequests],
+    instances: &[InstanceSnapshot],
+    assignments: &[WorkloadFormations],
     clusters: &[Clusters],
     accounts: &[AccountSnapshot],
 ) -> Option<Ties> {
-    let formation_id = requests
+    let workload_id = &instances
         .iter()
-        .find(|request| request.request_id == row.request_id)?
+        .find(|instance| instance.data.instance_id == row.instance_id)?
+        .data
+        .workload_id;
+    let formation_id = assignments
+        .iter()
+        .find(|assignment| &assignment.workload_id == workload_id)?
         .formation_id
         .clone();
     let cluster_id = clusters
@@ -141,15 +153,17 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
     let Ok(nodes) = system.weft_control.nodes() else {
         return Vec::new();
     };
-    let Ok(all_requests) = system.weft_control.scheduling_requests() else {
-        return Vec::new();
-    };
     let Ok(clusters) = system.weft_control.clusters() else {
         return Vec::new();
     };
     // The account rows, read through the storage port: no view names the scope an account
-    // holds (`weft.accounts.AccountTree` has no `scope_id`).
+    // holds (`weft.accounts.AccountTree` has no `scope_id`). The instance rows likewise: no view
+    // of weft-control names an instance's workload across scopes.
     let accounts = AccountStorage::list(context.ports);
+    let instances = InstanceStorage::list(context.ports);
+    let Ok(assignments) = system.weft_control.workload_formations() else {
+        return Vec::new();
+    };
     let subjects: Vec<String> = requests
         .iter()
         .map(|row| row.request_id.0 .0.clone())
@@ -167,7 +181,7 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
         if in_flight || !waits.due(subject) {
             continue;
         }
-        let Some(of) = ties(row, &all_requests, &clusters, &accounts) else {
+        let Some(of) = ties(row, &instances, &assignments, &clusters, &accounts) else {
             continue;
         };
         let candidates: Vec<_> = admitted(row.min_isolation)

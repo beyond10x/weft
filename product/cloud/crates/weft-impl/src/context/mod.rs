@@ -157,8 +157,16 @@ impl weft_types::behaviour::Context for crate::Ports {
         shared::CloudId(uuid())
     }
 
+    fn generate_weft_shared_concurrency_id(&mut self) -> shared::ConcurrencyId {
+        shared::ConcurrencyId(uuid())
+    }
+
     fn generate_weft_shared_coverage_entry_id(&mut self) -> shared::CoverageEntryId {
         shared::CoverageEntryId(uuid())
+    }
+
+    fn generate_weft_shared_deadline_id(&mut self) -> shared::DeadlineId {
+        shared::DeadlineId(uuid())
     }
 
     fn generate_weft_shared_engine_id(&mut self) -> shared::EngineId {
@@ -171,6 +179,10 @@ impl weft_types::behaviour::Context for crate::Ports {
 
     fn generate_weft_shared_metric_series_id(&mut self) -> shared::MetricSeriesId {
         shared::MetricSeriesId(uuid())
+    }
+
+    fn generate_weft_shared_node_capacity_id(&mut self) -> shared::NodeCapacityId {
+        shared::NodeCapacityId(uuid())
     }
 
     fn generate_weft_shared_node_observation_id(&mut self) -> shared::NodeObservationId {
@@ -191,6 +203,10 @@ impl weft_types::behaviour::Context for crate::Ports {
 
     fn generate_weft_shared_publisher_id(&mut self) -> shared::PublisherId {
         shared::PublisherId(uuid())
+    }
+
+    fn generate_weft_shared_rate_id(&mut self) -> shared::RateId {
+        shared::RateId(uuid())
     }
 
     fn generate_weft_shared_runtime_id(&mut self) -> shared::RuntimeId {

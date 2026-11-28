@@ -18,7 +18,7 @@
 # - Network classes (`endpoint`, `domain`, `private-network`, `public-address`, `egress`,
 #   `bandwidth`) are weft.inventory.ResourceClass rows only, not entities. A claim of one carries
 #   its detail (`domain_name`, `egress_allow`); a binding carries the concrete unit it got
-#   (`address`). The Endpoint record is the formations domain's (weft.shared.EndpointId); the
+#   (`address`). The Endpoint record is the edge's (weft.shared.EndpointId); the
 #   private network belongs to the formation (section 3, line 161).
 # - Security classes (`secret`, `workload-identity`, `key`) are ResourceClass rows; their units
 #   live in the secrets and identity domains.
@@ -46,13 +46,15 @@ types:
       - {name: instance_id, type: weft.shared.InstanceId}
 
   # Section 4 "Claims" line 304: a component lists claims, per environment of its formation.
+  # cloudspec (layer rule): the component in one environment is named by its component-level
+  # workload identity (the path the identity block issues), in place of weft's formation_id,
+  # environment_id and component_name; formations and environments are records of the
+  # composition (layer 9).
   # weft@6798e7d:ess/5-runtime/claims.yaml:45
   - name: weft.claims.ComponentHolder
     kind: struct
     fields:
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component_name, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
 
   # weft@6798e7d:ess/5-runtime/claims.yaml:52
   - name: weft.claims.ClaimHolder

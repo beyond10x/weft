@@ -200,8 +200,6 @@ entities:
       - name: join_token_used
         type: Boolean
       # Absent until the node agent's first observation.
-      - name: capacity
-        type: Optional<List<weft.shared.ResourceAmount>>
       - name: isolation_facts
         type: Optional<weft.shared.IsolationFacts>
       - name: observed_at
@@ -459,7 +457,6 @@ events:
   - name: weft.infrastructure.NodeReady
     fields:
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: capacity, type: List<weft.shared.ResourceAmount>}
       - {name: isolation_facts, type: weft.shared.IsolationFacts}
       - {name: observed_at, type: Timestamp}
 
@@ -467,7 +464,6 @@ events:
   - name: weft.infrastructure.NodeObserved
     fields:
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: capacity, type: List<weft.shared.ResourceAmount>}
       - {name: isolation_facts, type: weft.shared.IsolationFacts}
       - {name: observed_at, type: Timestamp}
 
@@ -547,16 +543,20 @@ commands:
         unknown_instance: true
         error: weft.infrastructure.NotFound
       - name: weakened-from-microvm
-        when: {policy.minimum_isolation: {in: [UserKernel, Container, ProcessSandbox]}}
+        when: {policy.minimum_isolation: {in: [UserKernel, Container, ProcessSandbox, None]}}
         when_subject: {predicate: policy.minimum_isolation == MicroVm}
         error: weft.infrastructure.IsolationWeakened
       - name: weakened-from-user-kernel
-        when: {policy.minimum_isolation: {in: [Container, ProcessSandbox]}}
+        when: {policy.minimum_isolation: {in: [Container, ProcessSandbox, None]}}
         when_subject: {predicate: policy.minimum_isolation == UserKernel}
         error: weft.infrastructure.IsolationWeakened
       - name: weakened-from-container
-        when: {policy.minimum_isolation: {in: [ProcessSandbox]}}
+        when: {policy.minimum_isolation: {in: [ProcessSandbox, None]}}
         when_subject: {predicate: policy.minimum_isolation == Container}
+        error: weft.infrastructure.IsolationWeakened
+      - name: weakened-from-process-sandbox
+        when: {policy.minimum_isolation: {in: [None]}}
+        when_subject: {predicate: policy.minimum_isolation == ProcessSandbox}
         error: weft.infrastructure.IsolationWeakened
       - name: set
         updates: weft.infrastructure.Cloud
@@ -907,7 +907,6 @@ commands:
           role: input.role
           join_token_expires_at: input.join_token_expires_at
           join_token_used: false
-          capacity: {cleared: true}
           isolation_facts: {cleared: true}
           observed_at: {cleared: true}
         emits: [weft.infrastructure.NodeProvisioned]
@@ -963,7 +962,6 @@ commands:
           role: Worker
           join_token_expires_at: input.join_token_expires_at
           join_token_used: false
-          capacity: {cleared: true}
           isolation_facts: {cleared: true}
           observed_at: {cleared: true}
         emits: [weft.infrastructure.PoolNodeProvisioned]
@@ -1051,8 +1049,10 @@ commands:
         wrong_state: true
         error: weft.infrastructure.StateConflict
 
-  # Sketch lines 442-443 (Capacity, observed IsolationFacts), line 468 ("reports what it
+  # Sketch lines 442-443 (observed IsolationFacts), line 468 ("reports what it
   # observed"). Only the node's own agent reports; the first report makes a joining node Ready.
+  # The capacity it observed goes to weft.inventory.ReportNodeCapacity (cloudspec, layer rule:
+  # a node does not name the resource classes of the inventory).
   # OPEN: whether a report older than the stored `observed_at` is refused as stale.
   # OPEN: whether the nodes domain's NodeObserved (line 466) issues this command, or this domain
   # reads that record.
@@ -1062,7 +1062,6 @@ commands:
       display: Record what a node observed
     input:
       - {name: node_id, type: weft.shared.NodeId}
-      - {name: capacity, type: List<weft.shared.ResourceAmount>}
       - {name: isolation_facts, type: weft.shared.IsolationFacts}
       - {name: observed_at, type: Timestamp}
     outcomes:
@@ -1078,14 +1077,12 @@ commands:
         moves: weft.infrastructure.Node.become_ready
         instance: node_id
         sets:
-          capacity: input.capacity
           isolation_facts: input.isolation_facts
           observed_at: input.observed_at
         emits: [weft.infrastructure.NodeReady]
         payload:
           weft.infrastructure.NodeReady:
             node_id: input.node_id
-            capacity: input.capacity
             isolation_facts: input.isolation_facts
             observed_at: input.observed_at
       - name: observed
@@ -1093,14 +1090,12 @@ commands:
         updates: weft.infrastructure.Node
         instance: node_id
         sets:
-          capacity: input.capacity
           isolation_facts: input.isolation_facts
           observed_at: input.observed_at
         emits: [weft.infrastructure.NodeObserved]
         payload:
           weft.infrastructure.NodeObserved:
             node_id: input.node_id
-            capacity: input.capacity
             isolation_facts: input.isolation_facts
             observed_at: input.observed_at
       - name: not-joined
@@ -1330,8 +1325,9 @@ views:
       - {name: node_pool_id, type: Optional<weft.shared.NodePoolId>}
       - {name: state, type: weft.infrastructure.Node.State}
 
-  # Sketch lines 441-443. Every node with its role, observed capacity and isolation facts; no
-  # join token is ever shown, only its expiry and whether it was used.
+  # Sketch lines 441-443. Every node with its role and isolation facts (its capacity is
+  # weft.inventory.NodeCapacities); no join token is ever
+  # shown, only its expiry and whether it was used.
   # weft@6798e7d:ess/1-infrastructure/infrastructure.yaml:1398
   - name: weft.infrastructure.Nodes
     source: weft.infrastructure.Node
@@ -1344,7 +1340,6 @@ views:
       - {name: role, type: weft.infrastructure.NodeRole}
       - {name: join_token_expires_at, type: Timestamp}
       - {name: join_token_used, type: Boolean}
-      - {name: capacity, type: Optional<List<weft.shared.ResourceAmount>>}
       - {name: isolation_facts, type: Optional<weft.shared.IsolationFacts>}
       - {name: observed_at, type: Optional<Timestamp>}
       - {name: state, type: weft.infrastructure.Node.State}
@@ -1362,7 +1357,6 @@ views:
       - {name: zone, type: weft.shared.ZoneName}
       - {name: node_pool_id, type: Optional<weft.shared.NodePoolId>}
       - {name: role, type: weft.infrastructure.NodeRole}
-      - {name: capacity, type: Optional<List<weft.shared.ResourceAmount>>}
       - {name: isolation_facts, type: Optional<weft.shared.IsolationFacts>}
       - {name: observed_at, type: Optional<Timestamp>}
       - {name: state, type: weft.infrastructure.Node.State}

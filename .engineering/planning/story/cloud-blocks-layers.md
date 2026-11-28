@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-layers
 kind: story
-status: proposed
+status: implemented
 title: Layer and domain-map checks treat ess/cloud as one layer below weft's own files
 relations:
 - decomposes: epic:cloud-blocks
@@ -13,6 +13,8 @@ relations:
 scope:
 - confidence: cited
   path: AGENTS.md
+- confidence: cited
+  path: Taskfile.yml
 - confidence: cited
   path: docs/layers.md
 - confidence: cited
@@ -29,9 +31,11 @@ scope:
   path: tools/test-domain-map.sh
 - confidence: cited
   path: website/docs/specification/layers.md
-revision: 6
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T13:47:54Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

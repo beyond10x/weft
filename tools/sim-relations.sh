@@ -6,7 +6,7 @@
 # default target/cloudspec-sim/bin/cloudspec-sim).
 #
 # Usage: tools/sim-relations.sh [spec dir]   (default ess)
-#   non-interference  globex's steps, a cross-account DefineWorkload into acme's formation among
+#   non-interference  globex's steps, a cross-account AssignWorkload into acme's formation among
 #                     them, removed: every row naming an acme variable stays the same, except a
 #                     revision `number` (pass 3 finding R1: minted from a counter of every request)
 #   cordon-round-trip a node cordoned and uncordoned: every row stays the same

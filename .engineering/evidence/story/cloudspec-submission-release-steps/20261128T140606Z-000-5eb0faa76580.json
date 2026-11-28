@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T14:06:06Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-release-steps",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "coordinator review; builds on D-C1 = A and D-C2 = A; dependency plan-apply merged locally"
+  }
+}

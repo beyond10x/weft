@@ -1,0 +1,76 @@
+{
+  "architecture": {
+    "architecture": "hello",
+    "border": [],
+    "format": "cloudspec-architecture/1",
+    "links": [],
+    "parts": {
+      "hello": {
+        "block": "workloads",
+        "command": [
+          "sh",
+          "-c",
+          "echo hello"
+        ],
+        "environment": {
+          "GREETING": "hello"
+        },
+        "in": "jobs",
+        "kind": "snippet"
+      },
+      "jobs": {
+        "block": "scope"
+      }
+    },
+    "summary": "One snippet, one bounded command run to its end on the local placement."
+  },
+  "binding": null,
+  "coverage": {
+    "format": "cloudspec-coverage/1",
+    "steps": [
+      {
+        "counts": {
+          "mapped": 4,
+          "mapped_with_loss": 0,
+          "refused": 0
+        },
+        "entries": [
+          {
+            "note": "a scope: the containment of its parts, nothing runs of it (jobs)",
+            "object": "parts.jobs",
+            "status": "mapped"
+          },
+          {
+            "note": "one bounded command on the local placement, package kind snippet (hello)",
+            "object": "parts.hello",
+            "status": "mapped",
+            "to": "cloud.workloads.Workload package_kind Snippet"
+          },
+          {
+            "note": "the argv of the snippet's one process (3 words)",
+            "object": "parts.hello.command",
+            "status": "mapped",
+            "to": "cloud.workloads.Process.command"
+          },
+          {
+            "note": "the environment of the snippet's one process (GREETING)",
+            "object": "parts.hello.environment",
+            "status": "mapped",
+            "to": "cloud.workloads.Process.environment"
+          }
+        ],
+        "source": {
+          "digest": "sha256:3ce513003eec18301050ec62932fdfdc45a7b4193d5e3b43c82a5a1cfa5c948f",
+          "format": "cloudspec-architecture/1"
+        },
+        "status": "mapped",
+        "step": "generate weft"
+      }
+    ]
+  },
+  "digests": {
+    "architecture": "sha256:3ce513003eec18301050ec62932fdfdc45a7b4193d5e3b43c82a5a1cfa5c948f",
+    "binding": "sha256:74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  "format": "cloudspec-weft-submission/1"
+}

@@ -70,15 +70,14 @@ entities:
         type: weft.shared.InstanceId
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: weft.shared.FormationId
       - name: claims
         type: List<weft.workloads.ClaimRequest>
       # §10: never weakened. §10: spec kinds and untrusted code default to
       # MicroVm; the workloads domain sets that default before it asks.
       - name: min_isolation
         type: weft.shared.IsolationLevel
-      # The formation's zone rules, as the zones the instance may run in.
+      # The formation's zone rules, as the zones the instance may run in. cloudspec (layer rule):
+      # the request names no formation; the zones are copied from it by the caller.
       # OPEN: the sketch names "zone rules" without saying what they are. Taken: a list of
       # allowed zones, empty meaning any zone. Spread across zones and affinity are left out.
       - name: zones
@@ -122,11 +121,6 @@ entities:
         target: weft.scope.Scope
         cardinality: one
         via: scope_id
-      - name: formation
-        kind: references
-        target: weft.architecture.Formation
-        cardinality: one
-        via: formation_id
       - name: allowed_zones
         kind: references
         target: weft.infrastructure.Zone
@@ -405,7 +399,8 @@ commands:
   # (workloads domain), as the Scheduler system actor.
   # Wave 4 (§14 line 596, edge form): R1 (weft.workloads.InstanceCreated) invokes this command
   # with a binding, so every input is a field that event carries: instance_id, scope_id,
-  # formation_id, claims, minimum_isolation (mapped to min_isolation), zones, priority. R3 reaches
+  # claims, minimum_isolation (mapped to min_isolation), zones, priority (cloudspec: not
+  # formation_id, a record of the composition, layer 9). R3 reaches
   # it through R1: an evicted replica leaves its service's count (weft.workloads.InstanceEvicted
   # -> RecordReplicaEnded), the level loop creates a new instance, and that instance's
   # InstanceCreated is submitted here (docs/open-questions.md "workloads loops", wave 4, decided);
@@ -423,21 +418,21 @@ commands:
     input:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
       - {name: claims, type: List<weft.workloads.ClaimRequest>}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: zones, type: List<weft.shared.ZoneName>}
       - {name: priority, type: weft.shared.PriorityClassName}
       - {name: gang_id, type: Optional<weft.shared.GangId>}
+      # The component-level workload identity of the instance (weft.shared.WorkloadIdentity), in
+      # place of weft's formation_id; optional, so a binding whose event does not carry it still
+      # submits.
+      - {name: identity, type: Optional<weft.shared.WorkloadIdentity>}
     outcomes:
       - name: no-claims
         when: claims.count == 0
         error: weft.scheduling.NoClaims
       - name: unknown-scope
         when_related: {via: input.scope_id, exists: false}
-        error: weft.scheduling.NotFound
-      - name: unknown-formation
-        when_related: {via: input.formation_id, exists: false}
         error: weft.scheduling.NotFound
       - name: unknown-priority
         when_related: {via: input.priority, exists: false}
@@ -446,16 +441,6 @@ commands:
       - name: unknown-gang
         when_related: {via: input.gang_id, exists: false}
         error: weft.scheduling.UnknownGang
-      # hardening pass 1 scheduling:591: the formation is tied to the request's account; another
-      # account's formation answers as a missing one.
-      - name: formation-of-other-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.scheduling.NotFound
-      # design:tenant-clusters step 3: the request's cluster is the formation's. It is not an input
-      # (the R1 binding and weft.workloads.InstanceCreated stay as they are): `requested` reads it
-      # from the formation the guards above tied to the instance and the account, so a request
-      # never names a cluster other than its formation's. A deleted cluster needs no guard here:
-      # weft.cluster.DeleteCluster refuses while a formation runs in it (design open question 4).
       - name: retired-priority
         when_related: {via: input.priority, predicate: state == Retired}
         error: weft.scheduling.PriorityClassIsRetired
@@ -473,13 +458,28 @@ commands:
       - name: gang-of-other-scope
         when_related: {via: input.gang_id, predicate: scope_id != input.scope_id}
         error: weft.scheduling.RequestMismatch
+      # Scope isolation (story blocks-scope-isolation; the runtime consumer's adversary pass found
+      # a request for scope A's instance sent with scope B accepted, and B's quota and claims then
+      # applied to A's instance). The instance is a run-time record of the consumer (D7 A), held
+      # here by value, so the three checks of it are external. A missing instance and an instance
+      # of another scope answer alike, so a caller learns nothing about other scopes.
+      - name: no-such-instance
+        external: no instance has this instance_id
+        error: weft.scheduling.NotFound
+      - name: instance-of-other-scope
+        external: the instance belongs to another scope than scope_id
+        error: weft.scheduling.NotFound
+      # weft's formation-not-instances, by identity path: the request names no formation (layer
+      # rule), so the component-level workload identity, when given, must be the instance's.
+      - name: identity-not-instances
+        external: identity is given and the instance is not of a workload with that identity
+        error: weft.scheduling.RequestMismatch
       - name: requested
         creates: weft.scheduling.SchedulingRequest
         instance: request_id
         sets:
           instance_id: input.instance_id
           scope_id: input.scope_id
-          formation_id: input.formation_id
           claims: input.claims
           min_isolation: input.min_isolation
           zones: input.zones
@@ -894,7 +894,6 @@ views:
       - {name: request_id, type: weft.shared.SchedulingRequestId}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
       - {name: claims, type: List<weft.workloads.ClaimRequest>}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: zones, type: List<weft.shared.ZoneName>}
@@ -951,7 +950,6 @@ views:
       - {name: request_id, type: weft.shared.SchedulingRequestId}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
       - {name: claims, type: List<weft.workloads.ClaimRequest>}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: zones, type: List<weft.shared.ZoneName>}

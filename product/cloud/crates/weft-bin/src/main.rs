@@ -14,11 +14,12 @@
 //! (exit 1); what opening repaired in the log is written to stderr.
 //!
 //! The same listener serves the node channel under `/node/` ([`node_channel`]): the node agent
-//! dials it.
+//! dials it. Cloudspec submissions are taken under `/cloudspec/` ([`cloudspec`]).
 //!
 //! Every `--tick-ms` milliseconds (default 200, at least 1) the controllers run once
 //! ([`weft_bin::Host::tick`]) under the same lock as the requests.
 
+mod cloudspec;
 mod node_channel;
 
 use std::io::Write;
@@ -142,6 +143,8 @@ fn main() -> ExitCode {
         weft_bin::serve(&listener, |request| {
             if request.path.starts_with(node_channel::PREFIX) {
                 node_channel::answer(host, request)
+            } else if request.path.starts_with(cloudspec::PREFIX) {
+                cloudspec::answer(host, request, TRUST_CALLERS)
             } else {
                 host.handle(request, TRUST_CALLERS)
             }
