@@ -31,7 +31,7 @@ none is written before the specification of what it implements.
   writes `target/generated/`, cached by the digest of its sources. Crates use it through path dependencies, so a cargo
   command in the root workspace fails with "failed to read
   `.../target/generated/crates/<crate>/Cargo.toml`" until `tools/synth.sh` has run once;
-  `task test` runs it first. A slot build node never receives `target/` (git-ignored paths are
+  `task test` runs it first. A slot build node never receives the build directory (git-ignored paths are
   not synced), so a node job that runs cargo runs the hook in the same job:
   `slot sh -c 'tools/test-setup.d/10-generated.sh && cargo …'`, or a `task` target that runs it.
   Read a job's exit code from slot itself: a `| tail` or `; echo` after it reports its own code.
