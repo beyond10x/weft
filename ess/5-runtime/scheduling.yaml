@@ -357,10 +357,51 @@ commands:
               - tenant_id == input.tenant_id
           exists: false
         error: weft.scheduling.RequestMismatch
+      # The request's instance is the scope's. The vendored SubmitSchedulingRequest no longer
+      # ties its instance to its scope (cloudspec dropped `instance-of-other-account`), so a
+      # request of one scope may name another scope's instance; placing it would run that
+      # instance under the request's tenant and quota. A request whose instance row is missing is
+      # refused too (default deny). It answers as a missing request: nothing about the other
+      # scope's instance is disclosed.
+      - name: instance-of-other-scope
+        when_related:
+          entity: weft.scheduling.SchedulingRequest
+          where:
+            all:
+              - request_id == input.request_id
+              - not:
+                  exists:
+                    in: {entity: weft.workloads.Instance}
+                    as: i
+                    that: {all: ["i.instance_id == instance_id", "i.scope_id == input.scope_id"]}
+          exists: true
+        error: weft.scheduling.NotFound
       # D-e A: the formation named is the request's.
       - name: other-formation
         when_related: {via: input.request_id, predicate: formation_id != input.formation_id}
         error: weft.scheduling.RequestMismatch
+      # The request's instance runs a workload of the formation named (cloudspec dropped
+      # SubmitSchedulingRequest's `formation-not-instances`), so a request cannot carry an
+      # instance into another formation's cluster. A walk of the request's instance with two
+      # sibling walks, each one level deep (ESS 0.99.2 nests no second walk inside the first). An
+      # instance whose workload row is missing is refused (default deny). Answers as a missing
+      # request, like `instance-of-other-scope`.
+      - name: instance-of-other-formation
+        when_related:
+          entity: weft.workloads.Instance
+          where:
+            all:
+              - exists:
+                  in: {entity: weft.scheduling.SchedulingRequest}
+                  as: q
+                  that: {all: ["q.request_id == input.request_id", "q.instance_id == instance_id"]}
+              - not:
+                  exists:
+                    in: {entity: weft.workloads.Workload}
+                    as: w
+                    that: {all: ["w.workload_id == workload_id", "w.formation_id == input.formation_id"]}
+          exists: true
+        error: weft.scheduling.NotFound
       # design:tenant-clusters step 3 and D-e A: the cluster named is the one the request's
       # formation runs in (weft.cluster.PinFormation). A formation no cluster lists is refused
       # (default deny); a formation is listed by at most one cluster.

@@ -53,7 +53,9 @@ pub const REQUEST_REFUSALS: &[&str] = &[
     "already-reserved",
     "other-tenant",
     "other-account",
+    "instance-of-other-scope",
     "other-formation",
+    "instance-of-other-formation",
     "other-cluster",
     "quota-exceeded",
 ];

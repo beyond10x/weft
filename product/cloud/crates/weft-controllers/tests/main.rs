@@ -1199,9 +1199,10 @@ mod obligations {
 
     /// `replica-live` counts an instance in `Pending`, `Scheduled`, `Starting`, `Running` or
     /// `Paused` and no other: in a live state replica 0 is live; in any other state it is
-    /// created again. The quota counts the same states, at `PlaceInstance` since the blocks took
+    /// created again. The quota counts these states but `Pending`, and a `Pending` instance
+    /// only while a decision of it holds a node, at `PlaceInstance` since the blocks took
     /// `CreateInstance` out of the outcome group `quota`
-    /// (`place_instance::the_quota_counts_the_five_live_states_and_no_other`).
+    /// (`place_instance::the_quota_counts_an_instance_from_scheduled_on_and_a_pending_one_only_while_placed`).
     #[test]
     fn replica_live_counts_the_five_live_states_and_no_other() {
         let w = World::new();
@@ -2313,7 +2314,7 @@ mod place_instance {
     use weft_types::behaviour::{
         BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage, DeviceStorage,
         InstanceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage, QuotaStorage,
-        SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage,
+        SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage, WorkloadStorage,
     };
     use weft_types::claims::{
         BindingData, BindingSnapshot, BindingState, ClaimData, ClaimHolder, ClaimSnapshot,
@@ -2678,8 +2679,18 @@ mod place_instance {
         refuses(&r, &input, "binding-of-other-account");
         set_cluster(&r, |row| row.data.formations.clear());
         refuses(&r, &input, "other-cluster");
+        let mut instance = InstanceStorage::get(&ports, &r.request.data.instance_id)
+            .expect("the request's instance");
+        let mut workload = WorkloadStorage::get(&ports, &instance.data.workload_id)
+            .expect("the instance's workload");
+        workload.data.formation_id = FormationId(id());
+        WorkloadStorage::put(&mut ports, workload);
+        refuses(&r, &input, "instance-of-other-formation");
         set_request(&r, |row| row.data.formation_id = FormationId(id()));
         refuses(&r, &input, "other-formation");
+        instance.data.scope_id = ScopeId(id());
+        InstanceStorage::put(&mut ports, instance);
+        refuses(&r, &input, "instance-of-other-scope");
         input.tenant_id = TenantId(id());
         refuses(&r, &input, "other-tenant");
         set_request(&r, |row| row.data.scope_id = ScopeId(id()));
@@ -2944,11 +2955,36 @@ mod place_instance {
         assert_eq!(answer(&r, &base(&r)), "placed");
     }
 
-    /// The quota counts an instance in `Pending`, `Scheduled`, `Starting`, `Running` or
-    /// `Paused` and no other: with a quota of 1 cpu, another instance of the scope in a live
-    /// state leaves no room for the request; in any other state the request is placed.
+    /// Let every decision go, so the next case is answered on its own.
+    fn release_all(ports: &mut Ports) {
+        for mut decision in PlacementDecisionStorage::list(ports) {
+            decision.state = PlacementDecisionState::Released;
+            PlacementDecisionStorage::put(ports, decision);
+        }
+    }
+
+    /// A decision of `instance` on the world's node in `state`, of a request with no row (so
+    /// it takes no capacity of the node); the world's request is left `Pending`.
+    fn decision_of(r: &Ready, instance: &InstanceId, state: PlacementDecisionState) {
+        let mut ports = r.ports();
+        let decision = r.bound();
+        let mut row = PlacementDecisionStorage::get(&ports, &decision).expect("the decision");
+        row.state = state;
+        row.data.request_id = SchedulingRequestId(id());
+        row.data.instance_id = instance.clone();
+        PlacementDecisionStorage::put(&mut ports, row);
+        set_request(r, |row| row.state = SchedulingRequestState::Pending);
+    }
+
+    /// The quota counts an instance from `Scheduled` on (`Scheduled`, `Starting`, `Running`,
+    /// `Paused`), a `Pending` one only while a decision of it holds a node (`Reserved`,
+    /// `Bound`, `Evicting`), and no other: with a quota of 1 cpu, another instance of the scope
+    /// that holds leaves no room for the request; one that does not hold leaves the request
+    /// placed. A `Pending` instance with no decision holds nothing, so two `Pending` instances
+    /// past the quota do not refuse each other
+    /// (`adversary_cloud_blocks_rust::of_two_pending_instances_the_quota_admits_one_is_placed`).
     #[test]
-    fn the_quota_counts_the_five_live_states_and_no_other() {
+    fn the_quota_counts_an_instance_from_scheduled_on_and_a_pending_one_only_while_placed() {
         let r = Ready::new();
         let mut ports = r.ports();
         let mut sibling = InstanceStorage::get(&ports, &r.request.data.instance_id)
@@ -2957,7 +2993,6 @@ mod place_instance {
         sibling.data.service_id = None;
         set_limit(&r, 1);
         for state in [
-            InstanceState::Pending,
             InstanceState::Scheduled,
             InstanceState::Starting,
             InstanceState::Running,
@@ -2967,6 +3002,36 @@ mod place_instance {
             InstanceStorage::put(&mut ports, sibling.clone());
             refuses(&r, &base(&r), "quota-exceeded");
         }
+
+        sibling.state = InstanceState::Pending;
+        InstanceStorage::put(&mut ports, sibling.clone());
+        for state in [
+            PlacementDecisionState::Reserved,
+            PlacementDecisionState::Bound,
+            PlacementDecisionState::Evicting,
+        ] {
+            decision_of(&r, &sibling.data.instance_id, state);
+            refuses(&r, &base(&r), "quota-exceeded");
+            release_all(&mut ports);
+        }
+        decision_of(
+            &r,
+            &sibling.data.instance_id,
+            PlacementDecisionState::Released,
+        );
+        assert_eq!(
+            answer(&r, &base(&r)),
+            "placed",
+            "a Pending instance whose decision is Released"
+        );
+        release_all(&mut ports);
+        assert_eq!(
+            answer(&r, &base(&r)),
+            "placed",
+            "a Pending instance with no decision"
+        );
+        release_all(&mut ports);
+
         for state in [
             InstanceState::Exited,
             InstanceState::Failed,
@@ -2975,12 +3040,23 @@ mod place_instance {
             sibling.state = state;
             InstanceStorage::put(&mut ports, sibling.clone());
             assert_eq!(answer(&r, &base(&r)), "placed", "a {state:?} instance");
-            // Let the decision go, so the next state is answered on its own.
-            for mut decision in PlacementDecisionStorage::list(&ports) {
-                decision.state = PlacementDecisionState::Released;
-                PlacementDecisionStorage::put(&mut ports, decision);
-            }
+            release_all(&mut ports);
         }
+    }
+
+    /// `instance-of-other-scope` and `instance-of-other-formation` deny by default: a request
+    /// whose instance row is gone, or whose instance's workload row is gone, is answered as a
+    /// missing request, and nothing is placed.
+    #[test]
+    fn a_request_whose_instance_or_its_workload_is_gone_is_answered_as_missing() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let instance = InstanceStorage::get(&ports, &r.request.data.instance_id)
+            .expect("the request's instance");
+        WorkloadStorage::delete(&mut ports, &instance.data.workload_id);
+        refuses(&r, &base(&r), "instance-of-other-formation");
+        InstanceStorage::delete(&mut ports, &instance.data.instance_id);
+        refuses(&r, &base(&r), "instance-of-other-scope");
     }
 }
 
@@ -3706,13 +3782,15 @@ mod adversary_cloud_blocks_rust {
     fn a_replica_past_the_quota_does_not_keep_the_replica_within_it_from_being_placed() {
         let r = Ready::new();
         set_limit(&r, 1);
-        r.w.process.host().replay(vec![SystemEvent::WorkloadsReplicaRequested(
-            ReplicaRequested {
-                service_id: ServiceId(Uuid(r.w.ids.service_id.clone())),
-                workload_id: WorkloadId(Uuid(r.w.ids.workload_id.clone())),
-                replica_index: 1,
-            },
-        )]);
+        r.w.process
+            .host()
+            .replay(vec![SystemEvent::WorkloadsReplicaRequested(
+                ReplicaRequested {
+                    service_id: ServiceId(Uuid(r.w.ids.service_id.clone())),
+                    workload_id: WorkloadId(Uuid(r.w.ids.workload_id.clone())),
+                    replica_index: 1,
+                },
+            )]);
         let pending = SchedulingRequestStorage::list(&r.ports())
             .into_iter()
             .filter(|row| row.state == SchedulingRequestState::Pending)
@@ -3781,7 +3859,10 @@ mod adversary_cloud_blocks_rust {
                 }),
             )
             .expect("the control host answers");
-        let outcome = answer.body["outcome"].as_str().unwrap_or_default().to_owned();
+        let outcome = answer.body["outcome"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
         for _ in 0..2 {
             r.w.process.host().tick();
         }
