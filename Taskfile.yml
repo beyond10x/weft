@@ -95,7 +95,7 @@ tasks:
       - ess specify validate --path ess --strict-requires
 
   layers:
-    desc: Fail when a domain refers to a domain of a higher layer (docs/layers.md).
+    desc: Fail when a file refers to a higher layer, or a vendored file under ess/cloud/ to a file of weft's own (docs/layers.md).
     cmds:
       - tools/check-layers.sh
 
@@ -111,7 +111,7 @@ tasks:
       - tools/check-layers.sh --graph
 
   domain:
-    desc: Validate one domain with weft.shared only. Usage, task domain -- accounts
+    desc: Validate one domain with weft.shared and the vendored files under ess/cloud/ (tools/check-domain.sh). Usage, task domain -- accounts
     cmds:
       - tools/check-domain.sh {{.CLI_ARGS}}
 

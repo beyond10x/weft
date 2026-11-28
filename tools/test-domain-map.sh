@@ -14,6 +14,13 @@
 #           generator misses a domain ess has or drops one reference, and whose page that
 #           generator wrote, the hook fails with that domain or reference, not with the byte
 #           compare.
+#   layers-upward, layers-cloud, layers-vendored-upward, layers-vendored-value
+#           tools/check-layers.sh on fixture trees under target/, each the committed ess/ with one
+#           probe file added: a weft file of layer 2 that refers to an entity of layer 8 is
+#           refused; one that refers to an entity of ess/cloud/ is accepted (exit 0, the edge in
+#           --graph); a vendored file under ess/cloud/ of the domain weft.accounts that refers to
+#           weft's own weft.accounts.Account (layer 2) is refused, though both declare the same
+#           domain, and so is one that names a value type of weft's metering.yaml.
 # Runs `ess` (tools/check-layers.sh --graph, the hook) a few times; no network; about 15 s.
 set -u
 LC_ALL=C
@@ -27,6 +34,62 @@ fail=0
 cases=0
 no() { echo "FAIL: $*"; fail=1; }
 ok() { echo "ok: $*"; }
+# a sed edit of the copy that must change it
+edit() { # edit <file> <sed script>
+  cp "$1" "$1.orig" && sed "$2" "$1.orig" > "$1" && ! cmp -s "$1.orig" "$1" && rm -f "$1.orig"
+}
+
+# tools/check-layers.sh on a copy of ess/ with one probe file: the layers of weft's own files and
+# the one layer of the vendored files under ess/cloud/.
+probe() { # probe <case> <path under ess/> <domain> <field type>: makes the tree $work/tree-<case>
+  t=$work/tree-$1
+  mkdir -p "$t/tools" "$t/ess/${2%/*}" && cp -R ess/. "$t/ess/" && cp tools/check-layers.sh "$t/tools/" || return 1
+  printf '%s\n' \
+    "domain: $3" \
+    'types:' \
+    "  - name: $3.ProbeId" \
+    '    kind: newtype' \
+    '    of: Uuid' \
+    'entities:' \
+    "  - name: $3.Probe" \
+    '    naming:' \
+    '      summary: A probe of tools/check-layers.sh.' \
+    '    identity:' \
+    '      name: probe_id' \
+    "      type: $3.ProbeId" \
+    '    fields:' \
+    '      - name: target' \
+    "        type: $4" \
+    '    lifecycle:' \
+    '      initial: Open' \
+    '      states: [Open]' \
+    '      terminal: [Open]' > "$t/ess/$2" || return 1
+  edit "$t/ess/ess-inputs.yaml" "s#^scenarios:#  - $2\\
+scenarios:#" || return 1
+  grep -qx "  - $3" "$t/ess/system.yaml" || edit "$t/ess/system.yaml" "s#^domains:\$#domains:\\
+  - $3#"
+}
+# layers <case> <exit> <text>: runs tools/check-layers.sh --graph in the tree; it must exit <exit>
+# and print <text>
+layers() {
+  cases=$((cases + 1))
+  (cd "$work/tree-$1" && tools/check-layers.sh --graph) > "$work/$1.out" 2>&1
+  rc=$?
+  if [ "$rc" = "$2" ] && grep -qF -- "$3" "$work/$1.out"; then
+    ok "$1: tools/check-layers.sh exits $rc with: $3"
+  else
+    no "$1: tools/check-layers.sh exits $rc, expected $2 with \"$3\":"
+    grep -v '^ *[0-9]* [a-z.]* -> ' "$work/$1.out" | sed -n '1,6p'
+  fi
+}
+probe layers-upward 2-tenancy/probe.yaml weft.probe weft.shared.BudgetId || exit 2
+layers layers-upward 1 'upward: weft.probe (layer 2) -> weft.metering (layer 8) via weft.probe.Probe.target'
+probe layers-cloud 2-tenancy/probe.yaml weft.probe weft.shared.ScopeId || exit 2
+layers layers-cloud 0 'weft.probe -> cloud.scope'
+probe layers-vendored-upward cloud/3-scope/probe.yaml weft.accounts weft.shared.AccountId || exit 2
+layers layers-vendored-upward 1 'upward: cloud.accounts (layer cloud) -> weft.accounts (layer 2) via weft.accounts.Probe.target'
+probe layers-vendored-value cloud/3-scope/probe.yaml weft.accounts weft.metering.Currency || exit 2
+layers layers-vendored-value 1 'upward: cloud.accounts (layer cloud) -> weft.metering (layer 8) via weft.accounts.Probe.target'
 
 tools/check-layers.sh --graph > "$work/graph.txt" ||
   { echo "test-domain-map: tools/check-layers.sh --graph failed" >&2; exit 2; }
@@ -112,10 +175,6 @@ expect() {
     sed -n '1,6p' "$work/$1.out"
   fi
 }
-# a sed edit of the copy that must change it
-edit() { # edit <file> <sed script>
-  cp "$1" "$1.orig" && sed "$2" "$1.orig" > "$1" && ! cmp -s "$1.orig" "$1" && rm -f "$1.orig"
-}
 
 # check 2: ess has a domain the generator does not draw. The generator takes the files of
 # ess-inputs.yaml named `<n>-<layer>/<name>.yaml` with [a-z-] only; renamed to actors_v.yaml the
@@ -128,9 +187,13 @@ expect domain-missing 'weft.actors is 0 node lines of the block, not 1'
 
 # check 3: the generator drops one reference: a pair within one layer (drawn domain to domain),
 # then the only pair between two layers (drawn as the layer edge). Both picked from the graph.
-for f in ess/[0-9]*-*/*.yaml; do
+for f in ess/[0-9]*-*/*.yaml ess/cloud/[0-9]*-*/*.yaml; do
   d=$(sed -n 's/^domain:[ ]*//p' "$f" | head -n 1)
-  [ -n "$d" ] && dir=${f#ess/} && printf '%s %s\n' "$d" "${dir%%-*}"
+  [ -n "$d" ] || continue
+  case $f in
+    ess/cloud/*) printf '%s %s\n' "cloud.${d#*.}" cloud ;;
+    *) dir=${f#ess/}; printf '%s %s\n' "$d" "${dir%%-*}" ;;
+  esac
 done > "$work/layers.txt"
 awk 'NF == 0 { exit } NF == 4 && $3 == "->" { print $2, $4 }' "$work/graph.txt" | sort -u > "$work/pairs.txt"
 same=$(awk 'NR == FNR { l[$1] = $2; next } l[$1] == l[$2] { print; exit }' "$work/layers.txt" "$work/pairs.txt")

@@ -66,3 +66,38 @@ Each layer names only layers below it.
 - `tools/check-layers.sh` (`task layers`) holds the rule: 0 upward references.
 - workloads stays whole in layer 4: once Instance.placement_decision_id was dropped, no reference of it points upward.
 - Claim and Binding moved from `resources` (layer 3) to `5-runtime/claims.yaml`: a binding names a node and an instance. `Volume.writer_binding_id` dropped; DeleteVolume, DeleteFilesystem, DeleteBucket refuse `UnitInUse` as `external` (layer 3 cannot read claims).
+
+## The vendored layer (2026-11-28)
+
+Epic `cloud-blocks` (story `cloud-blocks-layers`). cloudspec's blocks are vendored into
+`ess/cloud/` (`<n>-<layer>/<name>.yaml`, cloudspec's own directories, with the lock
+`ess/cloud/cloud.lock`). Every file there is vendored: nobody edits it, and only
+`task vendor-update REV=<commit>` changes it (`AGENTS.md` § Vendored blocks). weft's own files
+keep the layers above and were trimmed to weft's run-time records.
+
+- All of `ess/cloud/` is one layer, `cloud`, below layer 0. cloudspec orders its blocks itself;
+  weft does not check that order.
+- A file of weft's own may refer to the vendored layer (`accounts -> cloud.scope`). A vendored file
+  may not refer to a file of weft's own. A file of weft's own that refers to a higher layer of
+  weft's own still fails.
+- A domain may be split over a vendored file and one of weft's own (`weft.workloads`:
+  `ess/cloud/5-workloads/workloads.yaml` and `ess/4-applications/workloads.yaml`). So the unit of
+  the check is the part of a domain one layer declares, not the domain: `weft.workloads` for weft's
+  own file and `cloud.workloads` for the vendored one. Each entity belongs to the part whose file
+  declares it. The old check compared domains and missed a vendored entity naming a weft entity
+  of the same domain.
+- An identity type more than one entity has (`CloudId`: the vendored `Cloud`, weft's
+  `CloudRuntime` and `CloudAccess`) refers to the entity in the lowest layer.
+- A vendored file that names a type declared under `ess/cloud/` refers only to a vendored entity
+  that has it as identity. `PrincipalId` and `InstanceId` are values there (the blocks hold no
+  principal and no instance), though weft's `Principal` and `Instance` have them as identity:
+  16 references that would otherwise point upward. A vendored file that names a type declared
+  only in a file of weft's own refers to that file, and fails.
+
+Measured on the integration branch of 2026-11-28 (after story `cloud-blocks-policies`): the old
+check failed with 291 references, all `unknown layer` or `upward` through the vendored domains.
+`tools/check-layers.sh` now finds 124 references between parts and 0 upward. 20 of them join two
+parts of weft's own files; the rest point into the vendored layer or stay inside it.
+`tools/test-domain-map.sh` holds the rule on probe files: weft layer 2 to layer 8 refused, weft
+to `cloud.scope` accepted, a vendored file naming `weft.accounts.Account` or a value type of
+`metering.yaml` refused.
