@@ -4,7 +4,12 @@
 //! in `Scheduled` on that node with an `Active` assignment, its workload and the artifact of its
 //! snippet. The process of this node's instance is `sh -c "echo weft"`, the other node's
 //! `sh -c "echo other"`, so an exec of the other instance shows in the report by its output.
-//! Neither process carries a `Ready` check.
+//! Neither process carries a `Ready` check. Both instances restart on exit (restart mode `Always`,
+//! as their `Service`-shaped workload), so the agent records no exit of theirs
+//! (`story:cloudspec-submission-job-exit`); a case of an instance of restart mode `Never` changes
+//! it with [`two_nodes_changed`]. Their restart policy holds the invariant of
+//! `weft.workloads.Instance` and `Workload` (`backoff_limit` at least 1), which the generated
+//! `RecordInstanceExited` checks before it writes.
 
 use std::collections::BTreeMap;
 
@@ -201,10 +206,10 @@ fn placed(
         checks: Vec::new(),
     }];
     let restart_policy = RestartPolicy {
-        mode: RestartMode::Never,
+        mode: RestartMode::Always,
         backoff_initial_seconds: 1,
         backoff_max_seconds: 60,
-        backoff_limit: 0,
+        backoff_limit: 1,
         backoff_window_seconds: 600,
     };
     rows.push(Row::Workload(WorkloadSnapshot {

@@ -845,3 +845,228 @@ mod follow {
         assert_eq!(row["state"], json!("Running"), "{row}");
     }
 }
+
+/// The exit of an instance (`story:cloudspec-submission-job-exit`): once every process of an
+/// instance of restart mode `Never` exited 0 and its `RecordInstanceRunning` was answered, the
+/// follower sends `RecordInstanceExited` with exit code 0 as the NodeAgent, and the instance
+/// reads `Exited`. An instance of another restart mode, and an exit other than 0, is not
+/// reported. Each case runs [`Follower`] on a thread of its own against a seeded `ControlHost`,
+/// with a stub `exec` port that exits each process with one code.
+mod follow_exit {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use serde_json::{json, Value};
+    use weft_agent::follow::Follower;
+    use weft_agent::report::Report;
+    use weft_client::{Client, Expect};
+    use weft_platform::node::{Exec, ExecError, ExecState, Exited, Process};
+    use weft_testkit::ControlHost;
+    use weft_types::workloads::RestartMode;
+
+    use crate::seeds::{self, Seed};
+
+    /// How long a case waits for the follower.
+    const LIMIT: Duration = Duration::from_secs(20);
+
+    /// The time between two passes of a case's follower.
+    const PASS: Duration = Duration::from_millis(50);
+
+    const EXITED: &str = "weft.workloads.RecordInstanceExited";
+    const RUNNING: &str = "weft.workloads.RecordInstanceRunning";
+
+    /// A stub `exec` port: every process runs and exits with `code`.
+    struct Stub {
+        code: u8,
+    }
+
+    impl Exec for Stub {
+        fn run(
+            &self,
+            process: &Process,
+            on_state: &mut dyn FnMut(ExecState),
+        ) -> Result<Exited, ExecError> {
+            on_state(ExecState::Accepted);
+            on_state(ExecState::Running);
+            on_state(ExecState::Exited);
+            Ok(Exited {
+                code: Some(self.code),
+                stdout: format!("{}\n", process.argv.last().cloned().unwrap_or_default())
+                    .into_bytes(),
+                stderr: Vec::new(),
+                truncated: false,
+            })
+        }
+    }
+
+    /// The seed of two nodes with this node's instance of restart mode `mode` and one process per
+    /// snippet.
+    fn seed(mode: RestartMode, snippets: &[&str]) -> Seed {
+        seeds::two_nodes_changed(|instance| {
+            instance.data.restart_policy.mode = mode;
+            instance.data.processes = snippets
+                .iter()
+                .enumerate()
+                .map(|(index, snippet)| seeds::process(&format!("p{index}"), snippet))
+                .collect();
+        })
+    }
+
+    /// Seeds `seed` and runs a follower of this node with a stub that exits with `code`, writing
+    /// to the report named `name`: the control host and the report's path.
+    fn follow(seed: &Seed, code: u8, name: &str) -> (ControlHost, PathBuf) {
+        let host = ControlHost::start_seeded(seed.rows.clone());
+        let report = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("follow-exit-{name}-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&report);
+        let client: &'static Client = Box::leak(Box::new(Client::new(host.address())));
+        let node_id: &'static str = Box::leak(seed.this.node_id.clone().into_boxed_str());
+        let exec: &'static Stub = Box::leak(Box::new(Stub { code }));
+        let open: &'static Mutex<Report> = Box::leak(Box::new(Mutex::new(
+            Report::open(&report).expect("the report file opens"),
+        )));
+        std::thread::spawn(move || {
+            Follower::new(client, node_id, exec, open)
+                .pacing(PASS, 4)
+                .follow()
+        });
+        (host, report)
+    }
+
+    /// The complete lines of the report file at `path`.
+    fn lines(path: &Path) -> Vec<Value> {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        let complete = text.rfind('\n').map_or("", |end| &text[..end]);
+        complete
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a report line"))
+            .collect()
+    }
+
+    /// Waits until `done` holds of the report at `path`.
+    fn wait(path: &Path, what: &str, done: impl Fn(&[Value]) -> bool) -> Vec<Value> {
+        let start = Instant::now();
+        loop {
+            let lines = lines(path);
+            if done(&lines) {
+                return lines;
+            }
+            assert!(start.elapsed() < LIMIT, "{what} after {LIMIT:?}: {lines:?}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// The highest number of a `{"pass": n}` line.
+    fn last_pass(lines: &[Value]) -> u64 {
+        lines
+            .iter()
+            .filter(|line| line.get("started").is_none())
+            .filter_map(|line| line["pass"].as_u64())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Waits until the report holds the exit lines of `exits` processes of `instance_id` and
+    /// `passes` more passes after them.
+    fn exited_and_passed(path: &Path, instance_id: &str, exits: usize, passes: u64) -> Vec<Value> {
+        let lines = wait(path, "no exit line", |lines| {
+            lines
+                .iter()
+                .filter(|line| {
+                    line["instance_id"] == json!(instance_id) && line.get("exit_code").is_some()
+                })
+                .count()
+                >= exits
+        });
+        let after = last_pass(&lines) + passes;
+        wait(path, &format!("no pass {after}"), |lines| {
+            last_pass(lines) >= after
+        })
+    }
+
+    /// The `state` and `exit_code` of `instance_id` in `weft.workloads.InstanceDetail`.
+    fn detail(host: &ControlHost, instance_id: &str) -> (Value, Value) {
+        let answer = host
+            .client()
+            .view(
+                "weft.workloads.InstanceDetail",
+                &[("instance_id", instance_id)],
+            )
+            .ok_body(200);
+        let row = &answer["rows"][0];
+        (row["state"].clone(), row["exit_code"].clone())
+    }
+
+    /// The request lines of `operation` in the control host's log.
+    fn requests(host: &ControlHost, operation: &str) -> Vec<Value> {
+        host.log_after(0)
+            .into_iter()
+            .filter(|line| line["kind"] == "request" && line["operation"] == operation)
+            .collect()
+    }
+
+    /// An instance of restart mode `Never` whose two processes exited 0: one `RecordInstanceExited`
+    /// after its `RecordInstanceRunning`, as the NodeAgent, answered 2xx; the instance reads
+    /// `Exited` with exit code 0. The other node's instance is untouched.
+    #[test]
+    fn an_instance_of_restart_mode_never_whose_processes_exited_0_is_recorded_exited() {
+        let seed = seed(RestartMode::Never, &["echo one", "echo two"]);
+        let this = seed.this.instance_id.clone();
+        let (host, report) = follow(&seed, 0, "never");
+        let lines = exited_and_passed(&report, &this, 2, 3);
+
+        assert_eq!(
+            detail(&host, &this),
+            (json!("Exited"), json!(0)),
+            "{lines:?}"
+        );
+        let exited = requests(&host, EXITED);
+        assert_eq!(exited.len(), 1, "{exited:?}");
+        assert_eq!(
+            exited[0]["actor"],
+            json!("weft.actors.NodeAgent"),
+            "{exited:?}"
+        );
+        assert!(
+            exited[0]["status"]
+                .as_u64()
+                .is_some_and(|status| (200..300).contains(&status)),
+            "{exited:?}"
+        );
+        let running = requests(&host, RUNNING);
+        assert_eq!(running.len(), 1, "{running:?}");
+        assert!(
+            running[0]["seq"].as_u64() < exited[0]["seq"].as_u64(),
+            "RecordInstanceExited before RecordInstanceRunning: {running:?} {exited:?}"
+        );
+        let other = detail(&host, &seed.other.instance_id);
+        assert_eq!(other.0, json!("Scheduled"), "{other:?}");
+    }
+
+    /// Statement 4 of the story: an instance of restart mode `Always` whose process exited gets no
+    /// `RecordInstanceExited`, and reads `Running` three passes after its exit.
+    #[test]
+    fn an_instance_of_restart_mode_always_that_exited_gets_no_record_instance_exited() {
+        let seed = seed(RestartMode::Always, &["echo weft"]);
+        let this = seed.this.instance_id.clone();
+        let (host, report) = follow(&seed, 0, "always");
+        let lines = exited_and_passed(&report, &this, 1, 3);
+
+        assert_eq!(requests(&host, EXITED), Vec::<Value>::new(), "{lines:?}");
+        assert_eq!(detail(&host, &this), (json!("Running"), Value::Null));
+    }
+
+    /// An instance of restart mode `Never` whose process exited 1 gets no `RecordInstanceExited`
+    /// (recording a failure is `RecordInstanceFailed`, not this story), and reads `Running`.
+    #[test]
+    fn a_process_that_exited_non_zero_gets_no_record_instance_exited() {
+        let seed = seed(RestartMode::Never, &["exit 1"]);
+        let this = seed.this.instance_id.clone();
+        let (host, report) = follow(&seed, 1, "non-zero");
+        let lines = exited_and_passed(&report, &this, 1, 3);
+
+        assert_eq!(requests(&host, EXITED), Vec::<Value>::new(), "{lines:?}");
+        assert_eq!(detail(&host, &this), (json!("Running"), Value::Null));
+    }
+}

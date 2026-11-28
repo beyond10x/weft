@@ -254,6 +254,39 @@ entities:
           from: [Scheduled, Starting, Running, Paused]
           to: Evicted
 
+  # story:workload-environment-and-args: what a runtime delivers to each process it starts, beside
+  # the vendored weft.workloads.Runtime (package kinds, minimum isolation), which no file of weft's
+  # own extends. `environment`: the variables of a process's `environment` (text values; a secret
+  # reaches a process only through a grant of the secrets domain); `arguments`: the words of its
+  # `command` after the program. weft.scheduling.PlaceInstance refuses an instance whose processes
+  # name what its workload's runtime does not deliver (`environment-not-delivered`,
+  # `arguments-not-delivered`), so nothing is placed that its node cannot start as written.
+  # A runtime without a row delivers both: every runtime before this record ran its processes
+  # through the node agent's exec port, which takes both.
+  # OPEN: whether a runtime declares this at registration (a field of the vendored Runtime, a
+  # cloudspec change). Taken: a record of weft's own, keyed by the runtime, declared once.
+  - name: weft.workloads.RuntimeInputs
+    naming:
+      summary: Whether a runtime delivers a process's environment variables and its arguments.
+    identity:
+      name: runtime_id
+      type: weft.shared.RuntimeId
+    fields:
+      - name: environment
+        type: Boolean
+      - name: arguments
+        type: Boolean
+    relations:
+      - name: runtime
+        kind: references
+        target: weft.workloads.Runtime
+        cardinality: one
+        via: runtime_id
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
 errors:
   - name: weft.workloads.ArtifactDigestMismatch
     summary: The node reports a digest other than the one the instance runs; nothing starts.
@@ -289,6 +322,10 @@ errors:
   # Section 14 "Reconciliation": the refusals of the level and time steps.
   - name: weft.workloads.ReplicaLive
     summary: A live instance of the service already holds this replica index; nothing is created.
+
+  # story:workload-environment-and-args: a runtime's inputs are declared once.
+  - name: weft.workloads.InputsAlreadyDeclared
+    summary: What this runtime delivers to its processes is declared already, and nothing changed.
 events:
   # Section 10 line 456 (the scheduler's input: "instance, claims, minimum isolation, formation's
   # zone rules") and section 14 R1 (line 585): carries the fields of
@@ -491,7 +528,44 @@ events:
       - {name: snapshot_id, type: weft.shared.SnapshotId}
       - {name: instance_id, type: weft.shared.InstanceId}
 
+  # story:workload-environment-and-args.
+  - name: weft.workloads.RuntimeInputsDeclared
+    fields:
+      - {name: runtime_id, type: weft.shared.RuntimeId}
+      - {name: environment, type: Boolean}
+      - {name: arguments, type: Boolean}
+
 commands:
+  # story:workload-environment-and-args: the operator who registered a runtime declares what it
+  # delivers to the processes it starts (weft.workloads.RuntimeInputs), once. A runtime it does
+  # not declare delivers both.
+  - name: weft.workloads.DeclareRuntimeInputs
+    naming:
+      display: Declare what a runtime delivers to its processes
+    input:
+      - {name: runtime_id, type: weft.shared.RuntimeId}
+      - {name: environment, type: Boolean}
+      - {name: arguments, type: Boolean}
+    outcomes:
+      - name: already-declared
+        existing_instance: true
+        error: weft.workloads.InputsAlreadyDeclared
+      - name: no-such-runtime
+        when_related: {via: input.runtime_id, exists: false}
+        error: weft.workloads.NotFound
+      - name: declared
+        creates: weft.workloads.RuntimeInputs
+        instance: runtime_id
+        sets:
+          environment: input.environment
+          arguments: input.arguments
+        emits: [weft.workloads.RuntimeInputsDeclared]
+        payload:
+          weft.workloads.RuntimeInputsDeclared:
+            runtime_id: input.runtime_id
+            environment: input.environment
+            arguments: input.arguments
+
   # Sketch line 259: an Instance of a workload. Section 10 line 451: the scheduler's input is
   # "instance, claims, minimum isolation"; the instance carries its workload's minimum.
   # OPEN: which actor creates instances for replicas, tasks, daemons and warm pools: the actor

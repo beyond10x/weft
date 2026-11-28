@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-release-steps
 kind: story
-status: active
+status: implemented
 title: A planned release gets its rollout steps, starts, and starts its first step; r1-set-workload-replicas runs by hand and drops not-a-service
 relations:
 - decomposes: epic:cloudspec-submission
@@ -29,10 +29,11 @@ scope:
   path: tools/synth-input.sh
 - confidence: cited
   path: tools/test-generated.sh
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T14:06:06Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T14:06:06Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T15:24:39Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

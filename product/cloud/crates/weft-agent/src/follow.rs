@@ -19,10 +19,23 @@
 //! 2. `{"started": <instance_id>, "pass": <n>}` in the report file.
 //! 3. Each process through the `exec` port ([`Exec::run`]), on a thread of its own: `run` blocks
 //!    until the exec ends, and the passes over the work list go on meanwhile. The limits of a
-//!    process come from its instance ([`limits`]).
+//!    process come from its instance ([`limits`]). A process of a `Service` replica goes through
+//!    the `workloads` port instead when the follower has one ([`Follower::workloads`],
+//!    `story:workload-environment-and-args`): [`Workloads::start`] under the key of its
+//!    assignment and process name, with the process's command and environment as its instance
+//!    names them, then [`Workloads::observe`] once a pass until it reads `running` (or `exited`:
+//!    it ran). A refused start, or a start that ends `failed`, `stopped` or `unknown`, is one
+//!    report line with its code ([`workload_refusal_code`]) and is not started again.
 //! 4. `weft.workloads.RecordInstanceRunning` as the NodeAgent, once every process of the instance
 //!    is `running`, or has `exited` before the agent saw it `running` (it ran).
 //! 5. The exit code and output of each process that `exited`, one line of the report file.
+//! 6. `weft.workloads.RecordInstanceExited` with exit code 0 as the NodeAgent
+//!    (`story:cloudspec-submission-job-exit`), once every process of an instance whose restart
+//!    mode is `Never` has exited 0 and its `RecordInstanceRunning` was answered. An instance of
+//!    another restart mode is not reported (its owner restarts an exit: the skeleton `Service`),
+//!    nor one with a process that ended otherwise (a non-zero exit, a signal, a refusal; recording
+//!    a failure is `RecordInstanceFailed`, outside this story), nor one with no process (it has no
+//!    exit code to report).
 //!
 //! A start the place refused before the process ran with `retriable: true` (the place says it
 //! started nothing) is started again [`RETRY_AFTER`] passes later, while the instance reads
@@ -46,10 +59,12 @@
 //! once in this run is not taken again, whatever `RecordArtifactVerified` answered. A work list
 //! that is not answered is read again in the next pass; a `RecordArtifactVerified` that is not
 //! answered is sent again while the instance reads `Scheduled`; a `RecordInstanceRunning` that is
-//! not answered is sent again in each pass while the instance reads `Starting`. A `5xx` answer
-//! without `committed: true` counts as no answer.
+//! not answered is sent again in each pass while the instance reads `Starting`; a `RecordInstanceExited`
+//! that is not answered is sent again at the start of each pass, before the work list is read
+//! (the instance reads `Running` and is no longer on it). A `5xx` answer without
+//! `committed: true` counts as no answer.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::Scope;
@@ -57,7 +72,10 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use weft_client::{Answer, Client};
-use weft_platform::node::{Exec, ExecError, ExecState, Limits, Process};
+use weft_platform::node::{
+    Exec, ExecError, ExecState, Limits, Observation, Process, WorkloadError, WorkloadKey,
+    WorkloadSpec, WorkloadState, Workloads,
+};
 use weft_platform::Refusal;
 
 use crate::agent::NODE_AGENT;
@@ -82,14 +100,21 @@ const INSTANCES: &str = "weft.workloads.Instances";
 /// The command that records an instance `Running`.
 const RUNNING: &str = "weft.workloads.RecordInstanceRunning";
 
+/// The command that records an instance `Exited`.
+const EXITED: &str = "weft.workloads.RecordInstanceExited";
+
 /// What the agent follows its work list with.
 pub struct Follower<'a> {
     client: &'a Client,
     node_id: &'a str,
     exec: &'a (dyn Exec + Sync),
+    /// The `workloads` port, which starts the processes of a `Service` replica when present.
+    workloads: Option<&'a (dyn Workloads + Sync)>,
     report: &'a Mutex<Report>,
     /// The instances whose processes all ran and whose `RecordInstanceRunning` was not answered.
-    unrecorded: Mutex<HashSet<String>>,
+    unrecorded: Mutex<HashMap<String, Arc<Start>>>,
+    /// The instances whose `RecordInstanceExited` is due and was not answered.
+    unexited: Mutex<HashSet<String>>,
     /// The refused starts to make again.
     retries: Mutex<Vec<Retry>>,
     /// The time between two passes.
@@ -117,10 +142,28 @@ enum Verified {
     Unanswered(String),
 }
 
-/// The start of one instance: its processes that have not run yet.
+/// The start of one instance: its processes that have not run yet, and what its exit waits for.
 struct Start {
     instance_id: String,
     left: AtomicUsize,
+    /// Its restart mode is `Never`: an exit 0 of every process is recorded.
+    never: bool,
+    /// How many processes it has.
+    processes: usize,
+    end: Mutex<End>,
+}
+
+/// What [`Follower::record_exit_when_due`] waits for.
+#[derive(Default)]
+struct End {
+    /// `RecordInstanceRunning` was answered.
+    running: bool,
+    /// The processes that exited 0.
+    exited: usize,
+    /// A process ended otherwise: another exit code, a signal, a refusal for good.
+    failed: bool,
+    /// `RecordInstanceExited` was sent once.
+    sent: bool,
 }
 
 /// A refused start of `process` to make again in pass `due`, as attempt `attempt`.
@@ -144,8 +187,10 @@ impl<'a> Follower<'a> {
             client,
             node_id,
             exec,
+            workloads: None,
             report,
-            unrecorded: Mutex::new(HashSet::new()),
+            unrecorded: Mutex::new(HashMap::new()),
+            unexited: Mutex::new(HashSet::new()),
             retries: Mutex::new(Vec::new()),
             pass: PASS,
             retry_after: RETRY_AFTER,
@@ -158,6 +203,14 @@ impl<'a> Follower<'a> {
     pub fn pacing(mut self, pass: Duration, retry_after: u64) -> Self {
         self.pass = pass;
         self.retry_after = retry_after;
+        self
+    }
+
+    /// The same follower with the `workloads` port: the processes of a `Service` replica start
+    /// through it, every other process through the `exec` port.
+    #[must_use]
+    pub fn workloads(mut self, workloads: &'a (dyn Workloads + Sync)) -> Self {
+        self.workloads = Some(workloads);
         self
     }
 
@@ -180,7 +233,8 @@ impl<'a> Follower<'a> {
         })
     }
 
-    /// One pass over the work list: the `RecordInstanceRunning` not answered are sent again, the
+    /// One pass over the work list: the `RecordInstanceExited` not answered are sent again, then
+    /// the work list is read, the `RecordInstanceRunning` not answered are sent again, the
     /// refused starts that are due are made again, and every instance it takes is started; each
     /// start on a thread of `scope`.
     fn pass<'scope>(
@@ -189,6 +243,7 @@ impl<'a> Follower<'a> {
         pass: u64,
         taken: &mut Taken,
     ) -> Result<(), String> {
+        self.record_unexited();
         let instances = match self.work() {
             Ok(instances) => instances,
             Err(error) => {
@@ -241,12 +296,18 @@ impl<'a> Follower<'a> {
         instance: &Value,
         instance_id: String,
     ) -> Result<(), String> {
+        if let Some(workloads) = self.workloads.filter(|_| !instance["service_id"].is_null()) {
+            return self.start_workloads(scope, pass, instance, instance_id, workloads);
+        }
         let processes = processes(instance);
         self.write(|report| report.started(&instance_id, pass))?;
         // An instance without a process has nothing to wait for: it runs as it starts.
         let start = Arc::new(Start {
             instance_id,
             left: AtomicUsize::new(processes.len().max(1)),
+            never: instance["restart_policy"]["mode"] == "Never",
+            processes: processes.len(),
+            end: Mutex::new(End::default()),
         });
         if processes.is_empty() {
             self.ran(&start);
@@ -258,8 +319,79 @@ impl<'a> Follower<'a> {
         Ok(())
     }
 
+    /// Starts the processes of the `Service` replica `instance` through `workloads`, each
+    /// supervised to `running` on a thread of `scope`.
+    fn start_workloads<'scope>(
+        &'scope self,
+        scope: &'scope Scope<'scope, '_>,
+        pass: u64,
+        instance: &Value,
+        instance_id: String,
+        workloads: &'scope (dyn Workloads + Sync),
+    ) -> Result<(), String> {
+        let specs = workload_specs(instance);
+        self.write(|report| report.started(&instance_id, pass))?;
+        let start = Arc::new(Start {
+            instance_id,
+            left: AtomicUsize::new(specs.len().max(1)),
+            never: instance["restart_policy"]["mode"] == "Never",
+            processes: specs.len(),
+            end: Mutex::new(End::default()),
+        });
+        if specs.is_empty() {
+            self.ran(&start);
+        }
+        for (key, spec) in specs {
+            let start = Arc::clone(&start);
+            scope.spawn(move || self.supervise(workloads, &start, &key, &spec));
+        }
+        Ok(())
+    }
+
+    /// Starts `spec` under `key` through `workloads` and observes it once a pass until it ran
+    /// (`running`, or `exited` before the agent saw it `running`); a refusal, or an end in
+    /// `failed`, `stopped` or `unknown`, is one report line and the instance is not recorded
+    /// `Running`.
+    fn supervise(
+        &self,
+        workloads: &(dyn Workloads + Sync),
+        start: &Arc<Start>,
+        key: &WorkloadKey,
+        spec: &WorkloadSpec,
+    ) {
+        let instance_id = &start.instance_id;
+        let mut answer = workloads.start(key, spec);
+        loop {
+            let code = match answer {
+                Ok(Observation {
+                    state: WorkloadState::Running | WorkloadState::Exited,
+                    ..
+                }) => {
+                    self.ran(start);
+                    return;
+                }
+                Ok(Observation {
+                    state: WorkloadState::Starting | WorkloadState::Restarting,
+                    ..
+                }) => {
+                    std::thread::sleep(self.pass);
+                    answer = workloads.observe(key);
+                    continue;
+                }
+                Ok(Observation { state, .. }) => format!("workload-{state:?}").to_lowercase(),
+                Err(error) => workload_refusal_code(&error),
+            };
+            eprintln!("weft-agent: the workload {key} of {instance_id} did not run: {code}");
+            if let Err(error) = self.write(|report| report.refused(instance_id, &code)) {
+                eprintln!("weft-agent: {instance_id}: {error}");
+            }
+            return;
+        }
+    }
+
     /// The `Scheduled` and `Starting` instances of the `Active` assignments of this node's work
-    /// list, as rows of `weft.workloads.Instances`.
+    /// list, as rows of `weft.workloads.Instances`, each with the `assignment_id` of its
+    /// assignment.
     fn work(&self) -> Result<Vec<Value>, String> {
         let assigned = rows(
             self.client
@@ -267,10 +399,11 @@ impl<'a> Follower<'a> {
                 .map_err(|error| format!("{WORK_LIST}: {error}"))?,
             WORK_LIST,
         )?;
-        let active: HashSet<Value> = assigned
+        // Each instance with the assignment that holds it: the key of its workloads.
+        let active: HashMap<Value, Value> = assigned
             .iter()
             .filter(|row| row["state"] == "Active" && row["node_id"] == self.node_id)
-            .map(|row| row["instance_id"].clone())
+            .map(|row| (row["instance_id"].clone(), row["assignment_id"].clone()))
             .collect();
         if active.is_empty() {
             return Ok(Vec::new());
@@ -283,9 +416,11 @@ impl<'a> Follower<'a> {
         )?;
         Ok(instances
             .into_iter()
-            .filter(|row| {
-                active.contains(&row["instance_id"])
-                    && (row["state"] == "Scheduled" || row["state"] == "Starting")
+            .filter(|row| row["state"] == "Scheduled" || row["state"] == "Starting")
+            .filter_map(|mut row| {
+                let assignment_id = active.get(&row["instance_id"])?.clone();
+                row["assignment_id"] = assignment_id;
+                Some(row)
             })
             .collect())
     }
@@ -320,14 +455,25 @@ impl<'a> Follower<'a> {
     /// that reads `Starting`; an instance that reads otherwise, or is gone from the work list, is
     /// no longer followed.
     fn record_unrecorded(&self, instances: &[Value]) {
-        let unrecorded: Vec<String> = {
+        let unrecorded: Vec<Arc<Start>> = {
             let mut unrecorded = lock(&self.unrecorded);
-            unrecorded.retain(|instance_id| reads_starting(instances, instance_id));
-            unrecorded.iter().cloned().collect()
+            unrecorded.retain(|instance_id, _| reads_starting(instances, instance_id));
+            unrecorded.values().cloned().collect()
         };
-        for instance_id in unrecorded {
-            if self.record_running(&instance_id) {
-                lock(&self.unrecorded).remove(&instance_id);
+        for start in unrecorded {
+            if self.record_running(&start.instance_id) {
+                lock(&self.unrecorded).remove(&start.instance_id);
+                self.running_answered(&start);
+            }
+        }
+    }
+
+    /// Sends `RecordInstanceExited` again for each instance whose last one was not answered.
+    fn record_unexited(&self) {
+        let unexited: Vec<String> = lock(&self.unexited).iter().cloned().collect();
+        for instance_id in unexited {
+            if self.record_exited(&instance_id) {
+                lock(&self.unexited).remove(&instance_id);
             }
         }
     }
@@ -378,9 +524,11 @@ impl<'a> Follower<'a> {
                 if let Err(error) = self.write(|report| report.exited(instance_id, &exited)) {
                     eprintln!("weft-agent: {instance_id}: {error}");
                 }
+                self.ended(&start, exited.code == Some(0));
             }
             Err(error) if ran => {
-                eprintln!("weft-agent: a process of {instance_id} through the exec port: {error}")
+                eprintln!("weft-agent: a process of {instance_id} through the exec port: {error}");
+                self.ended(&start, false);
             }
             Err(error) if again(&error) && attempt < ATTEMPTS => {
                 let due = pass + self.retry_after;
@@ -402,13 +550,14 @@ impl<'a> Follower<'a> {
                 if let Err(error) = self.write(|report| report.refused(instance_id, &code)) {
                     eprintln!("weft-agent: {instance_id}: {error}");
                 }
+                self.ended(&start, false);
             }
         }
     }
 
     /// One process of `start` ran; after the last one, `RecordInstanceRunning`, followed again in
     /// the next passes when it is not answered.
-    fn ran(&self, start: &Start) {
+    fn ran(&self, start: &Arc<Start>) {
         let before = start
             .left
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
@@ -417,8 +566,81 @@ impl<'a> Follower<'a> {
         if before != Ok(1) {
             return;
         }
-        if !self.record_running(&start.instance_id) {
-            lock(&self.unrecorded).insert(start.instance_id.clone());
+        if self.record_running(&start.instance_id) {
+            self.running_answered(start);
+        } else {
+            lock(&self.unrecorded).insert(start.instance_id.clone(), Arc::clone(start));
+        }
+    }
+
+    /// `RecordInstanceRunning` of `start` was answered.
+    fn running_answered(&self, start: &Start) {
+        lock(&start.end).running = true;
+        self.record_exit_when_due(start);
+    }
+
+    /// A process of `start` ended for good: it exited 0 (`zero`), or it ended otherwise.
+    fn ended(&self, start: &Start, zero: bool) {
+        {
+            let mut end = lock(&start.end);
+            if zero {
+                end.exited += 1;
+            } else {
+                end.failed = true;
+            }
+        }
+        self.record_exit_when_due(start);
+    }
+
+    /// `RecordInstanceExited` of `start`, once: when its restart mode is `Never`, its
+    /// `RecordInstanceRunning` was answered and every one of its processes (at least one) exited
+    /// 0. Followed again in the next passes when it is not answered.
+    fn record_exit_when_due(&self, start: &Start) {
+        {
+            let mut end = lock(&start.end);
+            let due = start.never
+                && start.processes > 0
+                && end.running
+                && !end.failed
+                && end.exited == start.processes
+                && !end.sent;
+            if !due {
+                return;
+            }
+            end.sent = true;
+        }
+        if !self.record_exited(&start.instance_id) {
+            lock(&self.unexited).insert(start.instance_id.clone());
+        }
+    }
+
+    /// `RecordInstanceExited` of `instance_id` with exit code 0: whether the control host
+    /// answered it. A refusal is an answer (the instance does not read `Running` any more: it is
+    /// not sent again).
+    fn record_exited(&self, instance_id: &str) -> bool {
+        match self.command(
+            EXITED,
+            json!({"instance_id": instance_id, "node_id": self.node_id, "exit_code": 0}),
+        ) {
+            Ok(answer)
+                if matches!(
+                    answer.body["outcome"].as_str(),
+                    Some("exited" | "exited-restart")
+                ) || committed(&answer) =>
+            {
+                true
+            }
+            Ok(answer) => {
+                eprintln!(
+                    "weft-agent: {EXITED} {instance_id} answered {}: {}",
+                    answer.status, answer.body
+                );
+                answer.status < 500
+            }
+            Err(error) => {
+                eprintln!("weft-agent: {EXITED} {instance_id}: {error}");
+                false
+            }
         }
     }
 
@@ -547,32 +769,76 @@ fn limits(instance: &Value) -> Limits {
 /// [`limits`].
 fn processes(instance: &Value) -> Vec<Process> {
     let limits = limits(instance);
-    instance["processes"]
+    process_rows(instance)
+        .iter()
+        .map(|process| {
+            let mut started = Process::new(command(process)).limits(limits);
+            for (name, value) in environment(process) {
+                started = started.env(name, value);
+            }
+            started
+        })
+        .collect()
+}
+
+/// The processes of a `Service` replica's instance row as workloads of the `workloads` port:
+/// each under the key of the instance's assignment and the process's name, with its command and
+/// environment; the port's defaults for the rest (no prestart step, the default stop, no restart
+/// by the place).
+fn workload_specs(instance: &Value) -> Vec<(WorkloadKey, WorkloadSpec)> {
+    let assignment = instance["assignment_id"].as_str().unwrap_or_default();
+    process_rows(instance)
+        .iter()
+        .map(|process| {
+            let key = WorkloadKey::new(assignment, process["name"].as_str().unwrap_or_default());
+            let mut spec = WorkloadSpec::new(command(process));
+            for (name, value) in environment(process) {
+                spec = spec.env(name, value);
+            }
+            (key, spec)
+        })
+        .collect()
+}
+
+/// The `processes` of an instance row.
+fn process_rows(instance: &Value) -> &[Value] {
+    instance["processes"].as_array().map_or(&[], Vec::as_slice)
+}
+
+/// A process's `command`: its program and its arguments.
+fn command(process: &Value) -> Vec<String> {
+    process["command"]
         .as_array()
-        .map(|processes| {
-            processes
-                .iter()
-                .map(|process| {
-                    let argv = process["command"]
-                        .as_array()
-                        .map(|argv| {
-                            argv.iter()
-                                .filter_map(Value::as_str)
-                                .map(str::to_owned)
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default();
-                    let mut started = Process::new(argv).limits(limits);
-                    if let Some(environment) = process["environment"].as_object() {
-                        for (name, value) in environment {
-                            if let Some(value) = value.as_str() {
-                                started = started.env(name.clone(), value);
-                            }
-                        }
-                    }
-                    started
-                })
+        .map(|argv| {
+            argv.iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A process's `environment`: each variable with its text value.
+fn environment(process: &Value) -> Vec<(String, String)> {
+    process["environment"]
+        .as_object()
+        .map(|environment| {
+            environment
+                .iter()
+                .filter_map(|(name, value)| Some((name.clone(), value.as_str()?.to_owned())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The code of a refusal of the `workloads` port in the report, named as [`refusal_code`] names
+/// the refusals every port shares.
+fn workload_refusal_code(error: &WorkloadError) -> String {
+    match error {
+        WorkloadError::UnknownWorkload(_) => "unknown-workload",
+        WorkloadError::Shared(Refusal::Unavailable { .. }) => "unavailable",
+        WorkloadError::Shared(Refusal::NotServed { .. }) => "not-served",
+        WorkloadError::Shared(Refusal::Invalid { .. }) => "invalid",
+    }
+    .to_owned()
 }

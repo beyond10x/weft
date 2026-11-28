@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-synth-domain-time
 kind: story
-status: active
+status: implemented
 title: tools/synth-domain.sh builds a valid subset of the vendored spec and synthesizes it within 10 minutes
 relations:
 - decomposes: epic:cloud-blocks
@@ -11,10 +11,11 @@ relations:
 scope:
 - confidence: cited
   path: tools/synth-domain.sh
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 4, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T15:24:39Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

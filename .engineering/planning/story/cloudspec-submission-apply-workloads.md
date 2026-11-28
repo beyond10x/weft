@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-apply-workloads
 kind: story
-status: active
+status: implemented
 title: Applying a plan of a cloudspec source defines, assigns and rolls out one Job workload per snippet part with weft's fixed snippet profile (D-C1)
 relations:
 - decomposes: epic:cloudspec-submission
@@ -20,10 +20,11 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/cloudspec_apply.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T14:23:34Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T14:23:34Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T15:24:40Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
