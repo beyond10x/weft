@@ -36,6 +36,9 @@
 //! - [`r4_bind_placement`], [`r4_assign`], [`r4_schedule_instance`] and
 //!   [`r4_record_placement_assigned`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
+//!   (E2);
+//! - [`edge_backend_ready`] and [`edge_backend_restore`], ESS
+//!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2).
 
 use std::collections::VecDeque;
@@ -47,6 +50,8 @@ use weft_system::SystemEvent;
 use crate::log::BindingResult;
 use crate::{Ports, System};
 
+pub mod edge_backend_ready;
+pub mod edge_backend_restore;
 pub mod r1_create_replica;
 pub mod r1_submit_scheduling_request;
 pub mod r4_assign;
@@ -92,6 +97,8 @@ pub const ENTRIES: &[&Entry] = &[
     &r4_assign::ENTRY,
     &r4_schedule_instance::ENTRY,
     &r4_record_placement_assigned::ENTRY,
+    &edge_backend_ready::ENTRY,
+    &edge_backend_restore::ENTRY,
 ];
 
 /// One attempt of a binding: the line the control host logs for it.
@@ -291,9 +298,9 @@ pub fn outcome_name(outcome: &impl Debug) -> String {
     name
 }
 
-/// Runs `call` on the system's `weft-control` port, then pumps the system: what the call
-/// published, in log order, with the call's answer. As the generated routes do, an event
-/// already on the log before the call is not the call's.
+/// Runs `call` on a component of the system (`weft-control`, `weft-edge`), then pumps the
+/// system: what the call published, in log order, with the call's answer. As the generated
+/// routes do, an event already on the log before the call is not the call's.
 pub(crate) fn invoke<O>(
     system: &mut System,
     call: impl FnOnce(&mut System) -> Result<O, weft_types::obligation::UnmetObligation>,

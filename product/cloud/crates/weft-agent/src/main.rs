@@ -6,7 +6,8 @@
 //!
 //! Joins its node, reports what it observed and opens its session on the node channel of the
 //! control host ([`weft_agent::agent`]), writing each answer to its `hello` to the report file
-//! ([`weft_agent::report`]). It reaches its node through the local adapter of the node-layer
+//! ([`weft_agent::report`]); then follows its work list and runs the instances assigned to its
+//! node ([`weft_agent::follow`]). It reaches its node through the local adapter of the node-layer
 //! ports, the `substrate-daemon` at `--substrate`. Exit 2 on bad arguments, 1 on a failure.
 
 use std::process::ExitCode;
