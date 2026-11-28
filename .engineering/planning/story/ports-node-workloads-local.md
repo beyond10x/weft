@@ -8,6 +8,7 @@ relations:
 - decomposes: epic:platform-ports
 - serves: vision:weft
 - depends_on: story:ports-node-exec-facts
+- depends_on: story:skeleton-node-run-assignment
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-agent
