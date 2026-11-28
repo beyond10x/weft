@@ -30,7 +30,9 @@ verified by the node before it starts.
 | `Browser` | a headless browser session driven by a protocol |
 | `Build` | a recipe whose output is another artifact |
 
-Spec kinds are translated into plain components before they run:
+Spec kinds are translated into plain components before they run. The translation is cloudspec's:
+an inbound translator turns the source into a cloudspec architecture, which weft runs; weft has
+no translator of its own.
 
 | Kind | Becomes |
 |---|---|
