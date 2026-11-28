@@ -5,7 +5,7 @@
   "items": [
     {
       "area": "Specification",
-      "detail": "23 domains in 10 layers under ess/, valid with ess specify validate --path ess --strict-requires (ess 0.99.2).",
+      "detail": "28 domains in 10 layers of weft's own files and the vendored blocks of cloudspec under ess/, valid with ess specify validate --path ess --strict-requires (ess 0.99.2).",
       "href": "/docs/specification/read",
       "label": "The domain model",
       "status": "shipped"

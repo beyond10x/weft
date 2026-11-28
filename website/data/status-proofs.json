@@ -59,7 +59,11 @@
   "counts": {
     "domains": {
       "command": "awk '/^domains:/{f=1;next} /^[^ #]/{f=0} f&&/^  - /{n++} END{print n+0}' ess/system.yaml",
-      "nouns": ["domains", "domain files"]
+      "nouns": ["domains"]
+    },
+    "domain files": {
+      "command": "awk '/^specification:/{f=1;next} /^[^ #]/{f=0} f&&/^  - [^ ]*\\//{n++} END{print n+0}' ess/ess-inputs.yaml",
+      "nouns": ["domain files"]
     },
     "layers": {
       "command": "awk '/^  - [0-9]+-[a-z-]+\\/[a-z-]+\\.yaml$/{sub(/^  - /, \"\"); sub(/-.*/, \"\"); s[$0] = 1} END{for (k in s) n++; print n+0}' ess/ess-inputs.yaml",

@@ -6,7 +6,10 @@ status: decided
 
 A **workload** is one component of a formation. It is described on three independent axes:
 **package** (what the bytes are), **shape** (how long it lives and how it starts) and **claims**
-(which resources it holds). Domain: `weft.workloads`
+(which resources it holds). Domain: `weft.workloads`, in two files. The workload, its package,
+shape and runs come from cloudspec's blocks
+([`ess/cloud/5-workloads/workloads.yaml`](https://github.com/beyond10x/weft/blob/main/ess/cloud/5-workloads/workloads.yaml),
+vendored); the instance, a running copy, is weft's run-time record
 ([`ess/4-applications/workloads.yaml`](https://github.com/beyond10x/weft/blob/main/ess/4-applications/workloads.yaml)).
 
 :::info[Specified, not built]

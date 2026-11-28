@@ -11,8 +11,8 @@
 #                                        the domains without commands that sit with none, and
 #                                        whether a component accepts a command of a domain it
 #                                        does not own (each bullet says what the IR shows)
-#   managed-services.md  binding-modes   the variants of weft.catalog.BindingMode
-#                        instance-states the lifecycle of weft.catalog.ServiceInstance
+#   managed-services.md  binding-modes   the variants of weft.services.BindingMode
+#                        instance-states the lifecycle of weft.services.ServiceInstance
 #                        plans           the summary and the fields of weft.catalog.OfferingPlan
 #                        products        Product, ProductVersion and Installation, their summaries
 # --check writes nothing: it prints each block that differs and exits 1.
@@ -79,9 +79,9 @@ block() {
         then "- A component accepts no command of a domain it does not own."
         else "- Components that accept commands of a domain they do not own: \($foreign | map(code) | join(", "))." end)
     elif $name == "binding-modes" then
-      (.types["weft.catalog.BindingMode"].body.variants[] | "- \(code)")
+      (.types["weft.services.BindingMode"].body.variants[] | "- \(code)")
     elif $name == "instance-states" then
-      (.entities["weft.catalog.ServiceInstance"].lifecycle |
+      (.entities["weft.services.ServiceInstance"].lifecycle |
         "A service instance starts in \(.initial | code) and ends in \(.terminal | map(code) | join(", ")). Its states: \(.states | map(code) | join(", ")).",
         "",
         "| Transition | From | To |",

@@ -11,12 +11,14 @@
 #      owns and the number of commands it accepts, as the IR has them (read here, not through the
 #      generator);
 #   4. the first cells of the hand-written kinds table (the first table under `## Offering kinds`)
-#      are the variants of weft.catalog.OfferingKind, in their order, and no row has an empty
+#      are the variants of weft.services.OfferingKind, in their order, and no row has an empty
 #      second cell (what the kind is for);
-#   5. the owner of the catalog is the one the IR names: every component that managed-services.md
-#      names in backticks outside its generated blocks owns weft.catalog, and it names one; every
-#      line of components.md outside its generated blocks that says "catalog" names no other
-#      component.
+#   5. the owners of the catalog and of the managed services are the ones the IR names: every
+#      component that managed-services.md names in backticks outside its generated blocks owns
+#      weft.services when its line holds "weft.services", and weft.catalog when its line holds
+#      "weft.catalog" or does not hold "weft.services"; the page names the owner of each domain
+#      at least once; every line of components.md outside its generated blocks that says
+#      "catalog" names no component but the owner of weft.catalog.
 # DOCS_SPEC_ESS (default ess) names the specification, DOCS_SPEC_PAGES (default
 # website/docs/concepts) the directory of the two pages, DOCS_SPEC_GEN (default
 # tools/docs-spec-pages.sh) the generator; the self-test sets it to a broken copy. Writes under
@@ -95,12 +97,12 @@ if ! cmp -s "$work/cells.want" "$work/cells.got"; then
 fi
 
 # 4. the hand-written kinds table
-jq -r '.types["weft.catalog.OfferingKind"].body.variants[]' "$work/ir.json" > "$work/kinds.want" 2> /dev/null && [ -s "$work/kinds.want" ] ||
-  { echo "30-docs-spec-pages: no weft.catalog.OfferingKind variants in $spec" >&2; exit 2; }
+jq -r '.types["weft.services.OfferingKind"].body.variants[]' "$work/ir.json" > "$work/kinds.want" 2> /dev/null && [ -s "$work/kinds.want" ] ||
+  { echo "30-docs-spec-pages: no weft.services.OfferingKind variants in $spec" >&2; exit 2; }
 rows "$pages/managed-services.md" '## Offering kinds' '## ' > "$work/kinds.rows" || exit 2
 cut -f1 "$work/kinds.rows" > "$work/kinds.got" || exit 2
 if ! cmp -s "$work/kinds.want" "$work/kinds.got"; then
-  echo "30-docs-spec-pages: $pages/managed-services.md: kinds table: rows differ from weft.catalog.OfferingKind (< specification, > page):"
+  echo "30-docs-spec-pages: $pages/managed-services.md: kinds table: rows differ from weft.services.OfferingKind (< specification, > page):"
   diff "$work/kinds.want" "$work/kinds.got" | grep '^[<>]'
   failed=1
 fi
@@ -111,12 +113,19 @@ if [ -s "$work/kinds.empty" ]; then
   failed=1
 fi
 
-# 5. the owner of the catalog
-jq -r '.components | to_entries[] | select(.value.owns | index("weft.catalog")) | .key' "$work/ir.json" > "$work/owner" || exit 2
-[ "$(wc -l < "$work/owner")" -eq 1 ] || { echo "30-docs-spec-pages: weft.catalog has no single owner in $spec" >&2; exit 2; }
-owner=$(cat "$work/owner")
+# 5. the owners of the catalog and of the managed services
+# owner_of <domain>: its one owner in the IR.
+owner_of() {
+  jq -r --arg d "$1" '.components | to_entries[] | select(.value.owns | index($d)) | .key' "$work/ir.json" > "$work/owner" || exit 2
+  [ "$(wc -l < "$work/owner")" -eq 1 ] || { echo "30-docs-spec-pages: $1 has no single owner in $spec" >&2; exit 2; }
+  cat "$work/owner"
+}
+owner=$(owner_of weft.catalog) || exit 2
+services_owner=$(owner_of weft.services) || exit 2
 # named <page> <word>: each component in backticks on the lines outside the generated blocks
-# (only on lines that hold <word>, when it is not empty), as `<line>\t<component>`.
+# (only on lines that hold <word>, when it is not empty), as `<line>\t<component>\t<domains>`,
+# where <domains> names the domains the line speaks of: `services` on a line that holds
+# "weft.services" and not "weft.catalog", `both` on a line that holds both, `catalog` otherwise.
 named() {
   awk -v word="$2" -v list="$work/components.want" '
     BEGIN { while ((getline c < list) > 0) comp[c] = 1 }
@@ -125,10 +134,13 @@ named() {
     gen { next }
     word != "" && index($0, word) == 0 { next }
     {
+      s = index($0, "weft.services") > 0
+      c = index($0, "weft.catalog") > 0
+      about = s && c ? "both" : s ? "services" : "catalog"
       rest = $0
       while (match(rest, /`[^`]+`/)) {
         t = substr(rest, RSTART + 1, RLENGTH - 2)
-        if (t in comp) print NR "\t" t
+        if (t in comp) print NR "\t" t "\t" about
         rest = substr(rest, RSTART + RLENGTH)
       }
     }
@@ -136,11 +148,17 @@ named() {
 }
 named "$pages/managed-services.md" '' > "$work/owner.services" || exit 2
 named "$pages/components.md" catalog > "$work/owner.components" || exit 2
-awk -F '\t' -v owner="$owner" -v page="$pages/managed-services.md" '$2 != owner { print page ":" $1 ": names `" $2 "`" }' "$work/owner.services" > "$work/owner.bad" || exit 2
+awk -F '\t' -v owner="$owner" -v sowner="$services_owner" -v page="$pages/managed-services.md" '
+  $3 != "services" && $2 != owner { print page ":" $1 ": names `" $2 "` for the catalog (weft.catalog)" }
+  $3 != "catalog" && $2 != sowner { print page ":" $1 ": names `" $2 "` for the managed services (weft.services)" }
+' "$work/owner.services" > "$work/owner.bad" || exit 2
 awk -F '\t' -v owner="$owner" -v page="$pages/components.md" '$2 != owner { print page ":" $1 ": names `" $2 "` beside the catalog" }' "$work/owner.components" >> "$work/owner.bad" || exit 2
-[ -s "$work/owner.services" ] || echo "$pages/managed-services.md: names no owner of the catalog" >> "$work/owner.bad"
+awk -F '\t' -v owner="$owner" '$3 != "services" && $2 == owner { n++ } END { exit !n }' "$work/owner.services" ||
+  echo "$pages/managed-services.md: names no owner of the catalog (weft.catalog)" >> "$work/owner.bad"
+awk -F '\t' -v sowner="$services_owner" '$3 != "catalog" && $2 == sowner { n++ } END { exit !n }' "$work/owner.services" ||
+  echo "$pages/managed-services.md: names no owner of the managed services (weft.services)" >> "$work/owner.bad"
 if [ -s "$work/owner.bad" ]; then
-  echo "30-docs-spec-pages: the catalog (weft.catalog) is owned by \`$owner\` in $spec; the pages say otherwise:"
+  echo "30-docs-spec-pages: the catalog (weft.catalog) is owned by \`$owner\` and the managed services (weft.services) by \`$services_owner\` in $spec; the pages say otherwise:"
   sed 's/^/  /' "$work/owner.bad"
   failed=1
 fi
