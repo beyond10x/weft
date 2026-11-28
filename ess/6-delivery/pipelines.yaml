@@ -50,8 +50,8 @@ entities:
       name: forge_connection_id
       type: weft.shared.ForgeConnectionId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: forge
         type: weft.pipelines.ForgeKind
       # The forge's base URL (`https://github.com`, a self-hosted GitLab).
@@ -68,7 +68,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: account_id
+        via: scope_id
       # One secret per connection; the secret stands on its own (weft.secrets).
       - name: credential
         kind: references
@@ -105,8 +105,8 @@ entities:
       name: runner_pool_id
       type: weft.shared.RunnerPoolId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: forge_connection_id
         type: weft.shared.ForgeConnectionId
       - name: name
@@ -134,7 +134,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: account_id
+        via: scope_id
       # Many pools per connection; DisconnectForge refuses while an active pool names it.
       - name: forge_connection
         kind: references
@@ -182,8 +182,8 @@ entities:
       - name: runner_pool_id
         type: weft.shared.RunnerPoolId
       # Isolation pass 2: copied from the pool at queue.
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: forge_job_id
         type: String
       - name: forge_run_id
@@ -216,7 +216,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: account_id
+        via: scope_id
       # Many jobs per pool. A job is an audit record and outlives the link.
       - name: runner_pool
         kind: references
@@ -275,8 +275,8 @@ entities:
         type: weft.shared.RunnerPoolId
       # Isolation pass 2: the account the cache was created in (CreateBuildCache ties the pool
       # to it).
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: cache_key
         type: String
       - name: protected
@@ -294,7 +294,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: account_id
+        via: scope_id
       # UNMAPPED: "per pool" reads as the pool owning its caches (no meaning without it), but no
       # source says what retiring a pool does to them. Written as references.
       - name: runner_pool
@@ -346,8 +346,8 @@ entities:
         type: weft.shared.EnvironmentId
       # Isolation pass 2: the account the gate was added in (AddDeployGate ties the environment
       # to it).
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: kind
         type: weft.pipelines.GateKind
       - name: approver_role
@@ -370,10 +370,10 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: environment
         kind: references
-        target: weft.formations.Environment
+        target: weft.architecture.Environment
         cardinality: one
         via: environment_id
       - name: creator
@@ -405,8 +405,8 @@ entities:
       - name: deploy_gate_id
         type: weft.shared.DeployGateId
       # Isolation pass 2: copied from the gate at open.
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: plan_id
         type: weft.shared.PlanId
       # The gate's environment, stored so deployments selects the checks of a plan's environment
@@ -430,7 +430,7 @@ entities:
         kind: references
         target: weft.accounts.Account
         cardinality: one
-        via: account_id
+        via: scope_id
       # Many checks per gate and per plan; each check one of each.
       - name: deploy_gate
         kind: references
@@ -444,7 +444,7 @@ entities:
         via: plan_id
       - name: environment
         kind: references
-        target: weft.formations.Environment
+        target: weft.architecture.Environment
         cardinality: one
         via: environment_id
       - name: decider
@@ -557,7 +557,7 @@ events:
   - name: weft.pipelines.ForgeConnected
     fields:
       - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: forge, type: weft.pipelines.ForgeKind}
 
   - name: weft.pipelines.ForgeDisconnected
@@ -567,7 +567,7 @@ events:
   - name: weft.pipelines.RunnerPoolCreated
     fields:
       - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
 
   - name: weft.pipelines.RunnerPoolRetired
@@ -661,7 +661,7 @@ commands:
     naming:
       display: Connect a forge installation
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: forge, type: weft.pipelines.ForgeKind}
       - {name: forge_url, type: String}
       - {name: installation, type: String}
@@ -672,20 +672,20 @@ commands:
       # hardening pass 1 D3: the account is the one the caller acts in; another account answers
       # as a missing one (account-unavailable).
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.pipelines.AccountUnavailable
       - name: no-such-secret
         when_related: {via: input.credential_secret_id, exists: false}
         error: weft.pipelines.SecretUnavailable
       - name: foreign-secret
-        when_related: {via: input.credential_secret_id, predicate: account_id != input.account_id}
+        when_related: {via: input.credential_secret_id, predicate: scope_id != input.scope_id}
         error: weft.pipelines.SecretUnavailable
       - name: exists
         when_related:
           entity: weft.pipelines.ForgeConnection
           where:
             all:
-              - account_id == input.account_id
+              - scope_id == input.scope_id
               - forge_url == input.forge_url
               - installation == input.installation
               - state == Active
@@ -701,7 +701,7 @@ commands:
         instance: forge_connection_id
         returns: true
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           forge: input.forge
           forge_url: input.forge_url
           installation: input.installation
@@ -710,7 +710,7 @@ commands:
         payload:
           weft.pipelines.ForgeConnected:
             forge_connection_id: {response: forge_connection_id}
-            account_id: input.account_id
+            scope_id: input.scope_id
             forge: input.forge
 
   # Design § Stage 2 `ForgeConnection` (end: OPEN on the entity).
@@ -752,7 +752,7 @@ commands:
     naming:
       display: Create a runner pool
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
       - {name: name, type: String}
       - {name: labels, type: List<String>}
@@ -767,9 +767,9 @@ commands:
       - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
     outcomes:
       # hardening pass 1 D3: the account is the one the caller acts in; another account answers
-      # as a missing one. The connection and artifact are tied to input.account_id below.
+      # as a missing one. The connection and artifact are tied to input.scope_id below.
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.pipelines.AccountUnavailable
       - name: invalid-bounds
         when:
@@ -799,7 +799,7 @@ commands:
           predicate:
             any:
               - state == Disconnected
-              - account_id != input.account_id
+              - scope_id != input.scope_id
         error: weft.pipelines.ConnectionUnavailable
       - name: artifact-unavailable
         when_related:
@@ -807,7 +807,7 @@ commands:
           predicate:
             any:
               - state == Revoked
-              - account_id != input.account_id
+              - scope_id != input.scope_id
         error: weft.pipelines.ArtifactUnavailable
       - name: class-retired
         when_related: {via: input.resource_class, predicate: state == Retired}
@@ -817,7 +817,7 @@ commands:
         instance: runner_pool_id
         returns: true
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           forge_connection_id: input.forge_connection_id
           name: input.name
           labels: input.labels
@@ -832,7 +832,7 @@ commands:
         payload:
           weft.pipelines.RunnerPoolCreated:
             runner_pool_id: {response: runner_pool_id}
-            account_id: input.account_id
+            scope_id: input.scope_id
             forge_connection_id: input.forge_connection_id
 
   # Design § Stage 2 `RunnerPool`. Refused while a job is not ended: cancel them first.
@@ -931,7 +931,7 @@ commands:
         instance: runner_job_id
         returns: true
         sets:
-          account_id: {related: {via: input.runner_pool_id, field: account_id}}
+          scope_id: {related: {via: input.runner_pool_id, field: scope_id}}
           runner_pool_id: input.runner_pool_id
           forge_job_id: input.forge_job_id
           forge_run_id: input.forge_run_id
@@ -959,7 +959,7 @@ commands:
     input:
       - {name: runner_job_id, type: weft.shared.RunnerJobId}
       - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: instance_id, type: weft.shared.InstanceId}
     outcomes:
       - name: no-such-job
@@ -977,10 +977,10 @@ commands:
         when_related: {via: input.runner_job_id, predicate: runner_pool_id != input.runner_pool_id}
         error: weft.pipelines.JobNotInPool
       - name: pool-not-of-account
-        when_related: {via: input.runner_pool_id, predicate: account_id != input.account_id}
+        when_related: {via: input.runner_pool_id, predicate: scope_id != input.scope_id}
         error: weft.pipelines.JobNotInPool
       - name: instance-not-of-account
-        when_related: {via: input.instance_id, predicate: account_id != input.account_id}
+        when_related: {via: input.instance_id, predicate: scope_id != input.scope_id}
         error: weft.pipelines.InstanceUnavailable
       - name: instance-too-weak
         when_related: {via: input.instance_id, predicate: minimum_isolation != MicroVm}
@@ -1132,7 +1132,7 @@ commands:
       # Isolation pass 2: only the job's own account acts on it; another account's job
       # answers like a missing one, before its state is read.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.pipelines.NotFound
       - name: cancelled
         moves: weft.pipelines.RunnerJob.cancel
@@ -1159,7 +1159,7 @@ commands:
       display: Create a build cache
     input:
       - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: cache_key, type: String}
       - {name: protected, type: Boolean}
       - {name: volume_id, type: weft.shared.VolumeId}
@@ -1168,9 +1168,9 @@ commands:
       - {name: build_cache_id, type: weft.shared.BuildCacheId}
     outcomes:
       # hardening pass 1 D3: the account is the one the caller acts in; another account answers
-      # as a missing one. The pool and volume are tied to input.account_id below.
+      # as a missing one. The pool and volume are tied to input.scope_id below.
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.pipelines.AccountUnavailable
       - name: invalid-cap
         when: size_cap_bytes < 1
@@ -1187,10 +1187,10 @@ commands:
           predicate:
             any:
               - state == Retired
-              - account_id != input.account_id
+              - scope_id != input.scope_id
         error: weft.pipelines.PoolUnavailable
       - name: foreign-volume
-        when_related: {via: input.volume_id, predicate: account_id != input.account_id}
+        when_related: {via: input.volume_id, predicate: scope_id != input.scope_id}
         error: weft.pipelines.VolumeUnavailable
       # hardening pass 1 D7: one volume backs one active cache, so an unprotected cache (a fork's
       # pull request writes it) never shares bytes with a protected one a `main` build reads.
@@ -1220,7 +1220,7 @@ commands:
         instance: build_cache_id
         returns: true
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           runner_pool_id: input.runner_pool_id
           cache_key: input.cache_key
           protected: input.protected
@@ -1397,7 +1397,7 @@ commands:
       # Isolation pass 2: only the cache's own account acts on it; another account's cache
       # answers like a missing one, before its state is read.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.pipelines.NotFound
       - name: busy
         when_subject:
@@ -1425,7 +1425,7 @@ commands:
       - {name: environment_id, type: weft.shared.EnvironmentId}
       # Isolation pass 2: the account the request acts in, so the environment can be tied to the
       # caller (a related row is not compared with the caller directly).
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: kind, type: weft.pipelines.GateKind}
       - {name: approver_role, type: Optional<weft.shared.Role>}
       - {name: signer_key_id, type: Optional<String>}
@@ -1439,7 +1439,7 @@ commands:
       # Isolation pass 2: the account must be the one the request acts in; it reads no row and
       # answers like a missing environment (an input guard answers ahead of every row check).
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.pipelines.EnvironmentUnavailable
       - name: approval-settings
         when:
@@ -1514,15 +1514,15 @@ commands:
       # one, before its state is read. The environment stores no account; its formation does.
       - name: environment-of-other-account
         when_related:
-          entity: weft.formations.Environment
+          entity: weft.architecture.Environment
           where:
             all:
               - environment_id == input.environment_id
               - not:
                   exists:
                     as: f
-                    in: {entity: weft.formations.Formation}
-                    that: {all: [{f.formation_id: {eq: {fact: formation_id}}}, f.account_id == input.account_id]}
+                    in: {entity: weft.architecture.Formation}
+                    that: {all: [{f.formation_id: {eq: {fact: formation_id}}}, f.scope_id == input.scope_id]}
           exists: true
         error: weft.pipelines.EnvironmentUnavailable
       - name: environment-retired
@@ -1533,7 +1533,7 @@ commands:
         instance: deploy_gate_id
         returns: true
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           environment_id: input.environment_id
           kind: input.kind
           approver_role: input.approver_role
@@ -1564,7 +1564,7 @@ commands:
       # Isolation pass 2: only the gate's own account acts on it; another account's gate
       # answers like a missing one, before its state is read.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.pipelines.NotFound
       - name: removed
         moves: weft.pipelines.DeployGate.remove
@@ -1623,7 +1623,7 @@ commands:
         instance: gate_check_id
         returns: true
         sets:
-          account_id: {related: {via: input.deploy_gate_id, field: account_id}}
+          scope_id: {related: {via: input.deploy_gate_id, field: scope_id}}
           deploy_gate_id: input.deploy_gate_id
           plan_id: input.plan_id
           environment_id: input.environment_id
@@ -1755,7 +1755,7 @@ commands:
       # Isolation pass 2: only the check's own account acts on it; another account's check
       # answers like a missing one, before its state is read.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.pipelines.NotFound
       - name: gate-mismatch
         when_subject:
@@ -1807,7 +1807,7 @@ commands:
       # Isolation pass 2: only the check's own account acts on it; another account's check
       # answers like a missing one, before its state is read.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.pipelines.NotFound
       - name: gate-mismatch
         when_subject:
@@ -1847,11 +1847,11 @@ views:
     source: weft.pipelines.ForgeConnection
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: forge, type: weft.pipelines.ForgeKind}
       - {name: forge_url, type: String}
       - {name: installation, type: String}
@@ -1863,11 +1863,11 @@ views:
     source: weft.pipelines.RunnerPool
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields: &pool-fields
       - {name: runner_pool_id, type: weft.shared.RunnerPoolId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: forge_connection_id, type: weft.shared.ForgeConnectionId}
       - {name: name, type: String}
       - {name: labels, type: List<String>}

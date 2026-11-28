@@ -3,17 +3,31 @@ requires: ess 0.99.2
 specification:
   - system.yaml
   - components.yaml
+  - cloud/0-protocols/shared.yaml
+  - cloud/2-infrastructure/infrastructure.yaml
+  - cloud/2-infrastructure/inventory.yaml
+  - cloud/2-infrastructure/topology.yaml
+  - cloud/3-scope/scope.yaml
+  - cloud/4-resources/resources.yaml
+  - cloud/4-resources/artifacts.yaml
+  - cloud/5-workloads/workloads.yaml
+  - cloud/5-workloads/claims.yaml
+  - cloud/6-platform/scheduling.yaml
+  - cloud/6-platform/identity.yaml
+  - cloud/6-platform/secrets.yaml
+  - cloud/6-platform/observability.yaml
+  - cloud/6-platform/limits.yaml
+  - cloud/7-edge/edge.yaml
+  - cloud/8-services/services.yaml
+  - cloud/9-composition/architecture.yaml
+  - cloud/11-translation/deployments.yaml
   - 0-foundation/shared.yaml
   - 1-infrastructure/infrastructure.yaml
-  - 1-infrastructure/inventory.yaml
   - 2-tenancy/accounts.yaml
   - 2-tenancy/access.yaml
-  - 3-resources/resources.yaml
-  - 3-resources/artifacts.yaml
   - 3-resources/cluster.yaml
   - 4-applications/formations.yaml
   - 4-applications/workloads.yaml
-  - 5-runtime/claims.yaml
   - 5-runtime/scheduling.yaml
   - 5-runtime/nodes.yaml
   - 5-runtime/identity.yaml

@@ -35,6 +35,14 @@ for p in "$@"; do
 done
 # measure with whatever `ess` is on PATH: the copy requires that release
 sed -i "s/^requires: ess .*/requires: ess $(ess --version | cut -d' ' -f2)/" "$full/ess-inputs.yaml"
+# the vendored cloudspec blocks (ess/cloud/, below every weft layer) go into the subset whole,
+# before the compile step, and their domains are always kept
+if [ -d "$full/cloud" ]; then
+  cp -r "$full/cloud" "$tree/cloud"
+  sed -n 's/^domain: *//p' "$full"/cloud/*/*.yaml | sort -u > "$work/vendored.txt"
+else
+  : > "$work/vendored.txt"
+fi
 
 # edges of the full tree
 ess specify compile --path "$full" --format json > "$work/ir.json" 2> "$work/compile.err" || {
@@ -78,6 +86,8 @@ grep -qx 'weft.shared' "$work/keep.txt" || echo 'weft.shared' >> "$work/keep.txt
 # grants of kept domains (filtered below)
 grep -qx 'weft.actors' "$work/keep.txt" || echo 'weft.actors' >> "$work/keep.txt"
 
+cat "$work/vendored.txt" "$work/keep.txt" | sort -u > "$work/keep.new" && mv "$work/keep.new" "$work/keep.txt"
+
 # subset tree: system.yaml and ess-inputs.yaml list only the kept domains
 sed -n '1,/^domains:$/p' "$full/system.yaml" > "$tree/system.yaml"
 grep -E '^  - weft\.' "$full/system.yaml" | sed 's/^  - //' | while read -r d; do
@@ -85,7 +95,7 @@ grep -E '^  - weft\.' "$full/system.yaml" | sed 's/^  - //' | while read -r d; d
 done
 sed -n '1,/^specification:$/p' "$full/ess-inputs.yaml" > "$tree/ess-inputs.yaml"
 printf '  - system.yaml\n' >> "$tree/ess-inputs.yaml"
-grep -E '^  - [0-9]+-[a-z-]+/[a-z-]+\.yaml$' "$full/ess-inputs.yaml" | sed 's/^  - //' | while read -r p; do
+grep -E '^  - (cloud/)?[0-9]+-[a-z-]+/[a-z-]+\.yaml$' "$full/ess-inputs.yaml" | sed 's/^  - //' | while read -r p; do
   d="$(sed -n 's/^domain: *//p' "$full/$p" | head -n 1)"
   if grep -qx "$d" "$work/keep.txt"; then
     mkdir -p "$tree/$(dirname "$p")"

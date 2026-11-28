@@ -1,0 +1,635 @@
+# Moved from weft@6798e7d: ess/3-resources/cluster.yaml (Topology, TopologyGroup, TopologyLink).
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
+#
+# cloudspec: in weft a topology is a tenant cluster's and an account's; here it is one cloud's,
+# and its groups list the cloud's node pools (weft.infrastructure.NodePool). This layer sits below
+# the scope (layer 3), so a topology has no owner scope, and its commands are the operator's: the
+# caller ties to an account and the checks on the cluster are cut (docs/boundary.md, C2). The
+# commands CreateClusterTopology and RemoveClusterTopology are named CreateTopology and
+# RemoveTopology. Comments below are weft's, where a cluster reads as the cloud.
+domain: weft.topology
+
+summary: >-
+  The structure of nodes: a topology of one kind (star, ring, mesh, tree, line or custom), its
+  groups of node pools with their roles, and the declared links between groups with bandwidth,
+  latency and whether traffic may cross them.
+
+naming:
+  wire: weft
+  display: Topology
+
+types:
+
+  # design § Step 2b "Topology": `kind` (Star, Ring, Mesh, Tree, Line, Custom).
+  # weft@6798e7d:ess/3-resources/cluster.yaml:50
+  - name: weft.topology.TopologyKind
+    kind: enum
+    variants: [Star, Ring, Mesh, Tree, Line, Custom]
+
+  # design § Step 2b "TopologyGroup": "its role in the kind (the hub of a star, a position in a
+  # ring, a level and parent in a tree)".
+  # OPEN: the design names the hub, a ring position and a tree level and parent, not a role
+  # vocabulary. Taken: Star: Hub or Spoke; Tree: Root or Child (a Child names its parent, the
+  # level follows from the parents); Ring, Line, Mesh, Custom: Member (Ring and Line order members
+  # by `position`).
+  # weft@6798e7d:ess/3-resources/cluster.yaml:60
+  - name: weft.topology.GroupRole
+    kind: enum
+    variants: [Hub, Spoke, Root, Child, Member]
+
+  # design § Step 2b "TrafficPattern (a value on a formation or a link of a formation)". Declared
+  # here for weft.formations (layer 4) and weft.scheduling (layer 5) to name; no field of this
+  # domain carries it.
+  # OPEN: the design writes `FanOut`/`Broadcast`. Taken: one variant, FanOut; Broadcast is its
+  # other name.
+  # OPEN: a type more than one domain uses belongs in weft.shared (AGENTS.md); it sits here, where
+  # the coordinator placed it, until a formation names it.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:71
+  - name: weft.topology.TrafficPattern
+    kind: enum
+    variants: [AllToAll, FanIn, FanOut, Pipeline, RingAllReduce, RequestResponse]
+
+entities:
+
+  # design § Step 2b "Topology (one per cluster, in weft.cluster)": the structure of a cluster's
+  # nodes, distinct from a formation's topology (sketch § "Topology as data").
+  # OPEN: the design gives a topology no lifecycle. Taken: Active, then Removed; a cluster has at
+  # most one Active topology, and a new kind is set by removing it and creating another.
+  # OPEN: a topology of the default cluster (shared pools, no account). Taken: none; topologies
+  # are an account's, like dedicated pools.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:211
+  - name: weft.topology.Topology
+    naming:
+      summary: The structure of one cloud's nodes, of one kind, made of groups and the links between them.
+    identity:
+      name: topology_id
+      type: weft.shared.TopologyId
+    fields:
+      - name: cloud_id
+        type: weft.shared.CloudId
+      - name: kind
+        type: weft.topology.TopologyKind
+    relations:
+      - name: cloud
+        kind: references
+        target: weft.infrastructure.Cloud
+        cardinality: one
+        via: cloud_id
+    lifecycle:
+      initial: Active
+      states:
+        - {name: Active, summary: Scheduling reads it.}
+        - {name: Removed, summary: Removed with its groups and links.}
+      terminal: [Removed]
+      transitions:
+        - {name: remove, from: [Active], to: Removed}
+
+  # design § Step 2b "TopologyGroup": "a set of nodes from one or more of the cluster's node pools
+  # (a rack, a zone, a GPU island), with its role in the kind".
+  # OPEN: may one pool sit in two groups of a topology? Taken: not refused.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:247
+  - name: weft.topology.TopologyGroup
+    naming:
+      summary: A group of a topology, the nodes of some of the cloud's node pools, with its role in the topology's kind.
+    identity:
+      name: topology_group_id
+      type: weft.shared.TopologyGroupId
+    fields:
+      - name: topology_id
+        type: weft.shared.TopologyId
+      - name: name
+        type: String
+      - name: node_pools
+        type: List<weft.shared.NodePoolId>
+      - name: role
+        type: weft.topology.GroupRole
+      - name: position
+        type: Optional<Integer>
+        summary: The group's place in a Ring or Line, from 0.
+      - name: parent_group_id
+        type: Optional<weft.shared.TopologyGroupId>
+        summary: The parent group of a Child in a Tree.
+    relations:
+      - name: topology
+        kind: references
+        target: weft.topology.Topology
+        cardinality: one
+        via: topology_id
+      - name: node_pools
+        kind: references
+        target: weft.infrastructure.NodePool
+        cardinality: many
+        via: node_pools
+      - name: parent
+        kind: references
+        target: weft.topology.TopologyGroup
+        cardinality: one
+        via: parent_group_id
+    lifecycle:
+      initial: Active
+      states:
+        - {name: Active, summary: Part of its topology.}
+        - {name: Removed, summary: No longer part of its topology.}
+      terminal: [Removed]
+      transitions:
+        - {name: remove, from: [Active], to: Removed}
+
+  # design § Step 2b "TopologyLink": "two groups, bandwidth, latency, whether traffic may cross
+  # it. Derived from the kind for Star/Ring/Mesh/Tree/Line; declared for Custom." Only declared
+  # links are rows; a derived link is computed from the groups and their roles.
+  # OPEN: bandwidth and latency of a derived link. Taken: what the nodes observe (not modelled
+  # here), and every derived link may be crossed.
+  # OPEN: units. Taken: bandwidth in megabits per second, latency in microseconds.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:313
+  - name: weft.topology.TopologyLink
+    naming:
+      summary: A declared link between two groups of a Custom topology, with its bandwidth, latency and whether traffic may cross it.
+    identity:
+      name: topology_link_id
+      type: weft.shared.TopologyLinkId
+    fields:
+      - name: topology_id
+        type: weft.shared.TopologyId
+      - name: from_group_id
+        type: weft.shared.TopologyGroupId
+      - name: to_group_id
+        type: weft.shared.TopologyGroupId
+      - name: bandwidth_mbps
+        type: Integer
+      - name: latency_us
+        type: Integer
+      - name: crossable
+        type: Boolean
+    invariants:
+      - bandwidth_mbps > 0
+      - latency_us >= 0
+    relations:
+      - name: topology
+        kind: references
+        target: weft.topology.Topology
+        cardinality: one
+        via: topology_id
+      - name: from_group
+        kind: references
+        target: weft.topology.TopologyGroup
+        cardinality: one
+        via: from_group_id
+      - name: to_group
+        kind: references
+        target: weft.topology.TopologyGroup
+        cardinality: one
+        via: to_group_id
+    lifecycle:
+      initial: Declared
+      states:
+        - {name: Declared, summary: Scheduling reads it.}
+        - {name: Removed, summary: No longer part of its topology.}
+      terminal: [Removed]
+      transitions:
+        - {name: remove, from: [Declared], to: Removed}
+
+errors:
+  # weft@6798e7d:ess/3-resources/cluster.yaml:370
+  - name: weft.topology.NotFound
+    summary: The addressed cloud, topology, group or link does not exist, and nothing changed.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:372
+  - name: weft.topology.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:396
+  - name: weft.topology.TopologyExists
+    summary: The cloud already has a topology that is not removed.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:398
+  - name: weft.topology.RoleNotInKind
+    summary: The group's role, position or parent does not fit the kind of its topology.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:400
+  - name: weft.topology.HubExists
+    summary: The star topology already has a hub group.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:404
+  - name: weft.topology.PoolNotInCloud
+    summary: A node pool the group names is not a pool of the topology's cloud, or is deleted.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:406
+  - name: weft.topology.LinksDerived
+    summary: The topology's kind derives its links; only a Custom topology declares them.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:408
+  - name: weft.topology.UnknownGroup
+    summary: A group the link names does not exist in the topology, or is removed.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:410
+  - name: weft.topology.InvalidLink
+    summary: The link joins a group to itself, or its bandwidth is not positive or its latency negative.
+
+events:
+
+  # weft@6798e7d:ess/3-resources/cluster.yaml:469
+  - name: weft.topology.TopologyCreated
+    fields:
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: kind, type: weft.topology.TopologyKind}
+
+  # weft@6798e7d:ess/3-resources/cluster.yaml:476
+  - name: weft.topology.TopologyRemoved
+    fields:
+      - {name: topology_id, type: weft.shared.TopologyId}
+
+  # weft@6798e7d:ess/3-resources/cluster.yaml:480
+  - name: weft.topology.TopologyGroupAdded
+    fields:
+      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: name, type: String}
+      - {name: node_pools, type: List<weft.shared.NodePoolId>}
+      - {name: role, type: weft.topology.GroupRole}
+      - {name: position, type: Optional<Integer>}
+      - {name: parent_group_id, type: Optional<weft.shared.TopologyGroupId>}
+
+  # weft@6798e7d:ess/3-resources/cluster.yaml:492
+  - name: weft.topology.TopologyGroupRemoved
+    fields:
+      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
+
+  # weft@6798e7d:ess/3-resources/cluster.yaml:496
+  - name: weft.topology.TopologyLinkDeclared
+    fields:
+      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: from_group_id, type: weft.shared.TopologyGroupId}
+      - {name: to_group_id, type: weft.shared.TopologyGroupId}
+      - {name: bandwidth_mbps, type: Integer}
+      - {name: latency_us, type: Integer}
+      - {name: crossable, type: Boolean}
+
+  # weft@6798e7d:ess/3-resources/cluster.yaml:507
+  - name: weft.topology.TopologyLinkRemoved
+    fields:
+      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
+
+commands:
+
+  # design § Step 2b "Topology (one per cluster)": set a cloud's topology, of one kind.
+  # cloudspec: weft's CreateClusterTopology, for a cloud; the caller tie and the checks on the
+  # tenant cluster (no-such-cluster, cluster-foreign, cluster-not-active) are cut.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:962
+  - name: weft.topology.CreateTopology
+    naming:
+      display: Set a cloud's topology
+    input:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: kind, type: weft.topology.TopologyKind}
+    outcomes:
+      - name: no-such-cloud
+        when_related: {via: input.cloud_id, exists: false}
+        error: weft.topology.NotFound
+      - name: topology-exists
+        when_related:
+          entity: weft.topology.Topology
+          where:
+            all:
+              - cloud_id == input.cloud_id
+              - state == Active
+          exists: true
+        error: weft.topology.TopologyExists
+      - name: created
+        creates: weft.topology.Topology
+        instance: topology_id
+        sets:
+          cloud_id: input.cloud_id
+          kind: input.kind
+        emits: [weft.topology.TopologyCreated]
+        payload:
+          weft.topology.TopologyCreated:
+            topology_id: {generated: true}
+            cloud_id: input.cloud_id
+            kind: input.kind
+
+  # design § Step 2b "Topology": a new kind is set by removing the topology and creating
+  # another (see the OPEN on Topology). Its groups and declared links go with it.
+  # cloudspec: weft's RemoveClusterTopology; the caller tie is cut.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1016
+  - name: weft.topology.RemoveTopology
+    naming:
+      display: Remove a cloud's topology
+    input:
+      - {name: topology_id, type: weft.shared.TopologyId}
+    outcomes:
+      - name: no-such-topology
+        unknown_instance: true
+        error: weft.topology.NotFound
+      - name: removed
+        moves: weft.topology.Topology.remove
+        instance: topology_id
+        affects:
+          - entity: weft.topology.TopologyGroup
+            where:
+              all:
+                - topology_id == input.topology_id
+                - state == Active
+            moves: weft.topology.TopologyGroup.remove
+          - entity: weft.topology.TopologyLink
+            where:
+              all:
+                - topology_id == input.topology_id
+                - state == Declared
+            moves: weft.topology.TopologyLink.remove
+        emits: [weft.topology.TopologyRemoved]
+        payload:
+          weft.topology.TopologyRemoved:
+            topology_id: input.topology_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.topology.StateConflict
+
+  # design § Step 2b "TopologyGroup": a set of nodes from the cluster's pools, with its role in
+  # the kind.
+  # OPEN: a pool id that names no pool at all is not refused: ESS 0.99.2 tests a list of
+  # references only for a missing row and only on a command that reads no other related row.
+  # A named pool of another cluster (so also of another account) or a removed one is refused.
+  # cloudspec: the pools are the cloud's node pools; `cloud_id` takes the place of weft's
+  # `cluster_id` input, and the caller tie is cut.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1058
+  - name: weft.topology.AddTopologyGroup
+    naming:
+      display: Add a group to a topology
+    input:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: name, type: String}
+      - {name: node_pools, type: List<weft.shared.NodePoolId>}
+      - {name: role, type: weft.topology.GroupRole}
+      - {name: position, type: Optional<Integer>}
+      - {name: parent_group_id, type: Optional<weft.shared.TopologyGroupId>}
+    outcomes:
+      # A Child names its parent; no other role does.
+      - name: child-without-parent
+        when:
+          all:
+            - role == Child
+            - not defined(parent_group_id)
+        error: weft.topology.RoleNotInKind
+      - name: parent-without-child
+        when:
+          all:
+            - role != Child
+            - defined(parent_group_id)
+        error: weft.topology.RoleNotInKind
+      - name: negative-position
+        when: position < 0
+        error: weft.topology.RoleNotInKind
+      - name: no-such-topology
+        when_related: {via: input.topology_id, exists: false}
+        error: weft.topology.NotFound
+      # A topology of another cloud answers like a missing one, before its state, kind or groups.
+      - name: topology-foreign
+        when_related: {via: input.topology_id, predicate: cloud_id != input.cloud_id}
+        error: weft.topology.NotFound
+      - name: topology-removed
+        when_related: {via: input.topology_id, predicate: state != Active}
+        error: weft.topology.StateConflict
+      # The roles of each kind (see weft.topology.GroupRole); Ring and Line need a position.
+      - name: role-not-in-kind
+        when_related:
+          via: input.topology_id
+          predicate:
+            any:
+              - all:
+                  - kind == Star
+                  - any: [input.role == Root, input.role == Child, input.role == Member]
+              - all:
+                  - kind == Tree
+                  - any: [input.role == Hub, input.role == Spoke, input.role == Member]
+              - all:
+                  - {kind: {in: [Ring, Line, Mesh, Custom]}}
+                  - input.role != Member
+              - all:
+                  - {kind: {in: [Ring, Line]}}
+                  - not defined(input.position)
+        error: weft.topology.RoleNotInKind
+      - name: pool-not-in-cloud
+        when_related:
+          entity: weft.infrastructure.NodePool
+          where:
+            all:
+              - exists: {in: input.node_pools, as: p, that: node_pool_id == p}
+              - any:
+                  - cloud_id != input.cloud_id
+                  - state == Deleted
+          exists: true
+        error: weft.topology.PoolNotInCloud
+      # design § Step 2b: "the hub of a star", one per star.
+      - name: hub-exists
+        when: role == Hub
+        when_related:
+          entity: weft.topology.TopologyGroup
+          where:
+            all:
+              - topology_id == input.topology_id
+              - role == Hub
+              - state == Active
+          exists: true
+        error: weft.topology.HubExists
+      - name: added
+        creates: weft.topology.TopologyGroup
+        instance: topology_group_id
+        sets:
+          topology_id: input.topology_id
+          name: input.name
+          node_pools: input.node_pools
+          role: input.role
+          position: input.position
+          parent_group_id: input.parent_group_id
+        emits: [weft.topology.TopologyGroupAdded]
+        payload:
+          weft.topology.TopologyGroupAdded:
+            topology_group_id: {generated: true}
+            topology_id: input.topology_id
+            name: input.name
+            node_pools: input.node_pools
+            role: input.role
+            position: input.position
+            parent_group_id: input.parent_group_id
+
+  # design § Step 2b "TopologyGroup". Declared links that name the group go with it.
+  # OPEN: removing a group that is the parent of other groups, or the hub of a star. Taken: not
+  # refused (a row-set guard beside the caller tie is ESS-COMMAND-009); the children keep a
+  # removed parent and scheduling treats them as roots.
+  # cloudspec: the caller tie is cut.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1178
+  - name: weft.topology.RemoveTopologyGroup
+    naming:
+      display: Remove a group from a topology
+    input:
+      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
+    outcomes:
+      - name: no-such-group
+        unknown_instance: true
+        error: weft.topology.NotFound
+      - name: removed
+        moves: weft.topology.TopologyGroup.remove
+        instance: topology_group_id
+        affects:
+          - entity: weft.topology.TopologyLink
+            where:
+              all:
+                - state == Declared
+                - any:
+                    - from_group_id == input.topology_group_id
+                    - to_group_id == input.topology_group_id
+            moves: weft.topology.TopologyLink.remove
+        emits: [weft.topology.TopologyGroupRemoved]
+        payload:
+          weft.topology.TopologyGroupRemoved:
+            topology_group_id: input.topology_group_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.topology.StateConflict
+
+  # design § Step 2b "TopologyLink ... declared for Custom".
+  # OPEN: may two links join the same two groups? Taken: not refused.
+  # cloudspec: the caller tie and the tie of the topology to the request's account are cut.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1213
+  - name: weft.topology.DeclareTopologyLink
+    naming:
+      display: Declare a link of a custom topology
+    input:
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: from_group_id, type: weft.shared.TopologyGroupId}
+      - {name: to_group_id, type: weft.shared.TopologyGroupId}
+      - {name: bandwidth_mbps, type: Integer}
+      - {name: latency_us, type: Integer}
+      - {name: crossable, type: Boolean}
+    outcomes:
+      - name: same-group
+        when: from_group_id == input.to_group_id
+        error: weft.topology.InvalidLink
+      - name: invalid-bandwidth
+        when: bandwidth_mbps <= 0
+        error: weft.topology.InvalidLink
+      - name: invalid-latency
+        when: latency_us < 0
+        error: weft.topology.InvalidLink
+      - name: no-such-topology
+        when_related: {via: input.topology_id, exists: false}
+        error: weft.topology.NotFound
+      - name: no-such-from-group
+        when_related: {via: input.from_group_id, exists: false}
+        error: weft.topology.UnknownGroup
+      - name: no-such-to-group
+        when_related: {via: input.to_group_id, exists: false}
+        error: weft.topology.UnknownGroup
+      - name: topology-removed
+        when_related: {via: input.topology_id, predicate: state != Active}
+        error: weft.topology.StateConflict
+      - name: links-derived
+        when_related: {via: input.topology_id, predicate: kind != Custom}
+        error: weft.topology.LinksDerived
+      - name: from-group-elsewhere
+        when_related:
+          via: input.from_group_id
+          predicate:
+            any:
+              - topology_id != input.topology_id
+              - state != Active
+        error: weft.topology.UnknownGroup
+      - name: to-group-elsewhere
+        when_related:
+          via: input.to_group_id
+          predicate:
+            any:
+              - topology_id != input.topology_id
+              - state != Active
+        error: weft.topology.UnknownGroup
+      - name: declared
+        creates: weft.topology.TopologyLink
+        instance: topology_link_id
+        sets:
+          topology_id: input.topology_id
+          from_group_id: input.from_group_id
+          to_group_id: input.to_group_id
+          bandwidth_mbps: input.bandwidth_mbps
+          latency_us: input.latency_us
+          crossable: input.crossable
+        emits: [weft.topology.TopologyLinkDeclared]
+        payload:
+          weft.topology.TopologyLinkDeclared:
+            topology_link_id: {generated: true}
+            topology_id: input.topology_id
+            from_group_id: input.from_group_id
+            to_group_id: input.to_group_id
+            bandwidth_mbps: input.bandwidth_mbps
+            latency_us: input.latency_us
+            crossable: input.crossable
+
+  # design § Step 2b "TopologyLink".
+  # cloudspec: the caller tie is cut.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1298
+  - name: weft.topology.RemoveTopologyLink
+    naming:
+      display: Remove a link of a custom topology
+    input:
+      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
+    outcomes:
+      - name: no-such-link
+        unknown_instance: true
+        error: weft.topology.NotFound
+      - name: removed
+        moves: weft.topology.TopologyLink.remove
+        instance: topology_link_id
+        emits: [weft.topology.TopologyLinkRemoved]
+        payload:
+          weft.topology.TopologyLinkRemoved:
+            topology_link_id: input.topology_link_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.topology.StateConflict
+
+views:
+
+  # design § Step 2b "Topology": the topologies of a cloud.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1414
+  - name: weft.topology.Topologies
+    source: weft.topology.Topology
+    consistency: read_your_writes
+    params:
+      - {name: cloud_id, type: weft.shared.CloudId}
+    filter: cloud_id == param.cloud_id
+    fields:
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: kind, type: weft.topology.TopologyKind}
+      - {name: state, type: weft.topology.Topology.State}
+
+  # design § Step 2b "TopologyGroup": the groups of a topology.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1428
+  - name: weft.topology.TopologyGroups
+    source: weft.topology.TopologyGroup
+    consistency: read_your_writes
+    params:
+      - {name: topology_id, type: weft.shared.TopologyId}
+    filter: topology_id == param.topology_id
+    fields:
+      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: name, type: String}
+      - {name: node_pools, type: List<weft.shared.NodePoolId>}
+      - {name: role, type: weft.topology.GroupRole}
+      - {name: position, type: Optional<Integer>}
+      - {name: parent_group_id, type: Optional<weft.shared.TopologyGroupId>}
+      - {name: state, type: weft.topology.TopologyGroup.State}
+
+  # design § Step 2b "TopologyLink": the declared links of a topology.
+  # weft@6798e7d:ess/3-resources/cluster.yaml:1447
+  - name: weft.topology.TopologyLinks
+    source: weft.topology.TopologyLink
+    consistency: read_your_writes
+    params:
+      - {name: topology_id, type: weft.shared.TopologyId}
+    filter: topology_id == param.topology_id
+    fields:
+      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
+      - {name: topology_id, type: weft.shared.TopologyId}
+      - {name: from_group_id, type: weft.shared.TopologyGroupId}
+      - {name: to_group_id, type: weft.shared.TopologyGroupId}
+      - {name: bandwidth_mbps, type: Integer}
+      - {name: latency_us, type: Integer}
+      - {name: crossable, type: Boolean}
+      - {name: state, type: weft.topology.TopologyLink.State}

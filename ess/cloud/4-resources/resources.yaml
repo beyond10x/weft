@@ -1,3 +1,6 @@
+# Moved from weft@6798e7d:ess/3-resources/resources.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
 # Resources: the tenant-owned storage units a claim is bound to. Source: docs/domain-sketch.md
 # section 6 "Resources" (lines 382-405).
 # ResourceClass and Device are operator-owned and live in weft.inventory (layer 1,
@@ -22,7 +25,7 @@
 domain: weft.resources
 
 summary: >-
-  The tenant-owned storage units: volumes, filesystems, buckets and volume snapshots.
+  The scope-owned storage units: volumes, filesystems, buckets and volume snapshots.
 
 naming:
   wire: weft
@@ -30,6 +33,7 @@ naming:
 
 types:
   # What a provisioner reports for a storage unit it was asked to create.
+  # weft@6798e7d:ess/3-resources/resources.yaml:33
   - name: weft.resources.ProvisionResult
     kind: enum
     variants: [Ready, Failed]
@@ -45,15 +49,16 @@ entities:
   # Brief: one writer. The writer is a weft.claims.Binding (layer 5), which names this volume; the
   # volume does not name its writer (that would point up), it is Attached while the writer holds
   # it. weft.claims.CommitVolumeWriter attaches it and weft.claims.ReleaseBinding detaches it.
+  # weft@6798e7d:ess/3-resources/resources.yaml:48
   - name: weft.resources.Volume
     naming:
-      summary: A persistent block volume of one account, bound to a zone or one node, with at most one writer.
+      summary: A persistent block volume of one scope, bound to a zone or one node, with at most one writer.
     identity:
       name: volume_id
       type: weft.shared.VolumeId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: size_bytes
         type: Integer
       - name: zone
@@ -66,11 +71,11 @@ entities:
     invariants:
       - size_bytes > 0
     relations:
-      - name: account
+      - name: scope
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: zone
         kind: references
         target: weft.infrastructure.Zone
@@ -104,15 +109,16 @@ entities:
 
   # Brief (VolumeSnapshot) and section 6 line 401 `snapshot`: a point-in-time copy of a volume, in
   # the volume's account and zone; a new volume can be restored from it.
+  # weft@6798e7d:ess/3-resources/resources.yaml:107
   - name: weft.resources.VolumeSnapshot
     naming:
-      summary: A point-in-time copy of a volume, from which a new volume of the same account can be created.
+      summary: A point-in-time copy of a volume, from which a new volume of the same scope can be created.
     identity:
       name: volume_snapshot_id
       type: weft.shared.VolumeSnapshotId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: volume_id
         type: weft.shared.VolumeId
       - name: size_bytes
@@ -120,11 +126,11 @@ entities:
       - name: zone
         type: weft.shared.ZoneName
     relations:
-      - name: account
+      - name: scope
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: zone
         kind: references
         target: weft.infrastructure.Zone
@@ -153,15 +159,16 @@ entities:
   # OPEN: is a filesystem zone-scoped or cluster-scoped? Taken: zone.
   # OPEN: sketch Open points (lines 630-631) leave the home of `filesystem` (resources or the
   # catalog's `object-store`) to the integration pass. Taken: modelled here until then.
+  # weft@6798e7d:ess/3-resources/resources.yaml:156
   - name: weft.resources.Filesystem
     naming:
-      summary: A shared filesystem of one account in one zone, mountable by several holders at once.
+      summary: A shared filesystem of one scope in one zone, mountable by several holders at once.
     identity:
       name: filesystem_id
       type: weft.shared.FilesystemId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: size_bytes
         type: Integer
       - name: zone
@@ -169,11 +176,11 @@ entities:
     invariants:
       - size_bytes > 0
     relations:
-      - name: account
+      - name: scope
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: zone
         kind: references
         target: weft.infrastructure.Zone
@@ -201,23 +208,24 @@ entities:
   # (lines 630-631) leave the home to the integration pass. Decided in the integration pass
   # (2026-11-26, caller's decision): buckets stay here; the catalog's object-store offering refers
   # to a bucket by weft.shared.BucketId.
+  # weft@6798e7d:ess/3-resources/resources.yaml:204
   - name: weft.resources.Bucket
     naming:
-      summary: An object storage bucket of one account, reachable from the whole cluster.
+      summary: An object storage bucket of one scope, reachable from the whole cluster.
     identity:
       name: bucket_id
       type: weft.shared.BucketId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: name
         type: String
     relations:
-      - name: account
+      - name: scope
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
     lifecycle:
       initial: Provisioning
       states:
@@ -234,35 +242,46 @@ entities:
 errors:
   # hardening pass 1 D3: also answers when the request names an account other than the caller's,
   # or a record of another account, so a foreign record and a missing one answer the same.
+  # weft@6798e7d:ess/3-resources/resources.yaml:237
   - name: weft.resources.NotFound
-    summary: The addressed record does not exist in the account the request acts in, and nothing changed.
+    summary: The addressed record does not exist in the scope the request acts in, and nothing changed.
+  # weft@6798e7d:ess/3-resources/resources.yaml:239
   - name: weft.resources.StateConflict
     summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/3-resources/resources.yaml:241
   - name: weft.resources.InvalidAmount
     summary: The amount is not a positive number.
+  # weft@6798e7d:ess/3-resources/resources.yaml:243
   - name: weft.resources.QuotaExceeded
-    summary: The claim would exceed the quota of the account or of an account above it.
+    summary: The claim would exceed the quota of the scope.
   # hardening pass 1 disclosure (resources.yaml:411): also answers for a unit of another account,
   # which replaced weft.resources.ForeignResource, so another account's unit and a missing one
   # answer the same.
+  # weft@6798e7d:ess/3-resources/resources.yaml:248
   - name: weft.resources.UnitNotFound
-    summary: The volume or snapshot the request names does not exist in the account the request acts in.
+    summary: The volume or snapshot the request names does not exist in the scope the request acts in.
+  # weft@6798e7d:ess/3-resources/resources.yaml:250
   - name: weft.resources.UnitNotAvailable
     summary: The unit the request names is not in a usable state.
+  # weft@6798e7d:ess/3-resources/resources.yaml:252
   - name: weft.resources.VolumeTooSmall
     summary: The volume would be smaller than the snapshot it is restored from.
+  # weft@6798e7d:ess/3-resources/resources.yaml:254
   - name: weft.resources.UnitInUse
     summary: Claims or bindings still use the unit, so it is not deleted.
+  # weft@6798e7d:ess/3-resources/resources.yaml:256
   - name: weft.resources.BucketNameTaken
     summary: A bucket of this name exists in the cluster.
+  # weft@6798e7d:ess/3-resources/resources.yaml:258
   - name: weft.resources.BucketNotEmpty
     summary: The bucket still holds objects, so it is not deleted.
 
 events:
+  # weft@6798e7d:ess/3-resources/resources.yaml:262
   - name: weft.resources.VolumeCreated
     fields:
       - {name: volume_id, type: weft.shared.VolumeId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: node_id, type: Optional<weft.shared.NodeId>}
@@ -270,82 +289,98 @@ events:
   # Soundness pass (2026-11-26): the restored volume's event, emitted by RestoreVolume. It took
   # `source_snapshot_id` from VolumeCreated, which CreateVolume can no longer fill (ESS has no
   # payload source for an absent value).
+  # weft@6798e7d:ess/3-resources/resources.yaml:273
   - name: weft.resources.VolumeRestored
     fields:
       - {name: volume_id, type: weft.shared.VolumeId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: node_id, type: Optional<weft.shared.NodeId>}
       - {name: source_snapshot_id, type: weft.shared.VolumeSnapshotId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:282
   - name: weft.resources.VolumeProvisioned
     fields:
       - {name: volume_id, type: weft.shared.VolumeId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:286
   - name: weft.resources.VolumeFailed
     fields:
       - {name: volume_id, type: weft.shared.VolumeId}
       - {name: reason, type: Optional<String>}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:291
   - name: weft.resources.VolumeDeleted
     fields:
       - {name: volume_id, type: weft.shared.VolumeId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:295
   - name: weft.resources.VolumeSnapshotRequested
     fields:
       - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
       - {name: volume_id, type: weft.shared.VolumeId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:301
   - name: weft.resources.VolumeSnapshotReady
     fields:
       - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:305
   - name: weft.resources.VolumeSnapshotFailed
     fields:
       - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
       - {name: reason, type: Optional<String>}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:310
   - name: weft.resources.VolumeSnapshotDeleted
     fields:
       - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:314
   - name: weft.resources.FilesystemCreated
     fields:
       - {name: filesystem_id, type: weft.shared.FilesystemId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:321
   - name: weft.resources.FilesystemProvisioned
     fields:
       - {name: filesystem_id, type: weft.shared.FilesystemId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:325
   - name: weft.resources.FilesystemFailed
     fields:
       - {name: filesystem_id, type: weft.shared.FilesystemId}
       - {name: reason, type: Optional<String>}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:330
   - name: weft.resources.FilesystemDeleted
     fields:
       - {name: filesystem_id, type: weft.shared.FilesystemId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:334
   - name: weft.resources.BucketCreated
     fields:
       - {name: bucket_id, type: weft.shared.BucketId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: String}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:340
   - name: weft.resources.BucketProvisioned
     fields:
       - {name: bucket_id, type: weft.shared.BucketId}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:344
   - name: weft.resources.BucketFailed
     fields:
       - {name: bucket_id, type: weft.shared.BucketId}
       - {name: reason, type: Optional<String>}
 
+  # weft@6798e7d:ess/3-resources/resources.yaml:349
   - name: weft.resources.BucketDeleted
     fields:
       - {name: bucket_id, type: weft.shared.BucketId}
@@ -358,18 +393,19 @@ commands:
   # could be created in any scenario, and every volume scenario of this domain and of weft.claims
   # was refused. OPEN: owner to confirm the split (one create command with an optional
   # `source_snapshot_id` before, two commands now).
+  # weft@6798e7d:ess/3-resources/resources.yaml:361
   - name: weft.resources.CreateVolume
     naming:
       display: Create a volume
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: node_id, type: Optional<weft.shared.NodeId>}
     outcomes:
       # hardening pass 1 D3: the volume is created only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.resources.NotFound
       - name: invalid-size
         when: size_bytes <= 0
@@ -377,13 +413,13 @@ commands:
       # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
       # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
       - name: quota-exceeded
-        external: the size would exceed the storage quota of the account or of an account above it
+        external: the size would exceed the storage quota of the scope
         error: weft.resources.QuotaExceeded
       - name: created
         creates: weft.resources.Volume
         instance: volume_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           size_bytes: input.size_bytes
           zone: input.zone
           node_id: input.node_id
@@ -391,7 +427,7 @@ commands:
         payload:
           weft.resources.VolumeCreated:
             volume_id: {generated: true}
-            account_id: input.account_id
+            scope_id: input.scope_id
             size_bytes: input.size_bytes
             zone: input.zone
             node_id: input.node_id
@@ -399,19 +435,20 @@ commands:
   # Brief (Volume, VolumeSnapshot) and section 6 line 401 `volume`, `snapshot`: create a volume
   # restored from a snapshot of the same account and zone. Split from CreateVolume in the
   # soundness pass (2026-11-26); see there.
+  # weft@6798e7d:ess/3-resources/resources.yaml:402
   - name: weft.resources.RestoreVolume
     naming:
       display: Restore a volume from a snapshot
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: node_id, type: Optional<weft.shared.NodeId>}
       - {name: source_snapshot_id, type: weft.shared.VolumeSnapshotId}
     outcomes:
       # hardening pass 1 D3: the volume is restored only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.resources.NotFound
       - name: invalid-size
         when: size_bytes <= 0
@@ -422,7 +459,7 @@ commands:
       # hardening pass 1 disclosure (resources.yaml:411): another account's snapshot answers like a
       # missing one, before its state, zone or size is checked.
       - name: snapshot-foreign
-        when_related: {via: input.source_snapshot_id, predicate: account_id != input.account_id}
+        when_related: {via: input.source_snapshot_id, predicate: scope_id != input.scope_id}
         error: weft.resources.UnitNotFound
       - name: snapshot-unavailable
         when_related:
@@ -438,13 +475,13 @@ commands:
       # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
       # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
       - name: quota-exceeded
-        external: the size would exceed the storage quota of the account or of an account above it
+        external: the size would exceed the storage quota of the scope
         error: weft.resources.QuotaExceeded
       - name: restored
         creates: weft.resources.Volume
         instance: volume_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           size_bytes: input.size_bytes
           zone: input.zone
           node_id: input.node_id
@@ -453,13 +490,14 @@ commands:
         payload:
           weft.resources.VolumeRestored:
             volume_id: {generated: true}
-            account_id: input.account_id
+            scope_id: input.scope_id
             size_bytes: input.size_bytes
             zone: input.zone
             node_id: input.node_id
             source_snapshot_id: input.source_snapshot_id
 
   # Brief (Volume lifecycle). See the OPEN on Volume for who provisions it.
+  # weft@6798e7d:ess/3-resources/resources.yaml:463
   - name: weft.resources.ReportVolumeProvisioned
     naming:
       display: Report a volume provisioned
@@ -492,6 +530,7 @@ commands:
         error: weft.resources.StateConflict
 
   # Brief (Volume lifecycle). A volume a claim still names is not deleted.
+  # weft@6798e7d:ess/3-resources/resources.yaml:495
   - name: weft.resources.DeleteVolume
     naming:
       display: Delete a volume
@@ -502,8 +541,8 @@ commands:
         unknown_instance: true
         error: weft.resources.NotFound
       # hardening pass 1 D3: another account's volume answers like a missing one, before its state.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.resources.NotFound
       # A volume with a writer is Attached: weft.claims.CommitVolumeWriter moves it there and
       # weft.claims.ReleaseBinding back, so this part of "in use" is the stored state.
@@ -531,16 +570,17 @@ commands:
   # Brief (VolumeSnapshot) and section 6 line 401 `snapshot`.
   # OPEN: may a volume with a writer be snapshotted (crash-consistent), or only one without a
   # writer? Taken: only an Available volume (no writer); an Attached one is refused.
+  # weft@6798e7d:ess/3-resources/resources.yaml:534
   - name: weft.resources.SnapshotVolume
     naming:
       display: Snapshot a volume
     input:
       - {name: volume_id, type: weft.shared.VolumeId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     outcomes:
       # hardening pass 1 D3: the snapshot is taken only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.resources.NotFound
       - name: volume-missing
         when_related: {via: input.volume_id, exists: false}
@@ -548,7 +588,7 @@ commands:
       # hardening pass 1 disclosure (resources.yaml:527): another account's volume answers like a
       # missing one, before its state is checked.
       - name: volume-foreign
-        when_related: {via: input.volume_id, predicate: account_id != input.account_id}
+        when_related: {via: input.volume_id, predicate: scope_id != input.scope_id}
         error: weft.resources.UnitNotFound
       - name: volume-unavailable
         when_related: {via: input.volume_id, predicate: state != Available}
@@ -556,13 +596,13 @@ commands:
       # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
       # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
       - name: quota-exceeded
-        external: the snapshot would exceed the storage quota of the account or of an account above it
+        external: the snapshot would exceed the storage quota of the scope
         error: weft.resources.QuotaExceeded
       - name: requested
         creates: weft.resources.VolumeSnapshot
         instance: volume_snapshot_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           volume_id: input.volume_id
           size_bytes: {related: {via: input.volume_id, field: size_bytes}}
           zone: {related: {via: input.volume_id, field: zone}}
@@ -571,9 +611,10 @@ commands:
           weft.resources.VolumeSnapshotRequested:
             volume_snapshot_id: {generated: true}
             volume_id: input.volume_id
-            account_id: input.account_id
+            scope_id: input.scope_id
 
   # Brief (VolumeSnapshot). Reported by the provisioner, as for volumes.
+  # weft@6798e7d:ess/3-resources/resources.yaml:577
   - name: weft.resources.ReportVolumeSnapshotTaken
     naming:
       display: Report a volume snapshot taken
@@ -606,6 +647,7 @@ commands:
         error: weft.resources.StateConflict
 
   # Brief (VolumeSnapshot). A volume restored from it keeps its own data; the snapshot can go.
+  # weft@6798e7d:ess/3-resources/resources.yaml:609
   - name: weft.resources.DeleteVolumeSnapshot
     naming:
       display: Delete a volume snapshot
@@ -616,8 +658,8 @@ commands:
         unknown_instance: true
         error: weft.resources.NotFound
       # hardening pass 1 D3: another account's snapshot answers like a missing one, before its state.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.resources.NotFound
       - name: deleted
         moves: weft.resources.VolumeSnapshot.delete
@@ -631,17 +673,18 @@ commands:
         error: weft.resources.StateConflict
 
   # Brief (Filesystem) and section 6 line 401 `filesystem`.
+  # weft@6798e7d:ess/3-resources/resources.yaml:634
   - name: weft.resources.CreateFilesystem
     naming:
       display: Create a filesystem
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
     outcomes:
       # hardening pass 1 D3: the filesystem is created only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.resources.NotFound
       - name: invalid-size
         when: size_bytes <= 0
@@ -649,24 +692,25 @@ commands:
       # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
       # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
       - name: quota-exceeded
-        external: the size would exceed the storage quota of the account or of an account above it
+        external: the size would exceed the storage quota of the scope
         error: weft.resources.QuotaExceeded
       - name: created
         creates: weft.resources.Filesystem
         instance: filesystem_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           size_bytes: input.size_bytes
           zone: input.zone
         emits: [weft.resources.FilesystemCreated]
         payload:
           weft.resources.FilesystemCreated:
             filesystem_id: {generated: true}
-            account_id: input.account_id
+            scope_id: input.scope_id
             size_bytes: input.size_bytes
             zone: input.zone
 
   # Brief (Filesystem). Reported by the provisioner, as for volumes.
+  # weft@6798e7d:ess/3-resources/resources.yaml:670
   - name: weft.resources.ReportFilesystemProvisioned
     naming:
       display: Report a filesystem provisioned
@@ -699,6 +743,7 @@ commands:
         error: weft.resources.StateConflict
 
   # Brief (Filesystem). A filesystem a claim still names is not deleted.
+  # weft@6798e7d:ess/3-resources/resources.yaml:702
   - name: weft.resources.DeleteFilesystem
     naming:
       display: Delete a filesystem
@@ -710,8 +755,8 @@ commands:
         error: weft.resources.NotFound
       # hardening pass 1 D3: another account's filesystem answers like a missing one, before its
       # use or state.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.resources.NotFound
       # Claims are weft.claims (layer 5), and no state of this unit records them (weft.claims moves
       # only Volume rows), so the check is an external refusal.
@@ -730,16 +775,17 @@ commands:
         error: weft.resources.StateConflict
 
   # Brief (Bucket) and section 6 line 401 `bucket`.
+  # weft@6798e7d:ess/3-resources/resources.yaml:733
   - name: weft.resources.CreateBucket
     naming:
       display: Create a bucket
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: String}
     outcomes:
       # hardening pass 1 D3: the bucket is created only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.resources.NotFound
       # OPEN (hardening pass 1, disclosure): bucket names are unique in the cluster (see Bucket),
       # so this refusal tells any caller that some account holds the name. Kept: an address must
@@ -756,22 +802,23 @@ commands:
       # Usage against the quota is weft.metering's check (layer 8, above this one; see the OPEN on
       # weft.accounts.Quota): weft.accounts stores limits only, so this stays an external refusal.
       - name: quota-exceeded
-        external: another bucket would exceed the storage quota of the account or of an account above it
+        external: another bucket would exceed the storage quota of the scope
         error: weft.resources.QuotaExceeded
       - name: created
         creates: weft.resources.Bucket
         instance: bucket_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           name: input.name
         emits: [weft.resources.BucketCreated]
         payload:
           weft.resources.BucketCreated:
             bucket_id: {generated: true}
-            account_id: input.account_id
+            scope_id: input.scope_id
             name: input.name
 
   # Brief (Bucket). Reported by the provisioner, as for volumes.
+  # weft@6798e7d:ess/3-resources/resources.yaml:775
   - name: weft.resources.ReportBucketProvisioned
     naming:
       display: Report a bucket provisioned
@@ -805,6 +852,7 @@ commands:
 
   # Brief (Bucket). A bucket a claim still names, or one that holds objects, is not deleted.
   # OPEN: should deleting a bucket remove its objects? Taken: no; a bucket with objects is refused.
+  # weft@6798e7d:ess/3-resources/resources.yaml:808
   - name: weft.resources.DeleteBucket
     naming:
       display: Delete a bucket
@@ -816,8 +864,8 @@ commands:
         error: weft.resources.NotFound
       # hardening pass 1 D3: another account's bucket answers like a missing one, before its use,
       # contents or state.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.resources.NotFound
       # Claims are weft.claims (layer 5), and no state of this unit records them (weft.claims moves
       # only Volume rows), so the check is an external refusal.
@@ -841,15 +889,16 @@ commands:
 
 views:
   # Brief (Volume): the volumes of an account.
+  # weft@6798e7d:ess/3-resources/resources.yaml:844
   - name: weft.resources.Volumes
     source: weft.resources.Volume
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: volume_id, type: weft.shared.VolumeId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: node_id, type: Optional<weft.shared.NodeId>}
@@ -857,43 +906,46 @@ views:
       - {name: state, type: weft.resources.Volume.State}
 
   # Brief (VolumeSnapshot): the volume snapshots of an account.
+  # weft@6798e7d:ess/3-resources/resources.yaml:860
   - name: weft.resources.VolumeSnapshots
     source: weft.resources.VolumeSnapshot
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: volume_snapshot_id, type: weft.shared.VolumeSnapshotId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: volume_id, type: weft.shared.VolumeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: state, type: weft.resources.VolumeSnapshot.State}
 
   # Brief (Filesystem): the filesystems of an account.
+  # weft@6798e7d:ess/3-resources/resources.yaml:875
   - name: weft.resources.Filesystems
     source: weft.resources.Filesystem
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: filesystem_id, type: weft.shared.FilesystemId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size_bytes, type: Integer}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: state, type: weft.resources.Filesystem.State}
 
   # Brief (Bucket): the buckets of an account.
+  # weft@6798e7d:ess/3-resources/resources.yaml:889
   - name: weft.resources.Buckets
     source: weft.resources.Bucket
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: bucket_id, type: weft.shared.BucketId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: String}
       - {name: state, type: weft.resources.Bucket.State}

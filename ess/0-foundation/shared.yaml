@@ -1,118 +1,14 @@
 domain: weft.shared
 
-summary: >-
-  Identifiers of every entity in weft and the value types more than one domain uses. A domain
-  refers to an entity of another domain through its identifier here, never by a relation.
-
-naming:
-  wire: weft
-  display: Shared
 
 types:
   - name: weft.shared.TenantId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.AccountId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.PrincipalId
     kind: newtype
     of: Uuid
   - name: weft.shared.ApiTokenId
     kind: newtype
     of: Uuid
 
-  - name: weft.shared.FormationId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.FormationRevisionId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.EnvironmentId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ReleaseId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ComponentName
-    kind: newtype
-    of: String
-
-  - name: weft.shared.ArtifactDigest
-    kind: newtype
-    of: String
-  - name: weft.shared.InstanceId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ProcessName
-    kind: newtype
-    of: String
-  - name: weft.shared.InvocationId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.SnapshotId
-    kind: newtype
-    of: Uuid
-
-  - name: weft.shared.ConfigId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.EndpointId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.BoxId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.JobId
-    kind: newtype
-    of: Uuid
-
-  - name: weft.shared.DeploymentSourceId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TranslatorId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TranslationId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.PlanId
-    kind: newtype
-    of: Uuid
-
-  - name: weft.shared.ResourceClassName
-    kind: newtype
-    of: String
-  - name: weft.shared.ClaimId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.BindingId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.DeviceId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.VolumeId
-    kind: newtype
-    of: Uuid
-
-  - name: weft.shared.SecretId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.SecretVersionId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.SecretGrantId
-    kind: newtype
-    of: Uuid
-
-  - name: weft.shared.WorkloadIdentity
-    kind: newtype
-    of: String
-
-  - name: weft.shared.CloudId
-    kind: newtype
-    of: Uuid
   # design:tenant-clusters step 2 (integrator, 2026-11-26): a tenant cluster of weft.cluster.
   - name: weft.shared.ClusterId
     kind: newtype
@@ -120,26 +16,6 @@ types:
   - name: weft.shared.ClusterNodePoolId
     kind: newtype
     of: Uuid
-  # design:tenant-clusters step 2b (2026-11-26): a cluster's node topology, weft.cluster.
-  - name: weft.shared.TopologyId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TopologyGroupId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TopologyLinkId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.NodeId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.NodePoolId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ZoneName
-    kind: newtype
-    of: String
-
   - name: weft.shared.PlacementDecisionId
     kind: newtype
     of: Uuid
@@ -147,19 +23,6 @@ types:
     kind: newtype
     of: Uuid
   - name: weft.shared.UsageRecordId
-    kind: newtype
-    of: Uuid
-
-  - name: weft.shared.OfferingId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.EngineId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ServiceInstanceId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ServiceBindingId
     kind: newtype
     of: Uuid
 
@@ -191,19 +54,7 @@ types:
   - name: weft.shared.RoleBindingId
     kind: newtype
     of: Uuid
-  - name: weft.shared.BackupId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.OfferingPlanId
-    kind: newtype
-    of: Uuid
   - name: weft.shared.PublisherId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.RestoreId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.CoverageEntryId
     kind: newtype
     of: Uuid
   - name: weft.shared.DriftId
@@ -212,43 +63,7 @@ types:
   - name: weft.shared.ReleaseStepId
     kind: newtype
     of: Uuid
-  - name: weft.shared.ComponentId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ConfigMountId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ConfigOverrideId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.LinkId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.RouteId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ScaleSettingId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ExchangePolicyId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.IdentityDocumentId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TokenExchangeId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TrustDomainId
-    kind: newtype
-    of: Uuid
   - name: weft.shared.BudgetId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ConcurrencyId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.DeadlineId
     kind: newtype
     of: Uuid
   - name: weft.shared.PriceId
@@ -258,9 +73,6 @@ types:
     kind: newtype
     of: Uuid
   - name: weft.shared.PricingAssignmentId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.RateId
     kind: newtype
     of: Uuid
   - name: weft.shared.StatementId
@@ -301,73 +113,10 @@ types:
   - name: weft.shared.HeldRequestId
     kind: newtype
     of: Uuid
-  - name: weft.shared.EdgeCertificateId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.BucketId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.FilesystemId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.VolumeSnapshotId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.GangId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.PriorityClassName
-    kind: newtype
-    of: String
-  - name: weft.shared.ScaleRequestId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.SchedulingRequestId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.SecretBackendId
-    kind: newtype
-    of: Uuid
   - name: weft.shared.SecretDeliveryId
     kind: newtype
     of: Uuid
-  - name: weft.shared.RuntimeId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ScheduleId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.ServiceId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.SessionId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TriggerId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.WakeId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.LogStreamId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TelemetrySinkId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.TelemetryPolicyId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.MetricSeriesId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.AlertRuleId
-    kind: newtype
-    of: Uuid
   - name: weft.shared.AlertId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.NotificationTargetId
     kind: newtype
     of: Uuid
   - name: weft.shared.TrustedIssuerId
@@ -397,31 +146,6 @@ types:
   - name: weft.shared.GateCheckId
     kind: newtype
     of: Uuid
-  - name: weft.shared.AttestationId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.WarmPoolId
-    kind: newtype
-    of: Uuid
-  - name: weft.shared.WorkloadId
-    kind: newtype
-    of: Uuid
-
-  # Hardening pass 5 (2026-11-26): an instant weft-control reads from its own clock (a receipt,
-  # a decision, its clock plus a length) and passes as a command input, because ESS 0.99.2
-  # refuses `now` as a value. A caller outside weft-control could name its own time and postpone
-  # a loss or a lease end, so tools/check-stamped-time.sh fails when a command with an input of
-  # this type is granted to an actor outside the set in tools/stamped-time-actors. An instant a
-  # user chooses (an expiry, a deadline, a window) stays Timestamp.
-  - name: weft.shared.StampedAt
-    kind: newtype
-    of: Timestamp
-
-  - name: weft.shared.IsolationLevel
-    kind: enum
-    ordered: true
-    variants: [ProcessSandbox, Container, UserKernel, MicroVm]
-
   - name: weft.shared.AccessMode
     kind: enum
     variants: [SingleUser, Federated]
@@ -429,43 +153,3 @@ types:
   - name: weft.shared.Role
     kind: enum
     variants: [viewer, deployer, admin, billing, owner]
-
-  - name: weft.shared.Sharing
-    kind: enum
-    variants: [Exclusive, SharedReadOnly, SharedReadWrite]
-
-  - name: weft.shared.SleepKind
-    kind: enum
-    variants: [Stop, Suspend]
-
-  - name: weft.shared.SleepPolicy
-    kind: struct
-    fields:
-      - name: idle_after
-        type: Duration
-      - name: kind
-        type: weft.shared.SleepKind
-
-  - name: weft.shared.ResourceAmount
-    kind: struct
-    fields:
-      - name: resource_class
-        type: weft.shared.ResourceClassName
-      - name: amount
-        type: Integer
-    invariants:
-      - amount >= 0
-
-  - name: weft.shared.IsolationFacts
-    kind: struct
-    fields:
-      - name: kvm_present
-        type: Boolean
-      - name: cgroups_delegated
-        type: Boolean
-      - name: egress_denied
-        type: Boolean
-      - name: gpu_passthrough
-        type: Boolean
-      - name: levels
-        type: List<weft.shared.IsolationLevel>

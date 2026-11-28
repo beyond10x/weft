@@ -1,0 +1,5 @@
+version: '3'
+
+vars:
+  CLOUDSPEC_REV: 1111111111111111111111111111111111111111
+  CLOUDSPEC_SIM: target/cloudspec-sim/bin/cloudspec-sim

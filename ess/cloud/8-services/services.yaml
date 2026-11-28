@@ -1,0 +1,1383 @@
+# Moved from weft@6798e7d: ess/7-services/catalog.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
+domain: weft.services
+
+summary: >-
+  Managed services by name: offerings, the service instances provisioned from them, the bindings
+  that give a workload access, and backups and restores. Engines and offering plans are weft's
+  run-time catalog, held here by value (D7 A).
+
+naming:
+  wire: weft
+  display: Services
+
+types:
+
+  # § 13 lines 514-526: the kinds of managed service.
+  # weft@6798e7d:ess/7-services/catalog.yaml:50
+  - name: weft.services.OfferingKind
+    kind: enum
+    variants:
+      - queue
+      - stream
+      - cache
+      - kv
+      - sql
+      # Buckets stay in `weft.resources` (integration decision 2026-11-26); where the object-store
+      # offering needs one, it names it by `weft.shared.BucketId`. No field here does yet.
+      - object-store
+      - search
+      - vector
+      - scheduler
+      - model-endpoint
+      # Single sign-on a customer configures for its own users (identity provider connections,
+      # applications, user directory). Those are operations of the sso offering's own ESS system,
+      # not of this domain.
+      - sso
+
+  # § 4 "Sleep and wake" (lines 274-301): a service instance or an installation may sleep when
+  # idle. Only the policy is recorded here, as `weft.shared.SleepPolicy` (`idle_after`, `kind`:
+  # `Stop` or `Suspend`); the sleep state machine (ServiceState asleep, waking, awake,
+  # draining-to-sleep) and every wake are `weft.workloads`'. Absent: it never sleeps.
+
+  # § 13 lines 527-528 "durability": cache promises none (line 518).
+  # OPEN: whether durability has more levels than these two (replicated, off-site); the smallest
+  # answer is a yes/no promise.
+  # weft@6798e7d:ess/7-services/catalog.yaml:78
+  - name: weft.services.Durability
+    kind: enum
+    variants: [Ephemeral, Durable]
+
+  # § 13 lines 536-537: what a binding lets a component do with a service instance.
+  # weft@6798e7d:ess/7-services/catalog.yaml:83
+  - name: weft.services.BindingMode
+    kind: enum
+    variants: [publish, consume, read, write, admin]
+
+entities:
+
+  # § 13 lines 514-526 Offering: a kind of managed service with a simplified API of its own. A
+  # ClusterOperator publishes and retires it (brief; the sketch names no actor for it).
+  # weft@6798e7d:ess/7-services/catalog.yaml:122
+  - name: weft.services.Offering
+    naming:
+      summary: A kind of managed service the cloud provides by name, with an API of its own.
+    identity:
+      name: offering_id
+      type: weft.shared.OfferingId
+    fields:
+      - name: name
+        type: String
+      - name: kind
+        type: weft.services.OfferingKind
+      - name: summary
+        type: String
+      # § 13 lines 531-532: the engine new service instances of this offering run on. Swapping
+      # it keeps the offering's API.
+      - name: engine_id
+        type: weft.shared.EngineId
+    relations:
+    # OPEN: what happens to live service instances when their offering is retired. Smallest
+    # answer: they keep running; only new provisioning is refused.
+    lifecycle:
+      initial: Published
+      states: [Published, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Published]
+          to: Retired
+
+  # § 13 lines 533-535 ServiceInstance: one provisioned offering in an account or a formation.
+  # § 13 lines 541-543: it runs as components of a formation the system owns, on the same nodes,
+  # with the same isolation and metering; that formation is named by `system_formation_id`.
+  # weft@6798e7d:ess/7-services/catalog.yaml:198
+  - name: weft.services.ServiceInstance
+    naming:
+      summary: One provisioned offering in a scope or a formation, run as a system-owned formation.
+    identity:
+      name: service_instance_id
+      type: weft.shared.ServiceInstanceId
+    fields:
+      - name: scope_id
+        type: weft.shared.ScopeId
+      # Present when the instance belongs to one formation of the account (lines 533-534 "or a
+      # formation"); absent when it belongs to the account as a whole.
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: name
+        type: String
+      - name: offering_id
+        type: weft.shared.OfferingId
+      # The offering's kind, copied at provisioning; users see the offering's API by kind.
+      - name: kind
+        type: weft.services.OfferingKind
+      - name: plan_id
+        type: weft.shared.OfferingPlanId
+      # The plan's durability, copied when the plan is set; decides backup and restore.
+      - name: durability
+        type: weft.services.Durability
+      # Internal (lines 530-531): the engine this instance runs on. No tenant view shows it.
+      - name: engine_id
+        type: weft.shared.EngineId
+      # Lines 541-543: the system-owned formation this instance runs as. Minted at provisioning.
+      # OPEN: how that formation is created in `formations` (a translator of `deployments`, or a
+      # catalog command of its own); decided in the integration pass.
+      - name: system_formation_id
+        type: weft.shared.FormationId
+      - name: degraded_reason
+        type: Optional<String>
+      # § 4 "Sleep and wake" (lines 274-301): applied to the components of the system formation.
+      # OPEN: whether a plan may forbid sleep (a durable sql that must stay warm) or bound the
+      # idle time; the smallest answer lets the instance's owner set it on any plan.
+      - name: sleep_policy
+        type: Optional<weft.shared.SleepPolicy>
+    relations:
+      - name: offering
+        kind: references
+        target: weft.services.Offering
+        cardinality: one
+        via: offering_id
+      - name: scope
+        kind: references
+        target: weft.scope.Scope
+        cardinality: one
+        via: scope_id
+      - name: formation
+        kind: references
+        target: weft.architecture.Formation
+        cardinality: one
+        via: formation_id
+      # Lines 541-543: the instance runs as this system-owned formation, which lives and goes with
+      # the instance. ESS writes `owns` on the owner with `via` on the child, so the instance can
+      # own it only if Formation carried a service instance id; it does not, so `references`.
+      - name: system_formation
+        kind: references
+        target: weft.architecture.Formation
+        cardinality: one
+        via: system_formation_id
+    # Lines 534-535: provisioning, ready, degraded, updating, deprovisioning, gone.
+    lifecycle:
+      initial: Provisioning
+      states: [Provisioning, Ready, Degraded, Updating, Deprovisioning, Gone]
+      terminal: [Gone]
+      transitions:
+        - name: become_ready
+          from: [Provisioning, Degraded, Updating]
+          to: Ready
+        - name: degrade
+          from: [Provisioning, Ready, Updating]
+          to: Degraded
+        - name: update
+          from: [Ready, Degraded]
+          to: Updating
+        - name: deprovision
+          from: [Provisioning, Ready, Degraded, Updating]
+          to: Deprovisioning
+        - name: remove
+          from: [Deprovisioning]
+          to: Gone
+
+  # § 13 lines 536-539 ServiceBinding: a component's access to a service instance with a mode.
+  # Authenticated by the component's workload identity (§ 8 lines 422-437); it carries no static
+  # credential, and no field here holds one. Default deny: a component without an active binding
+  # of a mode has no access of that mode (CheckServiceAccess).
+  # OPEN: whether a binding is per environment of the component's formation (§ 3 line 176) or
+  # for all its environments; the smallest answer binds the component in every environment.
+  # weft@6798e7d:ess/7-services/catalog.yaml:300
+  - name: weft.services.ServiceBinding
+    naming:
+      summary: One component's access to a service instance, in one mode, by workload identity.
+    identity:
+      name: binding_id
+      type: weft.shared.ServiceBindingId
+    fields:
+      - name: service_instance_id
+        type: weft.shared.ServiceInstanceId
+      # The component is named by its formation and its name in it (§ 3), the parts of its
+      # workload identity (§ 8 line 425) that a binding names.
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: component
+        type: weft.shared.ComponentName
+      - name: mode
+        type: weft.services.BindingMode
+    relations:
+      - name: service_instance
+        kind: references
+        target: weft.services.ServiceInstance
+        cardinality: one
+        via: service_instance_id
+      - name: formation
+        kind: references
+        target: weft.architecture.Formation
+        cardinality: one
+        via: formation_id
+    lifecycle:
+      initial: Active
+      states: [Active, Revoked]
+      terminal: [Revoked]
+      transitions:
+        - name: revoke
+          from: [Active]
+          to: Revoked
+
+  # § 13 line 540 Backup: a copy of a durable service instance's data. Non-durable offerings
+  # (cache, and any instance on an ephemeral plan) have none: refused by name.
+  # OPEN: retention and deletion of backups; the sketch gives none. The smallest answer keeps
+  # every completed backup and declares no delete.
+  # weft@6798e7d:ess/7-services/catalog.yaml:341
+  - name: weft.services.Backup
+    naming:
+      summary: A copy of a durable service instance's data, taken on request.
+    identity:
+      name: backup_id
+      type: weft.shared.BackupId
+    fields:
+      - name: service_instance_id
+        type: weft.shared.ServiceInstanceId
+      # The instance's account, copied when the backup is taken, so an account's backups are
+      # listed without reading the instance.
+      - name: scope_id
+        type: weft.shared.ScopeId
+      - name: failure_reason
+        type: Optional<String>
+    relations:
+      - name: service_instance
+        kind: references
+        target: weft.services.ServiceInstance
+        cardinality: one
+        via: service_instance_id
+      - name: scope
+        kind: references
+        target: weft.scope.Scope
+        cardinality: one
+        via: scope_id
+    lifecycle:
+      initial: Taking
+      states: [Taking, Completed, Failed]
+      terminal: [Completed, Failed]
+      transitions:
+        - name: complete
+          from: [Taking]
+          to: Completed
+        - name: fail
+          from: [Taking]
+          to: Failed
+
+  # § 13 line 540 Restore: a completed backup written back into its service instance.
+  # weft@6798e7d:ess/7-services/catalog.yaml:380
+  - name: weft.services.Restore
+    naming:
+      summary: A completed backup written back into the service instance it was taken from.
+    identity:
+      name: restore_id
+      type: weft.shared.RestoreId
+    fields:
+      - name: service_instance_id
+        type: weft.shared.ServiceInstanceId
+      - name: backup_id
+        type: weft.shared.BackupId
+      - name: failure_reason
+        type: Optional<String>
+    relations:
+      - name: service_instance
+        kind: references
+        target: weft.services.ServiceInstance
+        cardinality: one
+        via: service_instance_id
+      - name: backup
+        kind: references
+        target: weft.services.Backup
+        cardinality: one
+        via: backup_id
+    lifecycle:
+      initial: Restoring
+      states: [Restoring, Completed, Failed]
+      terminal: [Completed, Failed]
+      transitions:
+        - name: complete
+          from: [Restoring]
+          to: Completed
+        - name: fail
+          from: [Restoring]
+          to: Failed
+
+errors:
+  # weft@6798e7d:ess/7-services/catalog.yaml:609
+  - name: weft.services.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  # weft@6798e7d:ess/7-services/catalog.yaml:611
+  - name: weft.services.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/7-services/catalog.yaml:621
+  - name: weft.services.KindMismatch
+    summary: The stated kind is not the offering's kind.
+  # weft@6798e7d:ess/7-services/catalog.yaml:623
+  - name: weft.services.OfferingNameTaken
+    summary: An offering with this name already exists.
+  # weft@6798e7d:ess/7-services/catalog.yaml:625
+  - name: weft.services.OfferingNotFound
+    summary: The named offering does not exist.
+  # weft@6798e7d:ess/7-services/catalog.yaml:627
+  - name: weft.services.OfferingUnavailable
+    summary: The named offering is retired and takes nothing new.
+  # weft@6798e7d:ess/7-services/catalog.yaml:639
+  - name: weft.services.OfferingMismatch
+    summary: The stated offering is not the service instance's offering.
+  # weft@6798e7d:ess/7-services/catalog.yaml:641
+  - name: weft.services.ServiceNameTaken
+    summary: A live service instance with this name already exists in the scope.
+  # weft@6798e7d:ess/7-services/catalog.yaml:643
+  - name: weft.services.FormationNotFound
+    summary: The named formation does not exist.
+  # weft@6798e7d:ess/7-services/catalog.yaml:645
+  - name: weft.services.QuotaExceeded
+    summary: The plan's limits do not fit the remaining quota of the scope or one of its parents.
+  # weft@6798e7d:ess/7-services/catalog.yaml:647
+  - name: weft.services.StillBound
+    summary: An active binding still gives a component access to this service instance.
+  # weft@6798e7d:ess/7-services/catalog.yaml:649
+  - name: weft.services.ServiceInstanceNotFound
+    summary: The named service instance does not exist.
+  # weft@6798e7d:ess/7-services/catalog.yaml:651
+  - name: weft.services.ServiceInstanceUnavailable
+    summary: The named service instance is not serving (provisioning, deprovisioning or gone).
+  # weft@6798e7d:ess/7-services/catalog.yaml:653
+  - name: weft.services.OutsideServiceScope
+    summary: The service instance belongs to another formation than the component's.
+  # weft@6798e7d:ess/7-services/catalog.yaml:655
+  - name: weft.services.ModeNotOffered
+    summary: The offering's API has no operation of this binding mode.
+  # weft@6798e7d:ess/7-services/catalog.yaml:657
+  - name: weft.services.AlreadyBound
+    summary: The component already holds an active binding of this mode to this service instance.
+  # weft@6798e7d:ess/7-services/catalog.yaml:659
+  - name: weft.services.NotBound
+    summary: The component holds no active binding of this mode to this service instance, so it has no access.
+  # weft@6798e7d:ess/7-services/catalog.yaml:661
+  - name: weft.services.NotDurable
+    summary: The service instance makes no durability promise (a cache, or an ephemeral plan), so it has no backup or restore.
+  # weft@6798e7d:ess/7-services/catalog.yaml:663
+  - name: weft.services.BackupNotFound
+    summary: The named backup does not exist.
+  # weft@6798e7d:ess/7-services/catalog.yaml:665
+  - name: weft.services.BackupNotCompleted
+    summary: The named backup is still being taken or failed, so it cannot be restored.
+  # weft@6798e7d:ess/7-services/catalog.yaml:667
+  - name: weft.services.RestoreInProgress
+    summary: A restore into this service instance is still running.
+
+events:
+  # weft@6798e7d:ess/7-services/catalog.yaml:709
+  - name: weft.services.OfferingPublished
+    fields:
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: name, type: String}
+      - {name: kind, type: weft.services.OfferingKind}
+  # weft@6798e7d:ess/7-services/catalog.yaml:714
+  - name: weft.services.OfferingEngineSwapped
+    fields:
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: engine_id, type: weft.shared.EngineId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:718
+  - name: weft.services.OfferingRetired
+    fields:
+      - {name: offering_id, type: weft.shared.OfferingId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:730
+  - name: weft.services.ServiceInstanceProvisioning
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: plan_id, type: weft.shared.OfferingPlanId}
+      - {name: system_formation_id, type: weft.shared.FormationId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:737
+  - name: weft.services.ServiceInstanceUpdating
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: plan_id, type: weft.shared.OfferingPlanId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:741
+  - name: weft.services.ServiceSleepPolicySet
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: sleep_policy, type: Optional<weft.shared.SleepPolicy>}
+  # weft@6798e7d:ess/7-services/catalog.yaml:745
+  - name: weft.services.ServiceInstanceEngineMoved
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: engine_id, type: weft.shared.EngineId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:749
+  - name: weft.services.ServiceInstanceReady
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:752
+  - name: weft.services.ServiceInstanceDegraded
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: reason, type: String}
+  # weft@6798e7d:ess/7-services/catalog.yaml:756
+  - name: weft.services.ServiceInstanceDeprovisioning
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:759
+  - name: weft.services.ServiceInstanceGone
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:762
+  - name: weft.services.ServiceBound
+    fields:
+      - {name: binding_id, type: weft.shared.ServiceBindingId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: mode, type: weft.services.BindingMode}
+  # weft@6798e7d:ess/7-services/catalog.yaml:769
+  - name: weft.services.ServiceUnbound
+    fields:
+      - {name: binding_id, type: weft.shared.ServiceBindingId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:772
+  - name: weft.services.BackupStarted
+    fields:
+      - {name: backup_id, type: weft.shared.BackupId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:776
+  - name: weft.services.BackupCompleted
+    fields:
+      - {name: backup_id, type: weft.shared.BackupId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:779
+  - name: weft.services.BackupFailed
+    fields:
+      - {name: backup_id, type: weft.shared.BackupId}
+      - {name: reason, type: String}
+  # weft@6798e7d:ess/7-services/catalog.yaml:783
+  - name: weft.services.RestoreStarted
+    fields:
+      - {name: restore_id, type: weft.shared.RestoreId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: backup_id, type: weft.shared.BackupId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:788
+  - name: weft.services.RestoreCompleted
+    fields:
+      - {name: restore_id, type: weft.shared.RestoreId}
+  # weft@6798e7d:ess/7-services/catalog.yaml:791
+  - name: weft.services.RestoreFailed
+    fields:
+      - {name: restore_id, type: weft.shared.RestoreId}
+      - {name: reason, type: String}
+
+commands:
+
+  # § 13 lines 514-526: a ClusterOperator publishes an offering of one kind, run by one engine.
+  # weft@6798e7d:ess/7-services/catalog.yaml:907
+  - name: weft.services.PublishOffering
+    naming:
+      display: Publish an offering
+    input:
+      - {name: name, type: String}
+      - {name: kind, type: weft.services.OfferingKind}
+      - {name: summary, type: String}
+      - {name: engine_id, type: weft.shared.EngineId}
+    outcomes:
+      - name: name-taken
+        when_related:
+          entity: weft.services.Offering
+          where: name == input.name
+          exists: true
+        error: weft.services.OfferingNameTaken
+      - name: published
+        creates: weft.services.Offering
+        instance: offering_id
+        sets:
+          name: input.name
+          kind: input.kind
+          summary: input.summary
+          engine_id: input.engine_id
+        emits: [weft.services.OfferingPublished]
+        payload:
+          weft.services.OfferingPublished:
+            offering_id: {generated: true}
+            name: input.name
+            kind: input.kind
+
+  # § 13 lines 531-532: "An engine can be swapped without a change of the offering's API." New
+  # service instances run on the new engine; live ones move through UpgradeServiceInstanceEngine.
+  # weft@6798e7d:ess/7-services/catalog.yaml:966
+  - name: weft.services.SwapOfferingEngine
+    naming:
+      display: Swap the engine behind an offering
+    input:
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: engine_id, type: weft.shared.EngineId}
+      # The offering's kind, stated by the caller so both rows can be checked against it: the
+      # offering's stored kind (kind-mismatch) and the engine's kinds (engine-wrong-kind). A guard
+      # here reads one row at a time.
+      - {name: kind, type: weft.services.OfferingKind}
+    outcomes:
+      - name: no-such-offering
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: offering-retired
+        when_subject: {predicate: state == Retired}
+        error: weft.services.StateConflict
+      - name: kind-mismatch
+        when_subject: {predicate: kind != input.kind}
+        error: weft.services.KindMismatch
+      - name: swapped
+        updates: weft.services.Offering
+        instance: offering_id
+        sets:
+          engine_id: input.engine_id
+        emits: [weft.services.OfferingEngineSwapped]
+        payload:
+          weft.services.OfferingEngineSwapped:
+            offering_id: input.offering_id
+            engine_id: input.engine_id
+
+  # § 13 lines 514-515 (brief: a ClusterOperator retires offerings; the sketch names no actor).
+  # weft@6798e7d:ess/7-services/catalog.yaml:1009
+  - name: weft.services.RetireOffering
+    naming:
+      display: Retire an offering
+    input:
+      - {name: offering_id, type: weft.shared.OfferingId}
+    outcomes:
+      - name: no-such-offering
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: retired
+        moves: weft.services.Offering.retire
+        instance: offering_id
+        emits: [weft.services.OfferingRetired]
+        payload:
+          weft.services.OfferingRetired:
+            offering_id: input.offering_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 510-512 and 533-535: take a ready service from weft by name, in an account or one
+  # of its formations. Lines 541-543: it runs as a system-owned formation, whose id is minted here.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1095
+  - name: weft.services.ProvisionServiceInstance
+    naming:
+      display: Provision a service instance
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: name, type: String}
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: plan_id, type: weft.shared.OfferingPlanId}
+      # cloudspec (D7 A): the plan is held by value (OfferingPlan is weft's run-time catalog); the
+      # request states the durability weft read from the plan.
+      - {name: durability, type: weft.services.Durability}
+      - {name: sleep_policy, type: Optional<weft.shared.SleepPolicy>}
+    outcomes:
+      # hardening pass 1 D3: the instance is provisioned only in the account the caller acts in;
+      # another account answers as a missing record.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.services.NotFound
+      - name: no-such-offering
+        when_related: {via: input.offering_id, exists: false}
+        error: weft.services.OfferingNotFound
+      # Nothing crosses accounts (§ 1 lines 139-140): a formation of another account is refused.
+      # The formation's account is `weft.architecture.Formation.scope_id`; both formation guards
+      # read the formation only when one is named.
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.services.FormationNotFound
+      # hardening pass 1 disclosure (catalog.yaml:1135): a formation of another account answers
+      # as a missing one, right after the existence check, so its existence is not told.
+      - name: formation-outside-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.services.FormationNotFound
+      - name: offering-retired
+        when_related: {via: input.offering_id, predicate: state == Retired}
+        error: weft.services.OfferingUnavailable
+      - name: name-taken
+        when_related:
+          entity: weft.services.ServiceInstance
+          where: {all: ["scope_id == input.scope_id", "name == input.name", "state != Gone"]}
+          exists: true
+        error: weft.services.ServiceNameTaken
+      # § 1 lines 137-138 and § 12 line 477: quotas are checked at every level of the tree.
+      # Kept external: the facts are weft's (`weft.accounts.Quota` per account and class, usage in
+      # `metering`), but the check sums each limit against the quota of the account and of every
+      # account above it, a walk up the parent chain no guard form reads. Same as
+      # `weft.claims.DeclareClaim` and `weft.resources`.
+      - name: quota-exceeded
+        external: the plan's limits do not fit the remaining quota of the scope or a parent
+        error: weft.services.QuotaExceeded
+      - name: provisioning
+        creates: weft.services.ServiceInstance
+        instance: service_instance_id
+        sets:
+          scope_id: input.scope_id
+          formation_id: input.formation_id
+          name: input.name
+          offering_id: input.offering_id
+          kind: {related: {via: input.offering_id, field: kind}}
+          plan_id: input.plan_id
+          durability: input.durability
+          engine_id: {related: {via: input.offering_id, field: engine_id}}
+          system_formation_id: {generated: true}
+          sleep_policy: input.sleep_policy
+        emits: [weft.services.ServiceInstanceProvisioning]
+        payload:
+          weft.services.ServiceInstanceProvisioning:
+            service_instance_id: {generated: true}
+            scope_id: input.scope_id
+            offering_id: input.offering_id
+            plan_id: input.plan_id
+            system_formation_id: {generated: true}
+
+  # § 13 lines 527-528 and 534-535 "updating": move a live instance to another plan of its own
+  # offering.
+  # UNMAPPED: a durable instance moved to an ephemeral plan loses its durability promise and its
+  # data's backups stop. Refusing it needs the stored `durability` and the new plan's
+  # `durability` in one guard; a guard here reads one row at a time. Not declared. Open question
+  # for the owner (refuse it, or allow it with a confirmation) and for ESS.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1180
+  - name: weft.services.ChangeServicePlan
+    naming:
+      display: Change a service instance's plan
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      # The instance's offering, stated by the caller so the instance (offering-mismatch) and the
+      # plan (plan-of-other-offering) are each checked against it.
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: plan_id, type: weft.shared.OfferingPlanId}
+      # cloudspec (D7 A): the plan is held by value (OfferingPlan is weft's run-time catalog); the
+      # request states the durability weft read from the plan.
+      - {name: durability, type: weft.services.Durability}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      # hardening pass 1 D3: only an instance of the account the caller acts in changes plan;
+      # another account's instance answers as a missing one, before its offering is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.services.NotFound
+      - name: offering-mismatch
+        when_subject: {predicate: offering_id != input.offering_id}
+        error: weft.services.OfferingMismatch
+      # Kept external: a walk up the account tree, as at ProvisionServiceInstance.
+      - name: quota-exceeded
+        external: the new plan's limits do not fit the remaining quota of the scope or a parent
+        error: weft.services.QuotaExceeded
+      - name: updating
+        moves: weft.services.ServiceInstance.update
+        instance: service_instance_id
+        sets:
+          plan_id: input.plan_id
+          durability: input.durability
+        emits: [weft.services.ServiceInstanceUpdating]
+        payload:
+          weft.services.ServiceInstanceUpdating:
+            service_instance_id: input.service_instance_id
+            plan_id: input.plan_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 4 "Sleep and wake" (lines 274-301): set or clear when a service instance sleeps. Absent: it
+  # never sleeps.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1231
+  - name: weft.services.SetServiceSleepPolicy
+    naming:
+      display: Set a service instance's sleep policy
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: sleep_policy, type: Optional<weft.shared.SleepPolicy>}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      # hardening pass 1 D3: only an instance of the account the caller acts in; another
+      # account's instance answers as a missing one, before its state is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.services.NotFound
+      - name: gone
+        when_subject: {predicate: {state: [Deprovisioning, Gone]}}
+        error: weft.services.StateConflict
+      - name: set
+        updates: weft.services.ServiceInstance
+        instance: service_instance_id
+        sets:
+          sleep_policy: input.sleep_policy
+        emits: [weft.services.ServiceSleepPolicySet]
+        payload:
+          weft.services.ServiceSleepPolicySet:
+            service_instance_id: input.service_instance_id
+            sleep_policy: input.sleep_policy
+
+  # § 13 lines 529-532: a live instance moved to another engine of its kind, after the offering's
+  # engine was swapped. The offering's API does not change, so no binding changes.
+  # OPEN: whether live instances move to a swapped engine on their own (a rollout the control
+  # plane runs) or only when a ClusterOperator moves each; the smallest answer is this command.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1264
+  - name: weft.services.MoveServiceInstanceEngine
+    naming:
+      display: Move a service instance to another engine
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: engine_id, type: weft.shared.EngineId}
+      # Stated by the caller so the instance (kind-mismatch) and the engine (engine-wrong-kind)
+      # are each checked against it.
+      - {name: kind, type: weft.services.OfferingKind}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: kind-mismatch
+        when_subject: {predicate: kind != input.kind}
+        error: weft.services.KindMismatch
+      - name: updating
+        moves: weft.services.ServiceInstance.update
+        instance: service_instance_id
+        sets:
+          engine_id: input.engine_id
+        emits: [weft.services.ServiceInstanceEngineMoved]
+        payload:
+          weft.services.ServiceInstanceEngineMoved:
+            service_instance_id: input.service_instance_id
+            engine_id: input.engine_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 534-535 "ready": the control plane reports the instance's system formation
+  # running and serving, after provisioning, an update or a recovery.
+  # OPEN: which system actor reports a service instance's health; the sketch names none for the
+  # catalog (Translator writes the formation, NodeAgent observes its instances).
+  # weft@6798e7d:ess/7-services/catalog.yaml:1309
+  - name: weft.services.ReportServiceInstanceReady
+    naming:
+      display: Report a service instance ready
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: ready
+        moves: weft.services.ServiceInstance.become_ready
+        instance: service_instance_id
+        sets:
+          degraded_reason: {cleared: true}
+        emits: [weft.services.ServiceInstanceReady]
+        payload:
+          weft.services.ServiceInstanceReady:
+            service_instance_id: input.service_instance_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 534-535 "degraded". A failed provisioning is reported here too.
+  # OPEN: whether a provisioning that fails ends the instance (Gone) or leaves it Degraded for
+  # the user to deprovision; the smallest answer keeps it, Degraded, with the reason.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1334
+  - name: weft.services.ReportServiceInstanceDegraded
+    naming:
+      display: Report a service instance degraded
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: degraded
+        moves: weft.services.ServiceInstance.degrade
+        instance: service_instance_id
+        sets:
+          degraded_reason: input.reason
+        emits: [weft.services.ServiceInstanceDegraded]
+        payload:
+          weft.services.ServiceInstanceDegraded:
+            service_instance_id: input.service_instance_id
+            reason: input.reason
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 534-535 "deprovisioning". Refused while a binding still gives a component access:
+  # unbind first, so no component loses a service it is bound to without a record of it.
+  # OPEN: what happens to an instance's backups when it is deprovisioned; the smallest answer
+  # keeps them (no command here deletes a backup).
+  # weft@6798e7d:ess/7-services/catalog.yaml:1362
+  - name: weft.services.DeprovisionServiceInstance
+    naming:
+      display: Deprovision a service instance
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      # UNMAPPED (hardening pass 1 D3): the caller tie `when_subject: {predicate: scope_id !=
+      # caller.scope_id}` is refused beside the `still-bound` row set (ess 0.99.2,
+      # ESS-COMMAND-009: one kind of related row per command), and a caller value is compared only
+      # in `when:` or `when_subject:`. Not declared; the account check stays weft-api's. Open
+      # question for ESS.
+      - name: still-bound
+        when_related:
+          entity: weft.services.ServiceBinding
+          where: {all: ["service_instance_id == input.service_instance_id", "state == Active"]}
+          exists: true
+        error: weft.services.StillBound
+      - name: deprovisioning
+        moves: weft.services.ServiceInstance.deprovision
+        instance: service_instance_id
+        emits: [weft.services.ServiceInstanceDeprovisioning]
+        payload:
+          weft.services.ServiceInstanceDeprovisioning:
+            service_instance_id: input.service_instance_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 534-535 "gone": the system formation is removed and its data erased.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1394
+  - name: weft.services.ReportServiceInstanceGone
+    naming:
+      display: Report a service instance gone
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    outcomes:
+      - name: no-such-instance
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: gone
+        moves: weft.services.ServiceInstance.remove
+        instance: service_instance_id
+        emits: [weft.services.ServiceInstanceGone]
+        payload:
+          weft.services.ServiceInstanceGone:
+            service_instance_id: input.service_instance_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 536-539: give one component access to a service instance in one mode. Links to
+  # service instances follow the same default deny as links between components (§ 3 lines
+  # 165-166): this binding is the only thing that opens one.
+  # OPEN: whether `admin` needs a higher role than the other modes; the access domain authorizes
+  # every management call by role (§ 2 line 154), and the sketch does not set one for it.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1419
+  - name: weft.services.BindService
+    naming:
+      display: Bind a component to a service instance
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      # The service instance's account, stated by the caller so the instance (account-mismatch)
+      # and the component's formation (cross-account) are each checked against it: a guard reads
+      # one row at a time.
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: mode, type: weft.services.BindingMode}
+    outcomes:
+      # hardening pass 1 D3: the stated account is the account the caller acts in; with
+      # account-mismatch and cross-account below, the instance and the formation are both of it.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.services.NotFound
+      - name: no-such-instance
+        when_related: {via: input.service_instance_id, exists: false}
+        error: weft.services.ServiceInstanceNotFound
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.services.FormationNotFound
+      # hardening pass 1 disclosure (catalog.yaml:1424): an instance of another account answers
+      # as a missing one, ahead of every state check (was AccountMismatch). ESS answers every
+      # existence check before any predicate, so it cannot sit directly after no-such-instance.
+      - name: scope-mismatch
+        when_related: {via: input.service_instance_id, predicate: scope_id != input.scope_id}
+        error: weft.services.ServiceInstanceNotFound
+      # § 1 lines 139-140: nothing crosses accounts unless an Export names it. An Export names an
+      # endpoint (`weft.formations.Export.endpoint_id`), never a service instance, so a component
+      # of another account is always refused. With account-mismatch above, the stated account is
+      # the instance's.
+      # hardening pass 1 disclosure (catalog.yaml:1431): a formation of another account answers as
+      # a missing one, right after the existence check (was CrossAccount).
+      - name: cross-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.services.FormationNotFound
+      - name: instance-unavailable
+        when_related:
+          via: input.service_instance_id
+          predicate: {state: [Deprovisioning, Gone]}
+        error: weft.services.ServiceInstanceUnavailable
+      - name: outside-scope
+        when_related:
+          via: input.service_instance_id
+          predicate: {all: ["defined(formation_id)", "formation_id != input.formation_id"]}
+        error: weft.services.OutsideServiceScope
+      - name: already-bound
+        when_related:
+          entity: weft.services.ServiceBinding
+          where:
+            all:
+              - "service_instance_id == input.service_instance_id"
+              - "formation_id == input.formation_id"
+              - "component == input.component"
+              - "mode == input.mode"
+              - "state == Active"
+          exists: true
+        error: weft.services.AlreadyBound
+      # Each offering's API is its own ESS system (lines 544-545); that system says which modes it
+      # has (a sql database has no publish, a queue no read). Kept external: that system is outside
+      # weft's specification, and no field here records an offering's modes.
+      - name: mode-not-offered
+        external: the offering's API has no operation of this mode
+        error: weft.services.ModeNotOffered
+      - name: bound
+        creates: weft.services.ServiceBinding
+        instance: binding_id
+        sets:
+          service_instance_id: input.service_instance_id
+          formation_id: input.formation_id
+          component: input.component
+          mode: input.mode
+        emits: [weft.services.ServiceBound]
+        payload:
+          weft.services.ServiceBound:
+            binding_id: {generated: true}
+            service_instance_id: input.service_instance_id
+            formation_id: input.formation_id
+            component: input.component
+            mode: input.mode
+
+  # § 13 lines 536-539: end a component's access.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1504
+  - name: weft.services.UnbindService
+    naming:
+      display: Unbind a component from a service instance
+    input:
+      - {name: binding_id, type: weft.shared.ServiceBindingId}
+      # hardening pass 1 D3: the account the binding's service instance belongs to, stated by the
+      # caller so it is checked against the caller (not-callers-account) and against the instance
+      # (instance-of-other-account): a binding row carries no account of its own.
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      # hardening pass 1 D3: only a binding in the account the caller acts in is revoked; another
+      # account's answers as a missing one.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.services.NotFound
+      - name: no-such-binding
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: instance-of-other-scope
+        when_related:
+          entity: weft.services.ServiceInstance
+          where: {all: ["service_instance_id == subject.service_instance_id", "scope_id != input.scope_id"]}
+          exists: true
+        error: weft.services.NotFound
+      - name: revoked
+        moves: weft.services.ServiceBinding.revoke
+        instance: binding_id
+        emits: [weft.services.ServiceUnbound]
+        payload:
+          weft.services.ServiceUnbound:
+            binding_id: input.binding_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 lines 536-539: "no binding, no access". The data plane asks before it lets a caller's
+  # workload identity use a service instance; the answer is no unless an active binding of the
+  # mode names the caller's component.
+  # OPEN: how the caller's workload identity (§ 8 line 425) is resolved to its formation and
+  # component; the identity domain does that, and this command takes the resolved parts.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1544
+  - name: weft.services.CheckServiceAccess
+    naming:
+      display: Check a component's access to a service instance
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: mode, type: weft.services.BindingMode}
+    # Reads the bindings only (one kind of related row per command). An unknown instance has no
+    # binding and a gone one none active (DeprovisionServiceInstance refuses while bound), so both
+    # are `not-bound`.
+    # UNMAPPED: refusing a bound instance that is still Provisioning needs the instance's state
+    # beside the binding row set; ESS 0.99.2 refuses both on one command (`unsupported_construct`).
+    # Not declared; the data plane has no route to an instance that is not serving.
+    outcomes:
+      - name: not-bound
+        when_related:
+          entity: weft.services.ServiceBinding
+          where:
+            all:
+              - "service_instance_id == input.service_instance_id"
+              - "formation_id == input.formation_id"
+              - "component == input.component"
+              - "mode == input.mode"
+              - "state == Active"
+          exists: false
+        error: weft.services.NotBound
+      - name: allowed
+        accepts: nothing
+
+  # § 13 line 540: back up a durable service instance. A non-durable one is refused by name.
+  # OPEN: whether a Degraded instance may be backed up; the smallest safe answer allows Ready and
+  # Degraded (a backup of a failing instance is when it is most wanted) and refuses the rest.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1577
+  - name: weft.services.BackupServiceInstance
+    naming:
+      display: Back up a service instance
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      # hardening pass 1 D3: the service instance's account, stated by the caller so it is checked
+      # against the caller (not-callers-account) and against the instance (instance-foreign); a
+      # guard compares the caller with an input or the subject only, and this command has none.
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      # hardening pass 1 D3: only in the account the caller acts in.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.services.NotFound
+      - name: no-such-instance
+        when_related: {via: input.service_instance_id, exists: false}
+        error: weft.services.ServiceInstanceNotFound
+      # hardening pass 1 D3: an instance of another account answers as a missing one, before its
+      # durability or state is told.
+      - name: instance-foreign
+        when_related: {via: input.service_instance_id, predicate: scope_id != input.scope_id}
+        error: weft.services.ServiceInstanceNotFound
+      - name: not-durable
+        when_related: {via: input.service_instance_id, predicate: durability == Ephemeral}
+        error: weft.services.NotDurable
+      - name: instance-unavailable
+        when_related:
+          via: input.service_instance_id
+          predicate: {state: [Provisioning, Updating, Deprovisioning, Gone]}
+        error: weft.services.ServiceInstanceUnavailable
+      - name: taking
+        creates: weft.services.Backup
+        instance: backup_id
+        sets:
+          service_instance_id: input.service_instance_id
+          scope_id: {related: {via: input.service_instance_id, field: scope_id}}
+        emits: [weft.services.BackupStarted]
+        payload:
+          weft.services.BackupStarted:
+            backup_id: {generated: true}
+            service_instance_id: input.service_instance_id
+
+  # § 13 line 540. The control plane reports the backup written.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1620
+  - name: weft.services.ReportBackupCompleted
+    naming:
+      display: Report a backup completed
+    input:
+      - {name: backup_id, type: weft.shared.BackupId}
+    outcomes:
+      - name: no-such-backup
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: completed
+        moves: weft.services.Backup.complete
+        instance: backup_id
+        emits: [weft.services.BackupCompleted]
+        payload:
+          weft.services.BackupCompleted:
+            backup_id: input.backup_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 line 540.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1641
+  - name: weft.services.ReportBackupFailed
+    naming:
+      display: Report a backup failed
+    input:
+      - {name: backup_id, type: weft.shared.BackupId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-backup
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: failed
+        moves: weft.services.Backup.fail
+        instance: backup_id
+        sets:
+          failure_reason: input.reason
+        emits: [weft.services.BackupFailed]
+        payload:
+          weft.services.BackupFailed:
+            backup_id: input.backup_id
+            reason: input.reason
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 line 540: write a completed backup back into its service instance.
+  # OPEN: restoring a backup into another instance (a clone, or a copy to another account) is
+  # not in the sketch. The smallest safe answer allows only the instance the backup was taken
+  # from, so no data crosses instances or accounts through a restore.
+  # OPEN: whether a running restore takes the instance out of Ready (to Updating); the smallest
+  # answer leaves its state and refuses a second restore while one runs.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1671
+  - name: weft.services.RestoreServiceInstance
+    naming:
+      display: Restore a service instance from a backup
+    input:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: backup_id, type: weft.shared.BackupId}
+      # hardening pass 1 D3: the service instance's account, stated by the caller so it is checked
+      # against the caller (not-callers-account) and against the instance (instance-foreign); a
+      # guard compares the caller with an input or the subject only, and this command has none.
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      # hardening pass 1 D3: only in the account the caller acts in.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.services.NotFound
+      - name: no-such-instance
+        when_related: {via: input.service_instance_id, exists: false}
+        error: weft.services.ServiceInstanceNotFound
+      - name: no-such-backup
+        when_related: {via: input.backup_id, exists: false}
+        error: weft.services.BackupNotFound
+      # hardening pass 1 D3: an instance of another account answers as a missing one, before its
+      # durability or state is told (after every existence check: ESS answers those first).
+      - name: instance-foreign
+        when_related: {via: input.service_instance_id, predicate: scope_id != input.scope_id}
+        error: weft.services.ServiceInstanceNotFound
+      # hardening pass 1 disclosure (catalog.yaml:1640): a backup of another instance answers as a
+      # missing one, before its state is told (was ForeignBackup).
+      - name: foreign-backup
+        when_related: {via: input.backup_id, predicate: service_instance_id != input.service_instance_id}
+        error: weft.services.BackupNotFound
+      - name: not-durable
+        when_related: {via: input.service_instance_id, predicate: durability == Ephemeral}
+        error: weft.services.NotDurable
+      - name: instance-unavailable
+        when_related:
+          via: input.service_instance_id
+          predicate: {state: [Provisioning, Updating, Deprovisioning, Gone]}
+        error: weft.services.ServiceInstanceUnavailable
+      - name: backup-not-completed
+        when_related: {via: input.backup_id, predicate: {state: [Taking, Failed]}}
+        error: weft.services.BackupNotCompleted
+      - name: restore-running
+        when_related:
+          entity: weft.services.Restore
+          where: {all: ["service_instance_id == input.service_instance_id", "state == Restoring"]}
+          exists: true
+        error: weft.services.RestoreInProgress
+      - name: restoring
+        creates: weft.services.Restore
+        instance: restore_id
+        sets:
+          service_instance_id: input.service_instance_id
+          backup_id: input.backup_id
+        emits: [weft.services.RestoreStarted]
+        payload:
+          weft.services.RestoreStarted:
+            restore_id: {generated: true}
+            service_instance_id: input.service_instance_id
+            backup_id: input.backup_id
+
+  # § 13 line 540.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1733
+  - name: weft.services.ReportRestoreCompleted
+    naming:
+      display: Report a restore completed
+    input:
+      - {name: restore_id, type: weft.shared.RestoreId}
+    outcomes:
+      - name: no-such-restore
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: completed
+        moves: weft.services.Restore.complete
+        instance: restore_id
+        emits: [weft.services.RestoreCompleted]
+        payload:
+          weft.services.RestoreCompleted:
+            restore_id: input.restore_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+  # § 13 line 540.
+  # weft@6798e7d:ess/7-services/catalog.yaml:1754
+  - name: weft.services.ReportRestoreFailed
+    naming:
+      display: Report a restore failed
+    input:
+      - {name: restore_id, type: weft.shared.RestoreId}
+      - {name: reason, type: String}
+    outcomes:
+      - name: no-such-restore
+        unknown_instance: true
+        error: weft.services.NotFound
+      - name: failed
+        moves: weft.services.Restore.fail
+        instance: restore_id
+        sets:
+          failure_reason: input.reason
+        emits: [weft.services.RestoreFailed]
+        payload:
+          weft.services.RestoreFailed:
+            restore_id: input.restore_id
+            reason: input.reason
+      - name: wrong-state
+        wrong_state: true
+        error: weft.services.StateConflict
+
+views:
+  # § 13 lines 514-526 Offering: what a tenant can take by name.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2260
+  - name: weft.services.OfferingCatalog
+    source: weft.services.Offering
+    consistency: read_your_writes
+    filter: state == Published
+    fields:
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: name, type: String}
+      - {name: kind, type: weft.services.OfferingKind}
+      - {name: summary, type: String}
+
+  # § 13 lines 514-532 Offering and Engine (operator): which engine runs each offering.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2298
+  - name: weft.services.OfferingEngines
+    source: weft.services.Offering
+    consistency: read_your_writes
+    fields:
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: name, type: String}
+      - {name: kind, type: weft.services.OfferingKind}
+      - {name: engine_id, type: weft.shared.EngineId}
+      - {name: state, type: weft.services.Offering.State}
+
+  # § 13 lines 533-535 ServiceInstance: the service instances of one account.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2309
+  - name: weft.services.ServiceInstanceList
+    source: weft.services.ServiceInstance
+    consistency: read_your_writes
+    params:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: name, type: String}
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: kind, type: weft.services.OfferingKind}
+      - {name: plan_id, type: weft.shared.OfferingPlanId}
+      - {name: durability, type: weft.services.Durability}
+      - {name: sleep_policy, type: Optional<weft.shared.SleepPolicy>}
+      - {name: state, type: weft.services.ServiceInstance.State}
+
+  # § 13 lines 533-535 ServiceInstance: one service instance, with why it is degraded.
+  # OPEN: the degraded reason is free text written by the control plane; whether it may name the
+  # engine is not stated. The smallest answer: it is written for the tenant and names no engine.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2330
+  - name: weft.services.ServiceInstanceDetail
+    source: weft.services.ServiceInstance
+    consistency: read_your_writes
+    params:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    filter: service_instance_id == param.service_instance_id
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: name, type: String}
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: kind, type: weft.services.OfferingKind}
+      - {name: plan_id, type: weft.shared.OfferingPlanId}
+      - {name: durability, type: weft.services.Durability}
+      - {name: sleep_policy, type: Optional<weft.shared.SleepPolicy>}
+      - {name: degraded_reason, type: Optional<String>}
+      - {name: state, type: weft.services.ServiceInstance.State}
+
+  # § 13 lines 529-543 ServiceInstance, Engine and "weft runs on weft" (operator): where each
+  # instance runs.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2351
+  - name: weft.services.ServiceInstancePlacement
+    source: weft.services.ServiceInstance
+    consistency: read_your_writes
+    fields:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: offering_id, type: weft.shared.OfferingId}
+      - {name: kind, type: weft.services.OfferingKind}
+      - {name: engine_id, type: weft.shared.EngineId}
+      - {name: system_formation_id, type: weft.shared.FormationId}
+      - {name: state, type: weft.services.ServiceInstance.State}
+
+  # § 13 lines 536-539 ServiceBinding: who may use one service instance, in which mode.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2364
+  - name: weft.services.ServiceBindingList
+    source: weft.services.ServiceBinding
+    consistency: read_your_writes
+    params:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    filter: service_instance_id == param.service_instance_id
+    fields:
+      - {name: binding_id, type: weft.shared.ServiceBindingId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: mode, type: weft.services.BindingMode}
+      - {name: state, type: weft.services.ServiceBinding.State}
+
+  # § 13 lines 536-539 ServiceBinding: the service instances the components of one formation are
+  # bound to.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2380
+  - name: weft.services.FormationServiceBindings
+    source: weft.services.ServiceBinding
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: binding_id, type: weft.shared.ServiceBindingId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: mode, type: weft.services.BindingMode}
+      - {name: state, type: weft.services.ServiceBinding.State}
+
+  # § 13 line 540 Backup: the backups of one service instance.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2395
+  - name: weft.services.BackupList
+    source: weft.services.Backup
+    consistency: read_your_writes
+    params:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    filter: service_instance_id == param.service_instance_id
+    fields:
+      - {name: backup_id, type: weft.shared.BackupId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: failure_reason, type: Optional<String>}
+      - {name: state, type: weft.services.Backup.State}
+
+  # § 13 line 540 Restore: the restores into one service instance.
+  # weft@6798e7d:ess/7-services/catalog.yaml:2409
+  - name: weft.services.RestoreList
+    source: weft.services.Restore
+    consistency: read_your_writes
+    params:
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+    filter: service_instance_id == param.service_instance_id
+    fields:
+      - {name: restore_id, type: weft.shared.RestoreId}
+      - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
+      - {name: backup_id, type: weft.shared.BackupId}
+      - {name: failure_reason, type: Optional<String>}
+      - {name: state, type: weft.services.Restore.State}
