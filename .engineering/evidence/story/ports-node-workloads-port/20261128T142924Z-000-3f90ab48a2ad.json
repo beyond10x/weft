@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T14:29:24Z",
+  "actor": "human:operator",
+  "artifact": "story:ports-node-workloads-port",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "coordinator: split out of ports-node-workloads-local after the owner's pick D-S1 = A relayed by the operator"
+  }
+}
