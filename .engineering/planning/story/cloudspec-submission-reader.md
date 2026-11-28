@@ -16,15 +16,17 @@ scope:
   path: tests/fixtures/cloudspec
 - confidence: cited
   path: tools/slow.d/30-cloudspec-goldens.sh
-revision: 3
+revision: 6
 ---
 ## Epic
 
 Decomposes `epic:cloudspec-submission`: outcome 4 (the three goldens in weft's fixtures with their
 digests, checked in the test step with no network and no cloudspec binary) and the offline checks
 of outcome 2 (format, both member digests, the binding). Submitting the checked document through
-`weft.deployments.SubmitDeploymentSource` waits for `decision-blocker:cloudspec-source-translator`
-and is not this story. The library depends on no generated crate, so it builds at either pin.
+`weft.deployments.SubmitDeploymentSource` waits for
+`dependency-blocker:cloudspec-source-without-translator` (D-R85-1 = B: cloudspec makes the
+Translator optional for a Cloudspec source and adds `PlanFromSource`) and is not this story. The
+library depends on no generated crate, so it builds at either pin.
 
 ## Context
 
@@ -45,7 +47,10 @@ and is not this story. The library depends on no generated crate, so it builds a
 1. A crate `product/cloud/crates/weft-cloudspec` (library; dependencies serde_json and sha2, no
    generated crate): `Submission::read(bytes)` answers the accepted submission or one named refusal
    (`enum Refusal`), checked in this order, stopping at the first:
-   - `NotASubmission`: not a JSON object with the five members;
+   - `NotASubmission`: not a JSON object with the five members, or `digests` is not an object
+     holding both keys `architecture` and `binding` with a string value each (a missing
+     `architecture` key, a missing `binding` key, and a value that is not a string, `null`
+     included, are each this refusal);
    - `UnknownFormat { found }`: `format` other than `cloudspec-weft-submission/1` (another version
      included);
    - `DigestMismatch { member, declared, computed }`: the recomputed digest of `architecture`, then
@@ -60,7 +65,13 @@ and is not this story. The library depends on no generated crate, so it builds a
 3. `tests/fixtures/cloudspec/`: byte copies of the three goldens and `goldens.lock` (one line
    `commit fdcf7e8286a79bc3bbcdb54bf9fe1e332d17884c`, one line `<sha256> <file>` per golden).
 4. `tools/slow.d/30-cloudspec-goldens.sh` (POSIX sh, slow lane only): fetches cloudspec at the lock's
-   commit into `target/cloudspec-src` with git and compares each golden's bytes; it builds nothing.
+   commit with git into a checkout of its own, `target/cloudspec-goldens-src` (not
+   `target/cloudspec-src`, which `tools/slow.d/20-vendor-fresh.sh` fetches the pin into), and
+   compares each golden's bytes; it builds nothing. It skips when nothing changed, with a digest
+   stamp built like the one of `tools/slow.d/20-vendor-fresh.sh` (integration branch, 6562c60): a
+   run that passed writes the sha256 of `goldens.lock` and of each golden, with its path, to
+   `target/cloudspec-goldens/passed`; the next run with the same digest prints that it skipped and
+   exits 0 without fetching; a run that fails removes the stamp.
 
 ## Domain relations
 
@@ -97,14 +108,15 @@ Checked by:
    `sha256:3ce513003eec18301050ec62932fdfdc45a7b4193d5e3b43c82a5a1cfa5c948f` and
    `sha256:74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b`; workstation and
    host-daemon are accepted.
-3. Copies changed in memory are refused: `[]` → `NotASubmission`; `format`
-   `cloudspec-weft-submission/2` → `UnknownFormat`; one string of `architecture` changed →
-   `DigestMismatch` (architecture); workstation's `binding.binding` changed → `DigestMismatch`
-   (binding); workstation's `binding.architecture` renamed with its digest recomputed →
-   `BindingForOtherArchitecture`; a role `nobody` added with its digest recomputed →
-   `BindingRoleNamesNoPart`.
-4. `tools/slow.d/30-cloudspec-goldens.sh` exits 0 at the lock's commit, and 1 after a byte of a
-   golden changes (slow lane; it fetches).
+3. Copies changed in memory are refused: `[]` → `NotASubmission`; snippet with its
+   `digests.binding` key removed → `NotASubmission`; `format` `cloudspec-weft-submission/2` →
+   `UnknownFormat`; one string of `architecture` changed → `DigestMismatch` (architecture);
+   workstation's `binding.binding` changed → `DigestMismatch` (binding); workstation's
+   `binding.architecture` renamed with its digest recomputed → `BindingForOtherArchitecture`; a
+   role `nobody` added with its digest recomputed → `BindingRoleNamesNoPart`.
+4. `tools/slow.d/30-cloudspec-goldens.sh` exits 0 at the lock's commit, a second run with nothing
+   changed prints that it skipped and fetches nothing, and it exits 1 after a byte of a golden
+   changes (slow lane; it fetches).
 
 ## Rules for this work
 

@@ -16,9 +16,12 @@ relations:
 - depends_on: story:cloud-blocks-consoles
 - depends_on: story:cloud-blocks-docs
 - depends_on: story:cloud-blocks-sim-pin
+- depends_on: dependency-blocker:cloudspec-source-without-translator
 scope:
 - confidence: cited
   path: Taskfile.yml
+- confidence: cited
+  path: ess/5-runtime/scheduling.yaml
 - confidence: cited
   path: ess/cloud
 - confidence: cited
@@ -27,6 +30,8 @@ scope:
   path: product/cloud/crates/weft-cloudspec/tests
 - confidence: inferred
   path: product/cloud/crates/weft-controllers/src/placement.rs
+- confidence: cited
+  path: product/cloud/crates/weft-impl/src/behaviours/assign.rs
 - confidence: inferred
   path: product/cloud/crates/weft-impl/src/behaviours/create_formation.rs
 - confidence: inferred
@@ -43,23 +48,30 @@ scope:
   path: sim/experiments
 - confidence: cited
   path: tests/fixtures/cloudspec
-revision: 4
+revision: 6
 ---
 ## Epic
 
 Decomposes `epic:cloudspec-submission`, outcome 1: weft's vendored blocks move to a cloudspec
-revision that holds `SourceKind::Cloudspec` (fdcf7e8 or later) and the cloudspec-sim view-name fix,
-in one pin move (decision D-f of `epic:cloud-blocks`: one pin, `CLOUDSPEC_REV`, for cloudspec-sim and
-the blocks).
+revision that holds `SourceKind::Cloudspec` (fdcf7e8 or later), the Translator made optional for a
+Cloudspec source with `PlanFromSource` (D-R85-1 = B), and the cloudspec-sim view-name fix, in one
+pin move (decision D-f of `epic:cloud-blocks`: one pin, `CLOUDSPEC_REV`, for cloudspec-sim and the
+blocks). cloudspec ships the translator change and the view-name fix in one pull request, so the
+epic keeps that one pin move.
 
 ## Dependencies
 
 - `dependency-blocker:cloudspec-sim-renamed-views` cleared: cloudspec-sim at a485b7f reads view names
-  from before the rename, so the closed-link experiment exits 2. The revision this story pins is the
-  one that clears it, and it is named there; this story names no sha of its own.
+  from before the rename, so the closed-link experiment exits 2.
+- `dependency-blocker:cloudspec-source-without-translator` cleared: cloudspec's deployments block
+  requires a Translator at submit and a Translation at plan for every source kind; D-R85-1 = B asks
+  cloudspec for an optional `translator_id` and a command `PlanFromSource`.
+- Both clear with the same cloudspec pull request. The revision this story pins is the one that
+  clears both, and it is named there; this story names no sha of its own. A revision that clears
+  only one is not pinned.
 - The revision must not carry cloudspec's layer refactor (out of the epic's scope: a later pin
-  move with its rename file). If the first revision with both pieces also carries the refactor, the
-  story stops and says so.
+  move with its rename file). If the first revision with all three pieces also carries the
+  refactor, the story stops and says so.
 - `story:cloudspec-submission-reader`: the goldens and their lock exist.
 - The `epic:cloud-blocks` stories that own the same files: `cloud-blocks-vendor`,
   `cloud-blocks-lock-gate`, `cloud-blocks-layers` (`Taskfile.yml`, `ess/cloud/`), `cloud-blocks-rust`
@@ -68,8 +80,9 @@ the blocks).
 
 ## What changes in the blocks
 
-Read from `git diff a485b7f fdcf7e8 -- blocks` in cloudspec (7 files); the pinned revision may add
-more, which this story follows the same way:
+Read from `git diff a485b7f fdcf7e8 -- blocks` in cloudspec (7 files), and from the translator
+change as D-R85-1 = B asks for it; the pinned revision may add more, which this story follows the
+same way:
 
 - `0-protocols/shared.yaml`: `IsolationLevel` gains `None`, ordered first (weakest).
 - `2-infrastructure/infrastructure.yaml`: the isolation policy refusals take `None`; new refusal
@@ -80,7 +93,16 @@ more, which this story follows the same way:
   `run-as-missing`.
 - `9-composition/architecture.yaml`: `LinkProtocol::Ssh`, `Link.data`, `Formation.parity`; input
   `parity` (a required list) of `CreateFormation` with refusal `parity-form`; input `data` of `AddLink`.
-- `11-translation/deployments.yaml`: `SourceKind` gains `Cloudspec`.
+- `11-translation/deployments.yaml`: `SourceKind` gains `Cloudspec`; `translator_id` of
+  `SubmitDeploymentSource` becomes optional, with refusals `translator-required` (a source kind
+  that needs one names none) and `translator-not-allowed` (a Cloudspec source names one); a new
+  command `PlanFromSource {source_id, environment_id}`; the source records the submission's
+  digests.
+
+What changes in weft's own domains (not vendored): the fixed cloudspec-sim's `closed-link` check
+reads `topology_id` from a row of `weft.scheduling.PlacementDecisions`
+(`ess/5-runtime/scheduling.yaml`: line 854 on the integration branch at 6562c60, line 1802 on
+`main` at 3bf8749), which has `formation_id` and `topology_group_id` and no `topology_id` today.
 
 ## Outcome
 
@@ -90,37 +112,54 @@ more, which this story follows the same way:
 2. weft follows the block changes above wherever the gate needs it: the hand-written behaviours
    answer the new refusals in their contract's order (`define_workload.rs`: `run-as-missing`;
    `create_formation.rs`: `parity-form`), the placement code treats `None` as the weakest level
-   (default deny), the skeleton's steps send `parity: []`, and the simulator inputs and console
-   fixtures carry the new required fields.
+   (default deny), `rank()` in `product/cloud/crates/weft-impl/src/behaviours/assign.rs` (lines
+   38-44, an exhaustive `match` on `IsolationLevel`, so `None` breaks the build until it is added)
+   ranks `None` below `ProcessSandbox` and its doc comment says so, the skeleton's steps send
+   `parity: []`, and the simulator inputs and console fixtures carry the new required fields.
 3. `tests/fixtures/cloudspec/`: the three goldens copied again at the new revision, the lock's
    `commit` set to `CLOUDSPEC_REV`, and the lock test of `weft-cloudspec` fails when the two differ.
 4. `quality/spec-diff-acknowledgements.json` acknowledged again (`tools/check-spec-diff.sh
    --acknowledge`) after the change is reviewed.
+5. `weft.scheduling.PlacementDecisions` in `ess/5-runtime/scheduling.yaml` gains the field
+   `topology_id` (`Optional<weft.shared.TopologyId>`, the topology of the decision's cluster) in its
+   row, and the view's implementation fills it, so the fixed cloudspec-sim `closed-link` check reads
+   it.
 
 ## Scope
 
 `Taskfile.yml` (`CLOUDSPEC_REV` only), `ess/cloud/`, `ess/ess-inputs.yaml`,
-`quality/spec-diff-acknowledgements.json`, `tests/fixtures/cloudspec/`,
-`product/cloud/crates/weft-cloudspec/tests/`; worked out, not read in a diff:
+`ess/5-runtime/scheduling.yaml` (`PlacementDecisions` only), `quality/spec-diff-acknowledgements.json`,
+`tests/fixtures/cloudspec/`, `product/cloud/crates/weft-cloudspec/tests/`,
+`product/cloud/crates/weft-impl/src/behaviours/assign.rs`; worked out, not read in a diff:
 `product/cloud/crates/weft-impl/src/behaviours/define_workload.rs`,
 `product/cloud/crates/weft-impl/src/behaviours/create_formation.rs`,
 `product/cloud/crates/weft-impl/src/behaviours/place_instance.rs`,
 `product/cloud/crates/weft-controllers/src/placement.rs`, `product/cloud/crates/weft-testkit/src/steps.rs`,
 `sim/experiments/`, `product/console/ui/fixtures/`.
 
+Overlap with drafts outside this epic (not ordered by an edge; a wave keeps them apart):
+
+- `story:anim-docs-published-run` also lands on `Taskfile.yml` and `sim/experiments/`
+  (`sim/experiments/node-loss-climb.yaml`).
+- `story:ports-spec-machine-failed` also lands on `product/cloud/crates/weft-impl/src/behaviours/`
+  and `quality/spec-diff-acknowledgements.json`.
+
 ## Acceptance
 
-With `CLOUDSPEC_REV` at the revision that cleared `dependency-blocker:cloudspec-sim-renamed-views`,
-`slot task check` passes and `task sim-experiments` exits 0.
+With `CLOUDSPEC_REV` at the revision that cleared `dependency-blocker:cloudspec-sim-renamed-views`
+and `dependency-blocker:cloudspec-source-without-translator`, `slot task check` passes and
+`task sim-experiments` exits 0.
 
 Checked by:
 
 1. `tools/check-vendor-lock.sh` exits 0 and `ess/cloud/cloud.lock` names `CLOUDSPEC_REV`;
-   `weft.deployments.SourceKind` in `ess/cloud/11-translation/deployments.yaml` has the variant
-   `Cloudspec`.
-2. `ess specify validate --path ess --strict-requires` passes.
+   `ess/cloud/11-translation/deployments.yaml` has the variant `Cloudspec` of
+   `weft.deployments.SourceKind` and the command `weft.deployments.PlanFromSource`.
+2. `ess specify validate --path ess --strict-requires` passes, and
+   `weft.scheduling.PlacementDecisions` has the field `topology_id`.
 3. `slot task check` passes; its test step ends within 120 s, and
-   `place_instance_leads_to_a_confined_snippet_that_runs_and_is_recorded_running` passes.
+   `place_instance_leads_to_a_confined_snippet_that_runs_and_is_recorded_running` passes; a test of
+   `rank()` puts `None` below `ProcessSandbox`.
 4. `task sim-experiments` and `task sim-relations` exit 0 (slow lane; they fetch), the acceptance
    `story:cloud-blocks-sim-pin` could not meet at a485b7f.
 5. The goldens lock names `CLOUDSPEC_REV`, and the lock test fails on a lock naming another commit.
