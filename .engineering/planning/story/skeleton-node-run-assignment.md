@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-node-run-assignment
 kind: story
-status: active
+status: implemented
 title: weft-agent follows its assignment, starts the instance confined and records it running
 relations:
 - decomposes: epic:walking-skeleton
@@ -33,10 +33,11 @@ scope:
   path: product/cloud/crates/weft-impl/src/behaviours/restore_backend.rs
 - confidence: cited
   path: product/cloud/crates/weft-impl/src/bindings
-revision: 29
+revision: 30
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T02:23:05Z", actor: "human:operator", revision: 28, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T02:23:06Z", actor: "human:operator", revision: 29, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T04:04:29Z", actor: "human:operator", revision: 30, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
