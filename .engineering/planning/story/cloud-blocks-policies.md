@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-policies
 kind: story
-status: active
+status: implemented
 title: Bindings, owners and scope grants follow the vendored domains, and the combined spec validates
 relations:
 - decomposes: epic:cloud-blocks
@@ -15,10 +15,11 @@ scope:
   path: ess/6-delivery/deployments.yaml
 - confidence: cited
   path: ess/components.yaml
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T09:00:36Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T13:47:54Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
