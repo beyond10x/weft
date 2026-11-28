@@ -1899,6 +1899,37 @@ views:
       - {name: desired, type: weft.workloads.DesiredRun}
       - {name: state, type: weft.workloads.Instance.State}
 
+  # Section 11 lines 466-470: what a node runs, with how the node runs it. Section 4 lines 262-272
+  # (inside one instance): a host process (package kind Process) runs as its host user, with the
+  # commands before its start, its stop and its restart, which the workload holds and the instance
+  # does not copy (story:slot-node-process). The node agent reads them here, through the
+  # instance's workload (one hop), before it starts an instance of such a workload.
+  - name: weft.workloads.NodeInstanceRuns
+    source: weft.workloads.Instance
+    consistency: read_your_writes
+    params:
+      - {name: node_id, type: weft.shared.NodeId}
+    filter: node_id == param.node_id
+    fields:
+      - {name: instance_id, type: weft.shared.InstanceId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - name: package_kind
+        type: Optional<weft.workloads.PackageKind>
+        field: {related: {via: workload_id, field: package_kind}}
+      - name: run_as
+        type: Optional<weft.workloads.RunAs>
+        field: {related: {via: workload_id, field: run_as}}
+      - name: prestart
+        type: Optional<List<weft.workloads.PrestartStep>>
+        field: {related: {via: workload_id, field: prestart}}
+      - name: stop
+        type: Optional<weft.workloads.Stop>
+        field: {related: {via: workload_id, field: stop}}
+      - name: restart
+        type: Optional<weft.workloads.ProcessRestart>
+        field: {related: {via: workload_id, field: restart}}
+      - {name: state, type: weft.workloads.Instance.State}
+
   # The invariants read restarts and restarts_in_window; the isolation guard reads
   # minimum_isolation and node_id; the health guards read health, processes and restart_policy:
   # this view holds every instance in every state.
