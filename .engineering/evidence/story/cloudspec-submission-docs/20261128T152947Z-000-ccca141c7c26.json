@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T15:29:47Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-docs",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the operator's order relayed from the owner: epic cloudspec-submission first; outcome 2 amended to the built path"
+  }
+}
