@@ -362,11 +362,6 @@ fn the_guards_of_record_artifact_verified_and_record_instance_running_refuse_as_
         let answer = client
             .command(command, weft_agent::agent::NODE_AGENT, json!({}), input)
             .expect("the control host answers");
-        // `starting` publishes InstanceHealthStarting, whose generated binding
-        // (RecordBackendNotReady) is not implemented: 501 with `committed: true` (src/follow.rs).
-        if answer.status == 501 && answer.body["committed"] == true {
-            return "committed".to_owned();
-        }
         answer.body["outcome"]
             .as_str()
             .unwrap_or_else(|| panic!("{command}: no outcome in {} {}", answer.status, answer.body))
@@ -402,7 +397,7 @@ fn the_guards_of_record_artifact_verified_and_record_instance_running_refuse_as_
 
     assert_eq!(
         verify(&this.instance_id, &this.node_id, &this_digest),
-        "committed"
+        "starting"
     );
     assert_eq!(
         verify(&this.instance_id, &this.node_id, &this_digest),

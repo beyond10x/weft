@@ -11,8 +11,11 @@
 //! 1. `weft.workloads.RecordArtifactVerified` as the NodeAgent, with the instance's own
 //!    `artifact_digest`: `Scheduled` -> `Starting` under its guards. The skeleton fetches no
 //!    artifact and checks no signature: the snippet is the command of the instance's process.
-//!    An answer `501` with `committed: true` took effect as well (a generated binding of an event
-//!    it published is not implemented yet); only `starting` publishes, so it is `starting`.
+//!    Its answer is `starting`, whose `InstanceHealthStarting` the hand-run binding
+//!    `edge-backend-restarting` delivers (`RecordBackendNotReady`, `not-ready` dropped on a first
+//!    start). An answer `501` with `committed: true` is taken as `starting` too: it took effect,
+//!    and a generated binding of an event it published reached a command no behaviour implements;
+//!    only `starting` publishes.
 //! 2. `{"started": <instance_id>, "pass": <n>}` in the report file.
 //! 3. Each process through the `exec` port ([`Exec::run`]), on a thread of its own: `run` blocks
 //!    until the exec ends, and the passes over the work list go on meanwhile. The limits of a
