@@ -16,8 +16,11 @@
 # Bindings of the skeleton path removed; weft delivers them by hand with their declared policies
 # (the generated System has no seam for a per-refusal policy):
 #   r1-create-replica, ESS story:rust-binding-wraps-a-plain-copy-into-an-optional-member (E3)
-#   r1-submit-scheduling-request, r4-bind-placement, r4-assign, r4-schedule-instance,
-#   r4-record-placement-assigned, edge-backend-ready, edge-backend-restore, edge-backend-restarting,
+#   r1-set-workload-replicas, r1-submit-scheduling-request, r4-bind-placement, r4-assign,
+#   r4-schedule-instance, r4-record-placement-assigned, edge-backend-ready, edge-backend-restore,
+#   edge-backend-restarting, r1-rollout-submit-job, job-start-on-submit, job-task-instances,
+#   job-instance-scheduling-request (r1-rollout-submit-job and job-task-instances also map from a
+#   row the event names, which ESS cannot say: OPEN (ESS) in ess/components.yaml),
 #   ESS story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts (E2)
 # E2 for every other binding, ESS story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts
 #   components.yaml is read with explode(.) (anchors and aliases resolved), and every map-valued
@@ -33,7 +36,7 @@ set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 yq_version=v4.30.8
 yq_sha256=6c911103e0dcc54e2ba07e767d2d62bcfc77452b39ebaee45b1c46f062f4fd26
-removed_bindings='r1-create-replica r1-submit-scheduling-request r4-bind-placement r4-assign r4-schedule-instance r4-record-placement-assigned edge-backend-ready edge-backend-restore edge-backend-restarting'
+removed_bindings='r1-set-workload-replicas r1-rollout-submit-job job-start-on-submit job-task-instances job-instance-scheduling-request r1-create-replica r1-submit-scheduling-request r4-bind-placement r4-assign r4-schedule-instance r4-record-placement-assigned edge-backend-ready edge-backend-restore edge-backend-restarting'
 
 pinned_yq() {
   if [ -n "${YQ:-}" ]; then echo "$YQ"; return; fi

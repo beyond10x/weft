@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T14:43:19Z",
+  "actor": "human:operator",
+  "artifact": "story:workload-environment-and-args",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the operator's order relayed from the owner: epic slot-node-daemon follows cloudspec-submission; a consumer's requirement (environment text values and arguments at start); dependencies merged on integration/2026-11-28-7"
+  }
+}

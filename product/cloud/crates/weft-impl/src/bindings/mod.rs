@@ -9,6 +9,12 @@
 //! - it invokes the command in this process through the generated method of the accepting
 //!   component (`WeftControl::create_instance`), without an actor, as the generated delivery
 //!   does, and pumps the system so that what the invocation published is on its log;
+//! - the invocation acts in the scope of the event it delivers: for the attempt, the caller's
+//!   attributes are the `scope_id` of the event's held form, where it has one, and nothing else
+//!   ([`caller_of`]). ESS leaves the caller of a bound invocation open (a command sent as no
+//!   caller that reads one is unsupported on its interpreted target), and the one hand-run
+//!   command that reads it, `weft.workloads.SetWorkloadReplicas`, compares it with the
+//!   `scope_id` its binding maps from the same event;
 //! - it applies the binding's declared policy: a refusal in its `drop:` list is dropped; any
 //!   other refusal, and an unmet obligation (the transport failure of this process), is held
 //!   and attempted again by [`Runner::retry`];
@@ -28,6 +34,15 @@
 //! Entries, each with the ESS story whose fix removes it (with its line in
 //! `tools/synth-input.sh`, in one change):
 //!
+//! - [`r1_set_workload_replicas`], ESS
+//!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
+//!   (E2);
+//! - [`r1_rollout_submit_job`], [`job_start_on_submit`], [`job_task_instances`] and
+//!   [`job_instance_scheduling_request`] (block "R1 for a Job workload", the owner's decision
+//!   D-C2 = A), ESS
+//!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
+//!   (E2); three of them also read a row the event names ([`attempt_ports`]), which ESS cannot
+//!   map (OPEN (ESS) in `ess/components.yaml`, no ESS story yet);
 //! - [`r1_create_replica`], ESS `story:rust-binding-wraps-a-plain-copy-into-an-optional-member`
 //!   (E3);
 //! - [`r1_submit_scheduling_request`], ESS
@@ -41,19 +56,26 @@
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2).
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
 use serde_json::Value;
 use weft_system::SystemEvent;
 
+use crate::context::CallerAttributes;
 use crate::log::BindingResult;
 use crate::{Ports, System};
 
 pub mod edge_backend_ready;
 pub mod edge_backend_restarting;
 pub mod edge_backend_restore;
+pub mod job_instance_scheduling_request;
+pub mod job_start_on_submit;
+pub mod job_task_instances;
 pub mod r1_create_replica;
+pub mod r1_rollout_submit_job;
+pub mod r1_set_workload_replicas;
 pub mod r1_submit_scheduling_request;
 pub mod r4_assign;
 pub mod r4_bind_placement;
@@ -92,6 +114,11 @@ pub enum Invoked {
 
 /// The hand-run bindings, in the order of `ess/components.yaml`.
 pub const ENTRIES: &[&Entry] = &[
+    &r1_set_workload_replicas::ENTRY,
+    &r1_rollout_submit_job::ENTRY,
+    &job_start_on_submit::ENTRY,
+    &job_task_instances::ENTRY,
+    &job_instance_scheduling_request::ENTRY,
     &r1_create_replica::ENTRY,
     &r1_submit_scheduling_request::ENTRY,
     &r4_bind_placement::ENTRY,
@@ -183,7 +210,7 @@ impl Runner {
         let mut answers = Vec::new();
         while let Some(event) = queue.pop_front() {
             for entry in self.entries {
-                if let Some(answer) = attempt(system, entry, &event, 1) {
+                if let Some(answer) = attempt(&self.ports, system, entry, &event, 1) {
                     if answer.result == BindingResult::Retried {
                         let encoded = (entry.encode)(&event).unwrap_or_else(|| {
                             panic!("{entry:?} reacted to an event it cannot encode: {event:?}")
@@ -217,7 +244,7 @@ impl Runner {
             }
             let event = decode(entry, &held.event);
             let number = held.attempts + 1;
-            let Some(answer) = attempt(system, entry, &event, number) else {
+            let Some(answer) = attempt(&self.ports, system, entry, &event, number) else {
                 store.release(held.id);
                 continue;
             };
@@ -252,14 +279,52 @@ fn decode(entry: &Entry, text: &str) -> SystemEvent {
         })
 }
 
-/// Attempt `number` of `entry` on `event`, with its policy applied.
+/// The caller a hand-run invocation of `entry` on `event` acts as: the `scope_id` of the event's
+/// held form, where it has one, and no other attribute. An event the entry does not react to
+/// gives no caller.
+pub fn caller_of(entry: &Entry, event: &SystemEvent) -> CallerAttributes {
+    let scope_id = (entry.encode)(event).and_then(|held| {
+        held.get("scope_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    CallerAttributes {
+        scope_id,
+        ..CallerAttributes::default()
+    }
+}
+
+thread_local! {
+    /// The ports of the attempt in progress on this thread ([`attempt_ports`]).
+    static ATTEMPT_PORTS: RefCell<Option<Ports>> = const { RefCell::new(None) };
+}
+
+/// The ports of the attempt in progress on this thread: the rows a hand-run binding reads
+/// where its mapping takes a value from a row the event names (`r1-rollout-submit-job`: the
+/// workload's `JobSettings`; `job-task-instances`: the Job's workload and its instances;
+/// `job-instance-scheduling-request`: the Job's `gang`). ESS maps a binding only from its
+/// event (the OPEN (ESS) of the block "R1 for a Job workload" in `ess/components.yaml`), and
+/// [`Entry::invoke`] is given the system alone. `None` outside an attempt.
+pub(crate) fn attempt_ports() -> Option<Ports> {
+    ATTEMPT_PORTS.with(|held| held.borrow().clone())
+}
+
+/// Attempt `number` of `entry` on `event`, with its policy applied. The invocation runs as
+/// [`caller_of`], with [`attempt_ports`] set to `ports`; the caller has no attributes after it,
+/// as after a request of the control host, and no ports are set.
 fn attempt(
+    ports: &Ports,
     system: &mut System,
     entry: &'static Entry,
     event: &SystemEvent,
     number: u32,
 ) -> Option<Answer> {
-    let invoked = (entry.invoke)(system, event)?;
+    ports.set_caller(caller_of(entry, event));
+    ATTEMPT_PORTS.with(|held| *held.borrow_mut() = Some(ports.clone()));
+    let invoked = (entry.invoke)(system, event);
+    ATTEMPT_PORTS.with(|held| *held.borrow_mut() = None);
+    ports.set_caller(CallerAttributes::default());
+    let invoked = invoked?;
     let (refusal, result, events) = match invoked {
         Invoked::Accepted(events) => (None, BindingResult::Applied, events),
         Invoked::Refused(refusal) if entry.drop.contains(&refusal.as_str()) => {

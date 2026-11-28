@@ -27,7 +27,9 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/release_steps.rs
 - confidence: cited
   path: tools/synth-input.sh
-revision: 6
+- confidence: cited
+  path: tools/test-generated.sh
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T14:06:06Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T14:06:06Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}

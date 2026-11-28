@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-submit
 kind: story
-status: active
+status: implemented
 title: The control host takes a cloudspec-weft-submission/1 file, checks it with weft-cloudspec and records it through SubmitDeploymentSource with kind Cloudspec
 relations:
 - decomposes: epic:cloudspec-submission
@@ -32,10 +32,11 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/cloudspec_submit.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T13:44:17Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T13:44:17Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T14:44:23Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
