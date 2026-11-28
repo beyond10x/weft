@@ -1,7 +1,7 @@
 {
   "format": "ess-diff-acknowledgements/1",
   "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
-  "after": "297310676b372c07a3cbc14a910ac32dfa741e35409787f1c34ec3e7dac2e4ad",
+  "after": "fddb7061dad7c976ccecd71c13b81c18018e0a5805e16a8a67e2d57fb46593e2",
   "acknowledged": [
     "system/weft/unclassified-changed",
     "type/weft.artifacts.ArtifactKind/variant-added/BuildContext",
@@ -221,6 +221,7 @@
     "entity/weft.workloads.Box/field-removed/endpoint_id",
     "entity/weft.workloads.Box/relations-changed",
     "entity/weft.workloads.Instance/field-added/scope_id",
+    "entity/weft.workloads.Instance/field-added/scope_node_id",
     "entity/weft.workloads.Instance/field-removed/account_id",
     "entity/weft.workloads.Instance/relations-changed",
     "entity/weft.workloads.Invocation/field-added/scope_id",
@@ -1004,6 +1005,9 @@
     "command/weft.workloads.CreateBox/outcome-removed/not-callers-account",
     "command/weft.workloads.CreateBox/outcome-removed/workload-of-other-account",
     "command/weft.workloads.CreateBox/outcome-sets-changed/created",
+    "command/weft.workloads.CreateInstance/input-added/scope_node_id",
+    "command/weft.workloads.CreateInstance/outcome-added/no-scope-node",
+    "command/weft.workloads.CreateInstance/outcome-added/scope-node-live",
     "command/weft.workloads.CreateInstance/outcome-removed/over-quota",
     "command/weft.workloads.CreateInstance/outcome-response-payload-changed/created",
     "command/weft.workloads.CreateInstance/outcome-sets-changed/created",

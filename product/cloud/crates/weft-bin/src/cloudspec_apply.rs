@@ -12,6 +12,12 @@
 //!   command runs (a plan the caller's scope does not hold is left to `ApplyPlan`'s refusal);
 //! - the file kept under the source's digest ([`weft_impl::documents`]) is read with
 //!   [`Submission::read`];
+//! - the placement of each process part's scope and of its `per` scope is resolved
+//!   (`story:slot-node-pool-placement`, [`selectors`]): a pool by name (not `Deleted`), a host by
+//!   node name ([`weft_impl::placement::node_name`], not `Gone`). A name that matches none is
+//!   answered `422` `{"refusal": "UnknownPlacementPool" | "UnknownPlacementHost", "part",
+//!   "scope", "name"}`, a `per` scope without a placement `422` `{"refusal": "UnplacedPerScope",
+//!   ...}`, and no command runs;
 //! - `weft.deployments.ApplyPlan`, as the caller;
 //! - for each part with `block: workloads` and `kind: snippet` or `kind: process` whose
 //!   `parts.<key>` the coverage does not mark `refused`, in key order, as the caller:
@@ -27,20 +33,23 @@
 //! Otherwise the route answers `202` `{"outcome": "applied", "release_id", "parts": [...]}`.
 //! Steps after position 1 stay `Pending`: nothing completes a rollout step of a Job yet.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 use weft_bin::{Host, Unit};
-use weft_cloudspec::Submission;
+use weft_cloudspec::{Placement, Submission};
 use weft_impl::context::{mint, CallerAttributes};
+use weft_impl::placement::{self, Nodes};
 use weft_impl::Ports;
 use weft_server::http::{self, Request, Response};
 use weft_server::{weft_api, weft_control};
 use weft_types::actor::{Actor, Caller};
 use weft_types::behaviour::{
-    ComponentStorage, DeploymentSourceStorage, PlanStorage, RuntimeStorage,
+    ComponentStorage, DeploymentSourceStorage, NodePoolStorage, NodeStorage, PlanStorage,
+    RuntimeStorage,
 };
 use weft_types::deployments::PlanSnapshot;
+use weft_types::infrastructure::{NodePoolState, NodeState};
 use weft_types::primitives::Uuid;
 use weft_types::shared::PlanId;
 use weft_types::workloads::RuntimeState;
@@ -86,8 +95,9 @@ pub enum Shape {
         max_retries: i64,
         backoff: &'static str,
     },
-    /// `Daemon`, with `DaemonSettings` selecting every node (`node_selector` empty): which node
-    /// runs an instance is placement's (`story:slot-node-pool-placement`).
+    /// `Daemon`, with `DaemonSettings` whose `node_selector` records the placement of the part's
+    /// scope and `per` scope ([`weft_impl::placement`], empty for a scope without one): the level
+    /// step of one instance per node makes its instances (`story:slot-node-pool-placement`).
     Daemon,
 }
 
@@ -178,6 +188,10 @@ pub fn apply(
             Some(plan) => Some(source_file(ports, plan)?),
             None => None,
         };
+        let selectors = match &submission {
+            Some(submission) => selectors(ports, submission)?,
+            None => BTreeMap::new(),
+        };
         let mut sender = Sender {
             unit,
             ports,
@@ -196,16 +210,18 @@ pub fn apply(
             ));
         };
         let release_id = published(&applied, "release_id");
-        roll_out(&mut sender, &plan, &submission, &release_id)
+        roll_out(&mut sender, &plan, &submission, &selectors, &release_id)
     })
 }
 
-/// Defines, assigns and steps every snippet part of `submission`, then starts the release and
-/// its first step: the route's answer, or the refusal of the command that refused.
+/// Defines, assigns and steps every snippet and process part of `submission` (a process part's
+/// `node_selector` from `selectors`), then starts the release and its first step: the route's
+/// answer, or the refusal of the command that refused.
 fn roll_out(
     sender: &mut Sender<'_, '_, '_>,
     plan: &PlanSnapshot,
     submission: &Submission,
+    selectors: &BTreeMap<String, BTreeMap<String, String>>,
     release_id: &str,
 ) -> Result<Response, Response> {
     let plan = &plan.data;
@@ -240,7 +256,15 @@ fn roll_out(
         let workload_id = published(
             &sender.send(
                 "weft.workloads.DefineWorkload",
-                define_workload(profile, scope_id, &identity, &key, &runtime_id, &part),
+                define_workload(
+                    profile,
+                    scope_id,
+                    &identity,
+                    &key,
+                    &runtime_id,
+                    &part,
+                    selectors.get(&key),
+                ),
             )?,
             "workload_id",
         );
@@ -413,6 +437,70 @@ fn parts(submission: &Submission, profile: &Profile) -> Vec<(String, Value)> {
     parts
 }
 
+/// The `node_selector` of each process part of `submission` (by key, refused parts left out):
+/// the resolved placement of its scope (`in`) and of its `per` scope ([`placement::selector`]),
+/// empty for a part whose scope has no placement and no `per`. The first part, in key order,
+/// whose placement names no pool or node, or whose `per` scope has no placement, is the route's
+/// `422` refusal ([`refused`]).
+fn selectors(
+    ports: &Ports,
+    submission: &Submission,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, Response> {
+    let mut selectors = BTreeMap::new();
+    for (key, part) in parts(submission, &PROCESS) {
+        let scope = |field: &str| part.get(field).and_then(Value::as_str);
+        let own = match scope("in") {
+            Some(name) => submission
+                .placement(name)
+                .map(|placed| resolve(ports, &key, name, &placed))
+                .transpose()?,
+            None => None,
+        };
+        let per = match scope("per") {
+            Some(name) => {
+                let placed = submission
+                    .placement(name)
+                    .ok_or_else(|| refused("UnplacedPerScope", &key, name, None))?;
+                Some(resolve(ports, &key, name, &placed)?)
+            }
+            None => None,
+        };
+        selectors.insert(key, placement::selector(own.as_ref(), per.as_ref()));
+    }
+    Ok(selectors)
+}
+
+/// The nodes `placed` names for the scope `scope` of `part`: the pool of that name that is not
+/// `Deleted` (the least identity of several), or the node of that name that is not `Gone`.
+fn resolve(ports: &Ports, part: &str, scope: &str, placed: &Placement) -> Result<Nodes, Response> {
+    match placed {
+        Placement::Pool(name) => NodePoolStorage::list(ports)
+            .into_iter()
+            .filter(|row| row.state != NodePoolState::Deleted && &row.data.name == name)
+            .map(|row| row.data.node_pool_id)
+            .min_by(|a, b| a.0 .0.cmp(&b.0 .0))
+            .map(Nodes::Pool)
+            .ok_or_else(|| refused("UnknownPlacementPool", part, scope, Some(name))),
+        Placement::Host(name) => NodeStorage::list(ports)
+            .into_iter()
+            .filter(|row| row.state != NodeState::Gone)
+            .map(|row| row.data.node_id)
+            .find(|node| &placement::node_name(node) == name)
+            .map(Nodes::Host)
+            .ok_or_else(|| refused("UnknownPlacementHost", part, scope, Some(name))),
+    }
+}
+
+/// The route's `422` refusal `refusal` of the placement of `scope`, for the part `part`, naming
+/// `name`.
+fn refused(refusal: &str, part: &str, scope: &str, name: Option<&str>) -> Response {
+    Response::new(
+        422,
+        http::JSON,
+        json!({"refusal": refusal, "part": part, "scope": scope, "name": name}).to_string(),
+    )
+}
+
 /// The registered runtime named `name` (the least identity of several); a new identity, which
 /// names no runtime, when none is registered, so `DefineWorkload` answers `no-runtime`.
 fn runtime(ports: &Ports, name: &str) -> String {
@@ -432,7 +520,8 @@ fn component(ports: &Ports, formation_id: &str, name: &str) -> Option<String> {
         .map(|row| row.data.component_id.0 .0)
 }
 
-/// The input of `DefineWorkload` for the part `key` with `profile`.
+/// The input of `DefineWorkload` for the part `key` with `profile`; a `Daemon` takes `selector`
+/// as its `node_selector` (none: empty).
 fn define_workload(
     profile: &Profile,
     scope_id: &str,
@@ -440,6 +529,7 @@ fn define_workload(
     key: &str,
     runtime_id: &str,
     part: &Value,
+    selector: Option<&BTreeMap<String, String>>,
 ) -> Value {
     let (shape, settings) = match profile.shape {
         Shape::Job {
@@ -461,7 +551,7 @@ fn define_workload(
         ),
         Shape::Daemon => (
             "Daemon",
-            json!({"shape": "daemon", "value": {"node_selector": {}}}),
+            json!({"shape": "daemon", "value": {"node_selector": selector.cloned().unwrap_or_default()}}),
         ),
     };
     let mut input = json!({

@@ -8,9 +8,9 @@
 //! ([`weft_server::weft_control::dispatch_with_events`]), so its answer carries the status the
 //! contract declares, which the control host log records.
 //!
-//! Steps, in the order [`tick`] runs them: [`replicas`] (R1 level), [`placement`] (the
-//! Scheduler's decision step), [`repair`] (R4 level). A step that retries a subject waits
-//! between its attempts ([`waits`]).
+//! Steps, in the order [`tick`] runs them: [`replicas`] (R1 level), [`per_node`] (one instance
+//! per node of a placed scope), [`placement`] (the Scheduler's decision step), [`repair`] (R4
+//! level). A step that retries a subject waits between its attempts ([`waits`]).
 
 use serde_json::Value;
 use weft_impl::{Ports, System};
@@ -19,6 +19,7 @@ use weft_server::weft_control;
 use weft_system::SystemEvent;
 use weft_types::actor::{Actor, Caller};
 
+pub mod per_node;
 pub mod placement;
 pub mod repair;
 pub mod replicas;
@@ -58,6 +59,7 @@ pub struct Sent {
 /// Runs every step once over `context`: the commands sent, in order.
 pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
     let mut sent = replicas::tick(system, context.held);
+    sent.extend(per_node::tick(system, context));
     sent.extend(placement::tick(system, context));
     sent.extend(repair::tick(system, context));
     sent

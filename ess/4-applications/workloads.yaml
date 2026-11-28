@@ -93,6 +93,12 @@ entities:
         type: Boolean
       - name: warm_pool_id
         type: Optional<weft.shared.WarmPoolId>
+      # story:slot-node-pool-placement: the node this instance belongs to as one instance of a
+      # scope placed on a pool or host (an instance of a pool scope is a node of the pool): one
+      # instance of a workload per such node. It is never placed on another node (decision D-S2
+      # A); absent for every other instance.
+      - name: scope_node_id
+        type: Optional<weft.shared.NodeId>
       # Sketch line 260: "Snapshot (freeze and restore an instance)".
       - name: restored_from
         type: Optional<weft.shared.SnapshotId>
@@ -190,6 +196,12 @@ entities:
         target: weft.infrastructure.Node
         cardinality: one
         via: node_id
+      # story:slot-node-pool-placement: the scope instance (a node) this instance belongs to.
+      - name: scope_node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: scope_node_id
     invariants:
       - restarts >= 0
       - restarts_in_window >= 0
@@ -322,6 +334,9 @@ errors:
   # Section 14 "Reconciliation": the refusals of the level and time steps.
   - name: weft.workloads.ReplicaLive
     summary: A live instance of the service already holds this replica index; nothing is created.
+  # story:slot-node-pool-placement: one instance of a workload per scope node.
+  - name: weft.workloads.ScopeNodeLive
+    summary: A live instance of the workload already belongs to this scope node; nothing is created.
 
   # story:workload-environment-and-args: a runtime's inputs are declared once.
   - name: weft.workloads.InputsAlreadyDeclared
@@ -584,6 +599,9 @@ commands:
       - {name: warm_pool_id, type: Optional<weft.shared.WarmPoolId>}
       # Section 14 R1 (line 585): the Service whose replica this is, as ReplicaRequested names it.
       - {name: service_id, type: Optional<weft.shared.ServiceId>}
+      # story:slot-node-pool-placement: the scope node (a node of a pool scope, or the node of a
+      # host scope) this instance belongs to, as the level step of one instance per node names it.
+      - {name: scope_node_id, type: Optional<weft.shared.NodeId>}
     outcomes:
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
@@ -608,6 +626,9 @@ commands:
       - name: no-service
         when_related: {via: input.service_id, exists: false}
         error: weft.workloads.ServiceNotFound
+      - name: no-scope-node
+        when_related: {via: input.scope_node_id, exists: false}
+        error: weft.workloads.NotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
         error: weft.workloads.WorkloadIsRetired
@@ -648,6 +669,21 @@ commands:
               - any: [state == Pending, state == Scheduled, state == Starting, state == Running, state == Paused]
           exists: true
         error: weft.workloads.ReplicaLive
+      # story:slot-node-pool-placement: one instance of a workload per scope node, so a second level
+      # pass, or a repeated one, creates none.
+      - name: scope-node-live
+        when:
+          all: [defined(scope_node_id)]
+        when_related:
+          entity: weft.workloads.Instance
+          where:
+            all:
+              - defined(scope_node_id)
+              - workload_id == input.workload_id
+              - scope_node_id == input.scope_node_id
+              - any: [state == Pending, state == Scheduled, state == Starting, state == Running, state == Paused]
+          exists: true
+        error: weft.workloads.ScopeNodeLive
       - name: created
         creates: weft.workloads.Instance
         instance: instance_id
@@ -665,9 +701,13 @@ commands:
           service_id: input.service_id
           replica_counted_out: false
           warm_pool_id: input.warm_pool_id
+          scope_node_id: input.scope_node_id
           desired: Run
           ready: false
           health: Unknown
+          # story:slot-node-pool-placement: with a scope node, each `${instance}` in a process's
+          # command and in its environment values is the scope node's name (UNMAPPED: no `sets`
+          # form writes a substitution; the behaviour writes it at creation).
           processes: {related: {via: input.workload_id, field: processes}}
           restart_policy: {related: {via: input.workload_id, field: restart_policy}}
           restarts: 0

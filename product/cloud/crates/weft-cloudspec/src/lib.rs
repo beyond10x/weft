@@ -336,4 +336,34 @@ impl Submission {
     pub fn source_digest(&self) -> &str {
         &self.source_digest
     }
+
+    /// The placement of the scope part `scope` (`parts.<scope>` with `block: scope`): its
+    /// `host` or its `pool` by name (`weft.scope.Placement`; `lease` is not read here). `None` for
+    /// a scope with no placement, for one that names neither, and for a key that is not a scope
+    /// part.
+    pub fn placement(&self, scope: &str) -> Option<Placement> {
+        let part = self.architecture.get("parts")?.get(scope)?;
+        if part.get("block").and_then(Value::as_str) != Some("scope") {
+            return None;
+        }
+        let placement = part.get("placement")?;
+        let named = |key: &str| {
+            placement
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        };
+        named("host")
+            .map(Placement::Host)
+            .or_else(|| named("pool").map(Placement::Pool))
+    }
+}
+
+/// Where a scope of an architecture runs (`weft.scope.Placement`), by name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Placement {
+    /// `host: <name>`: the one node of that name.
+    Host(String),
+    /// `pool: <name>`: the nodes of the node pool of that name.
+    Pool(String),
 }

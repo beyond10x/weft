@@ -22,6 +22,7 @@ pub mod context;
 pub mod conversions;
 pub mod documents;
 pub mod log;
+pub mod placement;
 pub mod quota;
 pub mod storage;
 pub mod transformations;
