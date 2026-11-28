@@ -2,11 +2,13 @@
 format: aep.planning-md/3
 id: decision-blocker:cloudspec-snippet-job-instances
 kind: decision-blocker
-status: open
+status: cleared
 title: Nobody has decided how a job-shaped snippet of a release reaches an instance on a node, and what finished means
 relations:
 - blocks: epic:cloudspec-submission
-revision: 2
+revision: 3
+transitions:
+- {from: "open", to: "cleared", at: "2026-11-28T13:46:33Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
 ---
 # Nobody has decided how a job-shaped snippet of a release reaches an instance on a node, and what finished means
 

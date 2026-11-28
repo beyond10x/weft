@@ -2,12 +2,14 @@
 format: aep.planning-md/3
 id: decision-blocker:cloudspec-snippet-workload-definition
 kind: decision-blocker
-status: open
+status: cleared
 title: Nobody has decided which command turns a snippet part of a planned cloudspec revision into a workload
 relations:
 - blocks: epic:cloudspec-submission
 - blocks: story:slot-node-process
-revision: 2
+revision: 3
+transitions:
+- {from: "open", to: "cleared", at: "2026-11-28T13:46:33Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
 ---
 # Nobody has decided which command turns a snippet part of a planned cloudspec revision into a workload
 
