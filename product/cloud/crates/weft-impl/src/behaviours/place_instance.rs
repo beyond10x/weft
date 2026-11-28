@@ -8,7 +8,10 @@
 //! 3. the present-related refusals and the row-set guards, in declaration order: `not-pending`,
 //!    `already-reserved`, `other-account` (the request's scope is not the input's),
 //!    `other-tenant` (no account of the input's tenant holds the input's scope),
-//!    `other-formation`, `other-cluster` (the cluster's `formations` do not list the formation:
+//!    `instance-of-other-scope` (the request's instance is missing or of another scope; answers
+//!    `NotFound`), `other-formation`, `instance-of-other-formation` (the workload of the
+//!    request's instance is missing or of another formation; answers `NotFound`),
+//!    `other-cluster` (the cluster's `formations` do not list the formation:
 //!    a formation is placed only in the cluster `weft.cluster.PinFormation` pinned it to),
 //!    `binding-of-other-account`, `binding-on-other-node`, `below-microvm`, `below-user-kernel`,
 //!    `below-container`, `below-cluster-microvm`, `below-cluster-user-kernel`,
@@ -25,8 +28,8 @@
 //!      `Active`) that neither one of those decisions nor this placement's input names, so no
 //!      claim is taken twice; a node with no observed capacity has none;
 //!    - `quota-exceeded`: the request's claims against what its scope holds besides the
-//!      request's own instance, which `CreateInstance` already counted
-//!      ([`crate::quota::exceeded_besides`]);
+//!      request's own instance ([`crate::quota::exceeded_besides`]); a `Pending` instance holds
+//!      quota only while a decision of it holds a node ([`crate::quota::holds_quota`]);
 //!    - `device-not-wiped`: a `Wiping` device of the node that a binding of the placement, on
 //!      that node, names;
 //! 5. `placed`, the branch the contract takes otherwise: a `Reserved` decision with the
@@ -37,8 +40,8 @@ use std::collections::HashMap;
 
 use weft_types::behaviour::{
     AccountStorage, BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage,
-    DeviceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage,
-    SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage,
+    DeviceStorage, InstanceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage,
+    SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage, WorkloadStorage,
 };
 use weft_types::claims::BindingState;
 use weft_types::cluster::ClusterNodePoolState;
@@ -128,10 +131,24 @@ impl PlaceInstanceBehavior for Ports {
                 error: RequestMismatch,
             });
         }
+        // Deny by default: a request whose instance row is missing, or is another scope's, is
+        // answered as a missing request.
+        let instance = InstanceStorage::get(self, &request.data.instance_id)
+            .filter(|instance| instance.data.scope_id == input.scope_id);
+        let Some(instance) = instance else {
+            return Ok(PlaceInstanceOutcome::InstanceOfOtherScope { error: NotFound });
+        };
         if request.data.formation_id != input.formation_id {
             return Ok(PlaceInstanceOutcome::OtherFormation {
                 error: RequestMismatch,
             });
+        }
+        // Deny by default: an instance whose workload row is missing, or is of another
+        // formation, is answered as a missing request.
+        if WorkloadStorage::get(self, &instance.data.workload_id)
+            .is_none_or(|workload| workload.data.formation_id != input.formation_id)
+        {
+            return Ok(PlaceInstanceOutcome::InstanceOfOtherFormation { error: NotFound });
         }
         // Deny by default: a formation the cluster does not list (one not pinned to it, by
         // `weft.cluster.PinFormation`) is another cluster's.

@@ -9,10 +9,16 @@
 //!
 //! - A quota (`weft.accounts.Quota`) bounds what its account and the accounts that drew from it
 //!   hold together: its `limit`. The quotas above an account's are its `parent_quota_id` chain.
-//! - What an account holds of a class is the sum of the claims of the workloads of its live
-//!   instances (`Pending`, `Scheduled`, `Starting`, `Running`, `Paused`: the states
-//!   `replica-live` counts as live). Each live instance counts against its account's quota for
-//!   the class and every quota above it.
+//! - What an account holds of a class is the sum of the claims of the workloads of the instances
+//!   that hold their claims ([`holds_quota`]): an instance from `Scheduled` on (`Scheduled`,
+//!   `Starting`, `Running`, `Paused`), and a `Pending` one only while a placement decision of it
+//!   holds a node (`Reserved`, `Bound`, `Evicting`). A `Pending` instance with no such decision
+//!   holds nothing: it waits for `PlaceInstance` to admit it, and two of them past the quota do
+//!   not refuse each other. Each instance that holds counts against its account's quota for the
+//!   class and every quota above it. `weft.accounts.Quota` says what a quota bounds ("How much
+//!   of one resource class one account may hold") and `PlaceInstance` `quota-exceeded` ("the
+//!   claims exceed the remaining quota at some level of the account tree"); neither names the
+//!   instances that hold, so this is weft's reading.
 //! - An account with no quota for a class may hold none of it (`weft.accounts.Quota`: "an
 //!   account with no quota row for a class ... Taken: no (default deny)").
 //!
@@ -20,22 +26,26 @@
 //! holds ([`exceeded`]). `DefineWorkload` and `DefineService` make no instance; they declare
 //! what their instances will take, and are refused only where that alone passes a limit
 //! ([`exceeded_alone`]): one instance of the workload, and `replicas` instances of the service.
-//! A definition is not refused because the scope's live instances hold its quota (a new
+//! A definition is not refused because the scope's instances hold its quota (a new
 //! revision is defined while the old one runs). The blocks take `CreateInstance` out of the
-//! group: its instance is live from `Pending` on, and `PlaceInstance` (weft's run-time
-//! admission) places it only while its claims and what the scope holds besides it stay within
-//! the quota ([`exceeded_besides`]).
+//! group: its instance is created `Pending` whatever the quota, and `PlaceInstance` (weft's
+//! run-time admission) places it only while its claims and what the scope holds besides it stay
+//! within the quota ([`exceeded_besides`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use weft_types::accounts::QuotaData;
-use weft_types::behaviour::{AccountStorage, InstanceStorage, QuotaStorage, WorkloadStorage};
+use weft_types::behaviour::{
+    AccountStorage, InstanceStorage, PlacementDecisionStorage, QuotaStorage, WorkloadStorage,
+};
+use weft_types::scheduling::PlacementDecisionState;
 use weft_types::shared::{AccountId, InstanceId, ScopeId};
 use weft_types::workloads::{ClaimRequest, InstanceState};
 
 use crate::Ports;
 
-/// Whether an instance in `state` holds its claims.
+/// Whether an instance in `state` is live (`replica-live`: `Pending`, `Scheduled`, `Starting`,
+/// `Running`, `Paused`). What holds quota is [`holds_quota`].
 pub fn live(state: InstanceState) -> bool {
     matches!(
         state,
@@ -45,6 +55,20 @@ pub fn live(state: InstanceState) -> bool {
             | InstanceState::Running
             | InstanceState::Paused
     )
+}
+
+/// Whether an instance in `state` holds its claims against its quota: from `Scheduled` on, and
+/// while `Pending` only when `placed` (a placement decision of it is `Reserved`, `Bound` or
+/// `Evicting`).
+pub fn holds_quota(state: InstanceState, placed: bool) -> bool {
+    match state {
+        InstanceState::Pending => placed,
+        InstanceState::Scheduled
+        | InstanceState::Starting
+        | InstanceState::Running
+        | InstanceState::Paused => true,
+        InstanceState::Exited | InstanceState::Failed | InstanceState::Evicted => false,
+    }
 }
 
 /// Whether adding `claims` to what `scope` holds would take its quota, or a quota above it,
@@ -60,9 +84,9 @@ pub fn exceeded_alone(ports: &Ports, scope: &ScopeId, claims: &[ClaimRequest]) -
 }
 
 /// Whether `claims`, added to what `scope` holds besides the instance `own`, would take its
-/// quota, or a quota above it, past its limit for a class the claims name: the claims of an
-/// instance that already counts as held (`weft.scheduling.PlaceInstance` places an instance
-/// `CreateInstance` admitted), against the quota the others leave.
+/// quota, or a quota above it, past its limit for a class the claims name: the claims of the
+/// instance `weft.scheduling.PlaceInstance` places, against the quota the others leave, so an
+/// instance that holds already is not counted twice.
 pub fn exceeded_besides(
     ports: &Ports,
     scope: &ScopeId,
@@ -83,14 +107,14 @@ pub fn times(claims: &[ClaimRequest], count: i64) -> Vec<ClaimRequest> {
         .collect()
 }
 
-/// What of the account's live instances [`past`] counts as held.
+/// What of the instances that hold quota ([`holds_quota`]) [`past`] counts as held.
 #[derive(Clone, Copy)]
 enum Held<'a> {
     /// None: the claims alone.
     Nothing,
-    /// Every live instance.
+    /// Every instance that holds quota.
     All,
-    /// Every live instance but this one.
+    /// Every instance that holds quota but this one.
     AllBut(&'a InstanceId),
 }
 
@@ -132,6 +156,19 @@ fn past(ports: &Ports, scope: &ScopeId, claims: &[ClaimRequest], held: Held<'_>)
         .into_iter()
         .map(|workload| (workload.data.workload_id.0 .0, workload.data.claims))
         .collect();
+    // The instances a placement decision holds a node for.
+    let placed: HashSet<String> = PlacementDecisionStorage::list(ports)
+        .into_iter()
+        .filter(|decision| {
+            matches!(
+                decision.state,
+                PlacementDecisionState::Reserved
+                    | PlacementDecisionState::Bound
+                    | PlacementDecisionState::Evicting
+            )
+        })
+        .map(|decision| decision.data.instance_id.0 .0)
+        .collect();
     let mut holding: HashMap<String, i64> = HashMap::new();
     for instance in InstanceStorage::list(ports) {
         let counted = match held {
@@ -139,7 +176,12 @@ fn past(ports: &Ports, scope: &ScopeId, claims: &[ClaimRequest], held: Held<'_>)
             Held::All => true,
             Held::AllBut(own) => &instance.data.instance_id != own,
         };
-        if !counted || !live(instance.state) {
+        if !counted
+            || !holds_quota(
+                instance.state,
+                placed.contains(&instance.data.instance_id.0 .0),
+            )
+        {
             continue;
         }
         let Some(workload_claims) = claims_of.get(&instance.data.workload_id.0 .0) else {
