@@ -1,0 +1,4 @@
+domain: weft.shared
+types:
+  ScopeId:
+    kind: identifier

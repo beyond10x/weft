@@ -101,3 +101,43 @@ jobs:
       - name: Run the gate
         if: steps.paths.outputs.skip != 'true'
         run: task check
+
+  # The slow lane's vendor hook in CI: when a pull request or push changes ess/cloud/** or
+  # CLOUDSPEC_REV of Taskfile.yml (a run by hand always), fetch cloudspec at the pin and run its
+  # scripts/vendor.sh --check on ess/cloud (tools/slow.d/20-vendor-fresh.sh). The gate job checks
+  # the lock offline (tools/check.d/15-vendor-lock.sh).
+  vendor-fresh:
+    name: vendor-fresh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Vendored blocks or their pin changed
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          case "$EVENT" in
+            pull_request) base=$PR_BASE ;;
+            push) base=$PUSH_BEFORE ;;
+            *) base= ;;
+          esac
+          run=true
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2> /dev/null; then
+            if git diff --quiet "$base" HEAD -- ess/cloud &&
+              ! git diff -U0 "$base" HEAD -- Taskfile.yml | grep -q '^[-+][[:space:]]*CLOUDSPEC_REV:'; then
+              run=false
+            fi
+          fi
+          echo "vendor-fresh: run=$run (event $EVENT, base ${base:-none})"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+      - name: Copy the blocks afresh at CLOUDSPEC_REV and compare (tools/slow.d/20-vendor-fresh.sh)
+        if: steps.changed.outputs.run == 'true'
+        run: tools/slow.d/20-vendor-fresh.sh
