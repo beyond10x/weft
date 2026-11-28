@@ -3687,7 +3687,8 @@ mod adversary_cloud_blocks_rust {
     use weft_types::primitives::Uuid;
     use weft_types::scheduling::obligations::PlaceInstanceBehavior;
     use weft_types::scheduling::{
-        PlaceInstance, PlacementDecisions, SchedulingRequestSnapshot, SchedulingRequestState,
+        PlaceInstance, PlacementDecisionState, PlacementDecisions, SchedulingRequestSnapshot,
+        SchedulingRequestState,
     };
     use weft_types::shared::{
         AccountId, InstanceId, IsolationLevel, QuotaId, SchedulingRequestId, ScopeId, ServiceId,
@@ -3799,14 +3800,23 @@ mod adversary_cloud_blocks_rust {
         for _ in 0..4 {
             r.w.process.host().tick();
         }
-        let placed: Vec<_> = decisions(&r)
+        // Both instances are Pending and neither holds quota until it is placed, so the
+        // Scheduler may place either one first; the quota then holds the other back.
+        let held: Vec<_> = decisions(&r)
             .into_iter()
-            .filter(|row| row.instance_id == r.request.data.instance_id)
+            .filter(|row| {
+                matches!(
+                    row.state,
+                    PlacementDecisionState::Reserved
+                        | PlacementDecisionState::Bound
+                        | PlacementDecisionState::Evicting
+                )
+            })
             .collect();
         assert_eq!(
-            placed.len(),
+            held.len(),
             1,
-            "the replica within the quota is not placed: {:?}",
+            "a quota of 1 and two replicas: exactly one is placed: {:?}",
             decisions(&r)
         );
     }
