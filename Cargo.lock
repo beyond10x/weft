@@ -1509,6 +1509,7 @@ dependencies = [
  "time",
  "uuid",
  "weft-api",
+ "weft-cloudspec",
  "weft-control",
  "weft-edge",
  "weft-node",
