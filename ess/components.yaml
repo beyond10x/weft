@@ -1127,7 +1127,9 @@ bindings:
   #   R4 level  scheduling.UnassignedPlacements   -> nodes.Assign                   -> Scheduler
   #             (repairs a lost or dropped r4-assign delivery, `assigned_at` from the
   #             Scheduler's clock; an `already-assigned` answer is followed by
-  #             scheduling.RecordPlacementAssigned for the row)
+  #             scheduling.RecordPlacementAssigned for the row only where nodes.Assignments
+  #             holds an Active assignment of the row's decision; otherwise the row is left to
+  #             the R3 time step on scheduling.OverdueUnassignedPlacements)
   #   R6 level  workloads.PendingStopsToWithdraw  -> workloads.StopInstance         -> Scheduler
   #   R7 level  deployments.OpenDrifts            -> deployments.ReapplyDrift (row with step_id)
   #                                                  or deployments.EscalateDrift   -> ReleaseController

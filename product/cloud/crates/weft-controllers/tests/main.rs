@@ -1886,6 +1886,37 @@ mod placement {
         assert_eq!(rows[0].node_id, first);
     }
 
+    /// Two replicas that each fill a node of `cpu` 1: the first node in the view's order takes
+    /// one, and the other, refused there (`no-capacity`), is placed on the next node.
+    #[test]
+    fn a_replica_the_first_node_has_no_room_for_is_placed_on_the_next() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut row = weft_types::behaviour::NodeStorage::get(&ports, &r.node).expect("the row");
+        row.data.capacity = Some(vec![weft_types::shared::ResourceAmount {
+            resource_class: weft_types::shared::ResourceClassName("cpu".to_owned()),
+            amount: 1,
+        }]);
+        weft_types::behaviour::NodeStorage::put(&mut ports, row);
+        let first = another_node(&ports, &r.node, FIRST);
+        let key = weft_types::shared::ServiceId(Uuid(r.w.ids.service_id.clone()));
+        let mut service =
+            weft_types::behaviour::ServiceStorage::get(&ports, &key).expect("the service row");
+        service.data.replicas = 2;
+        weft_types::behaviour::ServiceStorage::put(&mut ports, service);
+
+        for _ in 0..3 {
+            r.w.process.host().tick();
+        }
+        let mut nodes: Vec<_> = decisions(&r)
+            .into_iter()
+            .filter(|row| row.state == PlacementDecisionState::Bound)
+            .map(|row| row.node_id)
+            .collect();
+        nodes.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
+        assert_eq!(nodes, [first, r.node.clone()]);
+    }
+
     /// A refusal of the request itself (`quota-exceeded`) ends its attempt on the first node;
     /// the attempts back off from one tick doubling up to 32, one `PlaceInstance` each: over
     /// 100 ticks, 8 lines, at most log2(100) + 2, and the wait lives in the state file. Once the
@@ -2720,7 +2751,7 @@ mod place_instance {
 
     /// `placed` writes a `Reserved` decision with the request's and the input's fields and
     /// publishes `InstancePlaced`. The request's own instance does not count against its quota,
-    /// and only the live bindings on the node hold its capacity.
+    /// and of the bindings only the live ones on the node hold its capacity.
     #[test]
     fn place_instance_writes_the_decision_from_the_request_and_the_input() {
         let r = Ready::new();
@@ -2797,6 +2828,118 @@ mod place_instance {
         );
         let request = SchedulingRequestStorage::get(&ports, &request.request_id).expect("it");
         assert_eq!(request.state, SchedulingRequestState::Pending);
+    }
+
+    /// The answer of `input`, whatever it writes.
+    fn answer(r: &Ready, input: &PlaceInstance) -> String {
+        let mut ports = r.ports();
+        outcome_name(
+            &PlaceInstanceBehavior::place_instance(&mut ports, input.clone()).expect("an outcome"),
+        )
+    }
+
+    /// Another request of the world's tenant, a copy of the world's request claiming `cpu`
+    /// `amount`, and its decision on the world's node in `state`, naming `bindings`. The world's
+    /// request is left `Pending`.
+    fn held(
+        r: &Ready,
+        amount: i64,
+        state: PlacementDecisionState,
+        bindings: Vec<BindingId>,
+    ) -> weft_types::shared::PlacementDecisionId {
+        let mut ports = r.ports();
+        let mut other = r.request.clone();
+        other.data.request_id = SchedulingRequestId(id());
+        other.data.instance_id = InstanceId(id());
+        other.state = SchedulingRequestState::Placed;
+        other.data.claims = vec![weft_types::workloads::ClaimRequest {
+            name: "cpu".to_owned(),
+            class: ResourceClassName("cpu".to_owned()),
+            amount,
+            sharing: None,
+            selector: std::collections::BTreeMap::new(),
+        }];
+        SchedulingRequestStorage::put(&mut ports, other.clone());
+        let decision = r.bound();
+        let mut row = PlacementDecisionStorage::get(&ports, &decision).expect("the decision");
+        row.state = state;
+        row.data.request_id = other.data.request_id;
+        row.data.instance_id = other.data.instance_id;
+        row.data.bindings = bindings;
+        PlacementDecisionStorage::put(&mut ports, row);
+        set_request(r, |row| row.state = SchedulingRequestState::Pending);
+        decision
+    }
+
+    /// The world's request claims, in `cpu`, `wanted`; the node's capacity is `cpu` `capacity`.
+    fn sized(r: &Ready, wanted: i64, capacity: i64) {
+        set_request(r, |row| {
+            row.data.claims = vec![weft_types::workloads::ClaimRequest {
+                name: "cpu".to_owned(),
+                class: ResourceClassName("cpu".to_owned()),
+                amount: wanted,
+                sharing: None,
+                selector: std::collections::BTreeMap::new(),
+            }];
+        });
+        set_node(r, |row| {
+            row.data.capacity = Some(vec![ResourceAmount {
+                resource_class: ResourceClassName("cpu".to_owned()),
+                amount: capacity,
+            }]);
+        });
+    }
+
+    /// `no-capacity` counts the claims of each decision that holds the node (`Reserved`,
+    /// `Bound`, `Evicting`), and none of a `Released` one.
+    #[test]
+    fn the_claims_of_each_decision_that_holds_the_node_take_its_capacity() {
+        for (state, expected) in [
+            (PlacementDecisionState::Reserved, "no-capacity"),
+            (PlacementDecisionState::Bound, "no-capacity"),
+            (PlacementDecisionState::Evicting, "no-capacity"),
+            (PlacementDecisionState::Released, "placed"),
+        ] {
+            let r = Ready::new();
+            sized(&r, 1, 1);
+            held(&r, 1, state, Vec::new());
+            assert_eq!(answer(&r, &base(&r)), expected, "a {state:?} decision");
+        }
+    }
+
+    /// A live binding that a live decision on the node names is that decision's claim, counted
+    /// once with the decision; a live binding no decision names is counted on its own.
+    #[test]
+    fn a_binding_of_a_live_decision_is_counted_once_and_an_unnamed_one_on_its_own() {
+        let r = Ready::new();
+        sized(&r, 1, 2);
+        let mut ports = r.ports();
+        let account = r.request.data.account_id.clone();
+        let cpu = claim(&mut ports, &account, "cpu", 1);
+        let named = binding(
+            &mut ports,
+            &cpu,
+            Some(&r.node),
+            BindingState::Active,
+            Vec::new(),
+        );
+        held(&r, 1, PlacementDecisionState::Bound, vec![named]);
+        assert_eq!(answer(&r, &base(&r)), "placed", "2 - 1 leaves 1");
+
+        let r = Ready::new();
+        sized(&r, 1, 2);
+        let mut ports = r.ports();
+        let account = r.request.data.account_id.clone();
+        let cpu = claim(&mut ports, &account, "cpu", 1);
+        binding(
+            &mut ports,
+            &cpu,
+            Some(&r.node),
+            BindingState::Active,
+            Vec::new(),
+        );
+        held(&r, 1, PlacementDecisionState::Bound, Vec::new());
+        assert_eq!(answer(&r, &base(&r)), "no-capacity", "2 - 1 - 1 leaves 0");
     }
 }
 
@@ -2954,5 +3097,269 @@ mod assign {
                 ended_at: None,
             }
         );
+    }
+}
+
+/// The cases of the adversary pass on `story:skeleton-controllers`.
+mod adversary_placement {
+    use weft_impl::bindings::outcome_name;
+    use weft_impl::context::mint;
+    use weft_impl::Ports;
+    use weft_types::behaviour::{
+        AssignmentStorage, BindingStorage, ClaimStorage, NodeStorage, PlacementDecisionStorage,
+        SchedulingRequestStorage, ServiceStorage,
+    };
+    use weft_types::claims::{
+        BindingData, BindingSnapshot, BindingState, ClaimData, ClaimHolder, ClaimSnapshot,
+        ClaimState, InstanceHolder,
+    };
+    use weft_types::nodes::{AssignmentData, AssignmentSnapshot, AssignmentState, DesiredState};
+    use weft_types::primitives::Uuid;
+    use weft_types::scheduling::obligations::PlaceInstanceBehavior;
+    use weft_types::scheduling::{PlaceInstance, PlacementDecisionState, SchedulingRequestState};
+    use weft_types::shared::{
+        AssignmentId, BindingId, ClaimId, InstanceId, IsolationLevel, NodeId, PlacementDecisionId,
+        ResourceAmount, ResourceClassName, SchedulingRequestId, ServiceId, Sharing, StampedAt,
+        TenantId,
+    };
+
+    use super::ready::{at, make_ready, Ready};
+
+    fn id() -> Uuid {
+        Uuid(mint())
+    }
+
+    /// Sets the node's observed `cpu` capacity.
+    fn set_cpu(r: &Ready, amount: i64) {
+        let mut ports = r.ports();
+        let mut row = NodeStorage::get(&ports, &r.node).expect("the node row");
+        row.data.capacity = Some(vec![ResourceAmount {
+            resource_class: ResourceClassName("cpu".to_owned()),
+            amount,
+        }]);
+        NodeStorage::put(&mut ports, row);
+    }
+
+    /// The input that places the world's request on its node at `isolation`.
+    fn input(r: &Ready, isolation: IsolationLevel) -> PlaceInstance {
+        let request = &r.request.data;
+        let node = NodeStorage::get(&r.ports(), &r.node).expect("the node row");
+        PlaceInstance {
+            request_id: request.request_id.clone(),
+            tenant_id: request.tenant_id.clone(),
+            account_id: request.account_id.clone(),
+            cluster_id: request.cluster_id.clone(),
+            node_id: r.node.clone(),
+            node_pool_id: node.data.node_pool_id,
+            zone: node.data.zone,
+            isolation,
+            bindings: Vec::new(),
+            cluster_node_pool_id: None,
+            topology_group_id: None,
+            peer_groups: Vec::new(),
+            decided_at: StampedAt(at(-1)),
+        }
+    }
+
+    fn outcome(r: &Ready, input: PlaceInstance) -> String {
+        let mut ports: Ports = r.ports();
+        outcome_name(&PlaceInstanceBehavior::place_instance(&mut ports, input).expect("an outcome"))
+    }
+
+    /// A decision of another tenant's instance on the world's node at `isolation`, in `state`;
+    /// the world's request left `Pending`.
+    fn other_tenant(r: &Ready, isolation: IsolationLevel, state: PlacementDecisionState) {
+        let mut ports = r.ports();
+        let decision = r.bound();
+        let mut row = PlacementDecisionStorage::get(&ports, &decision).expect("the decision");
+        row.state = state;
+        row.data.request_id = SchedulingRequestId(id());
+        row.data.tenant_id = TenantId(id());
+        row.data.instance_id = InstanceId(id());
+        row.data.isolation = isolation;
+        PlacementDecisionStorage::put(&mut ports, row);
+        let mut request = SchedulingRequestStorage::get(&ports, &r.request.data.request_id)
+            .expect("the request row");
+        request.state = SchedulingRequestState::Pending;
+        SchedulingRequestStorage::put(&mut ports, request);
+    }
+
+    /// Target 3, over-commit across ticks. A service of 2 replicas, each claiming `cpu` 1, and
+    /// one Ready node with an open session whose observed `cpu` capacity is 1: the node can
+    /// hold one of them. Tick 1 places replica 0 and creates replica 1's request; tick 2 must
+    /// not place replica 1 on the same node (`no-capacity`, `ess/5-runtime/scheduling.yaml`:
+    /// "the node's free capacity does not cover the claims").
+    #[test]
+    fn two_replicas_that_each_fill_the_node_are_not_both_placed_on_it() {
+        let r = Ready::new();
+        set_cpu(&r, 1);
+        let mut ports = r.ports();
+        let key = ServiceId(Uuid(r.w.ids.service_id.clone()));
+        let mut service = ServiceStorage::get(&ports, &key).expect("the service row");
+        service.data.replicas = 2;
+        ServiceStorage::put(&mut ports, service);
+
+        for _ in 0..3 {
+            r.w.process.host().tick();
+        }
+        let requests = SchedulingRequestStorage::list(&r.ports());
+        assert_eq!(
+            requests.len(),
+            2,
+            "positive control, two requests: {requests:?}"
+        );
+        let holding: Vec<_> = PlacementDecisionStorage::list(&r.ports())
+            .into_iter()
+            .filter(|row| {
+                row.data.node_id == r.node
+                    && matches!(
+                        row.state,
+                        PlacementDecisionState::Reserved | PlacementDecisionState::Bound
+                    )
+            })
+            .map(|row| (row.data.request_id.0 .0, row.state))
+            .collect();
+        assert_eq!(
+            holding.len(),
+            1,
+            "node with cpu 1 holds {} placements of cpu 1 each: {holding:?}",
+            holding.len()
+        );
+    }
+
+    /// Target 1, `no-capacity`. The placement names its own `Reserved` binding on the node
+    /// (`binding-on-other-node`, `device-not-wiped`: "a reserved binding of this placement"),
+    /// whose claim is the request's `cpu` 1; the node's capacity is `cpu` 1. The binding is the
+    /// request's own claim, so the request's claims fit: counting the binding and the claims
+    /// both takes 2 of 1.
+    #[test]
+    fn a_placement_naming_its_own_reserved_binding_does_not_count_its_claim_twice() {
+        let r = Ready::new();
+        set_cpu(&r, 1);
+        let mut ports = r.ports();
+        let claim_id = ClaimId(id());
+        ClaimStorage::put(
+            &mut ports,
+            ClaimSnapshot {
+                state: ClaimState::Bound,
+                data: ClaimData {
+                    claim_id: claim_id.clone(),
+                    account_id: r.request.data.account_id.clone(),
+                    holder: ClaimHolder::Instance(InstanceHolder {
+                        instance_id: r.request.data.instance_id.clone(),
+                    }),
+                    class_name: ResourceClassName("cpu".to_owned()),
+                    amount: 1,
+                    sharing: Sharing::Exclusive,
+                    device_model: None,
+                    volume_id: None,
+                    filesystem_id: None,
+                    bucket_id: None,
+                    domain_name: None,
+                    egress_allow: Vec::new(),
+                    binding_id: None,
+                },
+            },
+        );
+        let binding_id = BindingId(id());
+        BindingStorage::put(
+            &mut ports,
+            BindingSnapshot {
+                state: BindingState::Reserved,
+                data: BindingData {
+                    binding_id: binding_id.clone(),
+                    claim_id,
+                    node_id: Some(r.node.clone()),
+                    zone: None,
+                    device_ids: Vec::new(),
+                    volume_id: None,
+                    address: None,
+                },
+            },
+        );
+        let mut placing = input(&r, IsolationLevel::Container);
+        placing.bindings = vec![binding_id];
+        assert_eq!(outcome(&r, placing), "placed");
+    }
+
+    /// Target 4, repair. The instance has an `Active` assignment that belongs to another
+    /// placement, on another node; this placement is bound and unassigned. `Assign` answers
+    /// `already-assigned` (an `Active` assignment of the instance), and the step then records
+    /// this placement assigned, though no assignment of it exists
+    /// (`RecordPlacementAssigned`: "weft.nodes created the assignment of a bound placement").
+    #[test]
+    fn an_already_assigned_answer_for_another_placement_does_not_record_this_one() {
+        let r = Ready::new();
+        let decision = r.bound();
+        let mut ports = r.ports();
+        AssignmentStorage::put(
+            &mut ports,
+            AssignmentSnapshot {
+                state: AssignmentState::Active,
+                data: AssignmentData {
+                    assignment_id: AssignmentId(id()),
+                    instance_id: r.request.data.instance_id.clone(),
+                    node_id: NodeId(id()),
+                    session_id: r.session.clone().expect("an open session"),
+                    placement_decision_id: PlacementDecisionId(id()),
+                    min_isolation: IsolationLevel::Container,
+                    desired: DesiredState::Run,
+                    snapshot_id: None,
+                    assigned_at: at(-10),
+                    lease_renewed_at: at(-10),
+                    ended_at: None,
+                },
+            },
+        );
+        r.w.process.host().tick();
+        let of_decision = AssignmentStorage::list(&r.ports())
+            .into_iter()
+            .filter(|row| row.data.placement_decision_id == decision)
+            .count();
+        let row = PlacementDecisionStorage::get(&r.ports(), &decision).expect("the decision");
+        assert_eq!(
+            (row.data.assigned, of_decision),
+            (false, 0),
+            "placement recorded assigned with {of_decision} assignments of its own"
+        );
+    }
+
+    /// Target 6, a guard mutant: `holds` without `Bound`. Another tenant's instance runs on the
+    /// node in a `Bound` placement at `Container`: placing this tenant's request there at
+    /// `Container` shares a kernel (`shared-kernel`, `state: [Reserved, Bound, Evicting]`).
+    #[test]
+    fn a_bound_placement_of_another_tenant_refuses_a_kernel_sharing_placement() {
+        let r = Ready::new();
+        other_tenant(&r, IsolationLevel::Container, PlacementDecisionState::Bound);
+        assert_eq!(
+            outcome(&r, input(&r, IsolationLevel::Container)),
+            "shared-kernel"
+        );
+        let mut ports = r.ports();
+        for mut row in PlacementDecisionStorage::list(&ports) {
+            if row.state == PlacementDecisionState::Bound {
+                row.state = PlacementDecisionState::Evicting;
+                PlacementDecisionStorage::put(&mut ports, row);
+            }
+        }
+        assert_eq!(
+            outcome(&r, input(&r, IsolationLevel::Container)),
+            "shared-kernel"
+        );
+    }
+
+    /// Target 6, a guard mutant: `shares_kernel` always true. A `MicroVm` placement shares no
+    /// kernel, so another tenant's `Container` placement on the node does not refuse it
+    /// (`shared-kernel`: `when: {isolation: [UserKernel, Container, ProcessSandbox]}`).
+    #[test]
+    fn a_microvm_placement_beside_another_tenants_container_is_placed() {
+        let r = Ready::new();
+        make_ready(
+            &r.ports(),
+            &r.node,
+            &[IsolationLevel::Container, IsolationLevel::MicroVm],
+        );
+        other_tenant(&r, IsolationLevel::Container, PlacementDecisionState::Bound);
+        assert_eq!(outcome(&r, input(&r, IsolationLevel::MicroVm)), "placed");
     }
 }

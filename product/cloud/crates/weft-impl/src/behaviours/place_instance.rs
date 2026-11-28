@@ -15,9 +15,12 @@
 //!    `cluster-pool-differs`, `group-not-of-node`, `crosses-closed-link`,
 //!    `isolation-not-offered`;
 //! 4. the external branches, in declaration order, decided from the rows of the same store:
-//!    - `no-capacity`: for a class the request claims, the node's observed capacity minus the
-//!      amounts its live bindings (`Reserved`, `Active`) hold, through their claims, is less
-//!      than the request claims; a node with no observed capacity has none;
+//!    - `no-capacity`: for a class the request claims, the node's free capacity is less than
+//!      the request claims. Free capacity is the node's observed capacity minus the claims of
+//!      the requests of the node's live decisions (`Reserved`, `Bound`, `Evicting`, the set
+//!      `holds` names) and minus the claims of the node's live bindings (`Reserved`,
+//!      `Active`) that neither one of those decisions nor this placement's input names, so no
+//!      claim is taken twice; a node with no observed capacity has none;
 //!    - `quota-exceeded`: the request's claims against what its account holds besides the
 //!      request's own instance, which `CreateInstance` already counted
 //!      ([`crate::quota::exceeded_besides`]);
@@ -50,7 +53,7 @@ use weft_types::scheduling::{
     RequestReserved, SchedulingRequestState, StateConflict, TenantKernelShared, TopologyMismatch,
     ZoneMismatch,
 };
-use weft_types::shared::{IsolationLevel, PlacementDecisionId};
+use weft_types::shared::{BindingId, IsolationLevel, PlacementDecisionId};
 
 use crate::context::{instant, mint};
 use crate::{quota, Ports};
@@ -317,14 +320,33 @@ impl PlaceInstanceBehavior for Ports {
             });
         }
 
-        // no-capacity: the node's observed capacity minus what its live bindings hold.
+        // no-capacity: the node's observed capacity minus the claims of its live decisions and
+        // minus the claims of its live bindings that none of those decisions and not this
+        // placement names: each claim is taken once.
         let mut free: HashMap<String, i64> = HashMap::new();
         for amount in node.data.capacity.iter().flatten() {
             *free.entry(amount.resource_class.0.clone()).or_default() += amount.amount;
         }
+        let mut counted: Vec<&BindingId> = input.bindings.iter().collect();
+        for decision in &decisions {
+            if decision.data.node_id != input.node_id || !holds(decision.state) {
+                continue;
+            }
+            // A decision whose request row is gone is counted through its bindings alone.
+            let Some(held) = SchedulingRequestStorage::get(self, &decision.data.request_id) else {
+                continue;
+            };
+            for claim in &held.data.claims {
+                *free.entry(claim.class.0.clone()).or_default() -= claim.amount;
+            }
+            counted.extend(&decision.data.bindings);
+        }
         for binding in &bindings {
             let live = matches!(binding.state, BindingState::Reserved | BindingState::Active);
-            if !live || binding.data.node_id.as_ref() != Some(&input.node_id) {
+            if !live
+                || binding.data.node_id.as_ref() != Some(&input.node_id)
+                || counted.contains(&&binding.data.binding_id)
+            {
                 continue;
             }
             if let Some(claim) = claims

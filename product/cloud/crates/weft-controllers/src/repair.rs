@@ -5,8 +5,13 @@
 //! The step repairs a lost or dropped delivery of `r4-assign` (a node with no open session when
 //! the placement was bound, and a gang member, whose placement no `PlacementBound` names): for
 //! each bound, unassigned placement, one `Assign` of its instance to its node. An
-//! `already-assigned` answer means the assignment exists and only the placement's record lags:
-//! the step then sends `weft.scheduling.RecordPlacementAssigned` for the row.
+//! `already-assigned` answer means the instance has an `Active` assignment. Where that
+//! assignment is this placement's (`weft.nodes.Assignments`, `placement_decision_id`), only the
+//! placement's record lags: the step then sends `weft.scheduling.RecordPlacementAssigned` for
+//! the row. Where it is another placement's, the step records nothing
+//! (`RecordPlacementAssigned` records that weft.nodes created the assignment of this
+//! placement), counts the attempt failed, and leaves the row to the R3 time step on
+//! `weft.scheduling.OverdueUnassignedPlacements`, which releases it 120 s after its decision.
 //!
 //! - One command per placement in flight: a placement whose `PlacementBound` (`r4-assign`) or
 //!   whose `InstanceAssigned` (`r4-record-placement-assigned`) the bindings hold for another
@@ -19,6 +24,8 @@ use weft_impl::context::timestamp;
 use weft_impl::System;
 use weft_system::SystemEvent;
 use weft_types::actor::Actor;
+use weft_types::nodes::AssignmentState;
+use weft_types::shared::PlacementDecisionId;
 
 use crate::waits::Waits;
 use crate::{outcome, send, Context, Sent};
@@ -65,7 +72,7 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
         let mut done = outcome(&answer).as_deref() == Some("assigned");
         let assigned_before = outcome(&answer).as_deref() == Some("already-assigned");
         sent.push(answer);
-        if assigned_before {
+        if assigned_before && assigned_to(system, &row.decision_id) {
             let input = json!({"decision_id": row.decision_id.0 .0});
             let answer = send(system, RECORD_PLACEMENT_ASSIGNED, Actor::Scheduler, &input);
             done = outcome(&answer).as_deref() == Some("recorded");
@@ -78,4 +85,14 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
         }
     }
     sent
+}
+
+/// Whether an `Active` assignment of the placement `decision` exists. A view the system cannot
+/// read answers no.
+fn assigned_to(system: &System, decision: &PlacementDecisionId) -> bool {
+    system.weft_control.assignments().is_ok_and(|rows| {
+        rows.iter().any(|row| {
+            row.state == AssignmentState::Active && &row.placement_decision_id == decision
+        })
+    })
 }
