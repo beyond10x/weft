@@ -10,8 +10,10 @@
 # infrastructure command.
 #
 # Layer 3: a cluster names an account (weft.accounts, layer 2) and a cloud, zones and node pools
-# (weft.infrastructure, layer 1). Formations (layer 4) will name a cluster (design § Step 3); this
-# file names nothing above layer 3, so every check on formations is an external refusal here.
+# (weft.infrastructure, layer 1). D-e A (story cloud-blocks-cluster-pinning): the vendored
+# weft.architecture.Formation (ess/cloud/, below weft's files) no longer names a cluster (cloudspec
+# C2), so a cluster records the formations that run in it (PinFormation), and
+# weft.scheduling.PlaceInstance refuses a request whose formation it does not list.
 #
 # Caller ties (docs/hardening/pass-1.md "The frame", D3 and "What changed"): every tenant command
 # compares the account it acts in with `caller.scope_id`; another account's row answers NotFound,
@@ -77,12 +79,23 @@ entities:
         type: weft.shared.IsolationLevel
       - name: zones
         type: List<weft.shared.ZoneName>
+      # D-e A: design § Step 3 "a formation deploys into one cluster", fixed once it is pinned.
+      # Empty at create; PinFormation appends. A formation is listed by at most one cluster
+      # (PinFormation `already-pinned`). OPEN: a retired formation stays listed (no command
+      # removes it); nothing reads a listed formation's state.
+      - name: formations
+        type: List<weft.shared.FormationId>
     relations:
       - name: cloud
         kind: references
         target: weft.infrastructure.Cloud
         cardinality: one
         via: cloud_id
+      - name: formations
+        kind: references
+        target: weft.architecture.Formation
+        cardinality: many
+        via: formations
       - name: account
         kind: references
         target: weft.scope.Scope
@@ -201,6 +214,8 @@ errors:
     summary: The infrastructure node pool does not exist, or is not in the pool's zone.
   - name: weft.cluster.UnknownParentGroup
     summary: The parent group does not exist in the topology, or is removed.
+  - name: weft.cluster.FormationAlreadyPinned
+    summary: The formation already runs in a cluster, and nothing changed.
 events:
   - name: weft.cluster.DefaultClusterCreated
     fields:
@@ -229,6 +244,11 @@ events:
   - name: weft.cluster.ClusterDeleted
     fields:
       - {name: cluster_id, type: weft.shared.ClusterId}
+
+  - name: weft.cluster.FormationPinned
+    fields:
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: formation_id, type: weft.shared.FormationId}
 
   # Carries every input of weft.infrastructure.CreateNodePool (sketch § 14 line 596: "The event
   # carries every field the command's input needs").
@@ -310,6 +330,7 @@ commands:
           control_plane: Shared
           min_isolation: input.min_isolation
           zones: input.zones
+          formations: []
         emits: [weft.cluster.DefaultClusterCreated]
         payload:
           weft.cluster.DefaultClusterCreated:
@@ -379,6 +400,7 @@ commands:
           control_plane: input.control_plane
           min_isolation: input.min_isolation
           zones: input.zones
+          formations: []
         emits: [weft.cluster.ClusterCreated]
         payload:
           weft.cluster.ClusterCreated:
@@ -442,12 +464,72 @@ commands:
             min_isolation: input.min_isolation
             zones: input.zones
 
+  # design § Step 3 and D-e A (story cloud-blocks-cluster-pinning): the account names the cluster
+  # its formation deploys into, once. The vendored weft.architecture.CreateFormation takes no
+  # cluster (cloudspec C2), so this is a command of its own; until it runs, PlaceInstance refuses
+  # every request of the formation (other-cluster, default deny). The default cluster (no account)
+  # takes every account's formations; another account's cluster and a deleted one answer as a
+  # missing one (as weft's CreateFormation did before the blocks were vendored).
+  # OPEN: moving a formation to another cluster. Taken: refused (`already-pinned`); a formation is
+  # fixed to its cluster, as it was fixed at creation before.
+  - name: weft.cluster.PinFormation
+    naming:
+      display: Run a formation in a cluster
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: formation_id, type: weft.shared.FormationId}
+    outcomes:
+      # hardening pass 1 D3: the formation is pinned only in the account the request acts in.
+      - name: not-callers-account
+        when: scope_id != caller.scope_id
+        error: weft.topology.NotFound
+      - name: no-such-cluster
+        when_related: {via: input.cluster_id, exists: false}
+        error: weft.topology.NotFound
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.topology.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.topology.NotFound
+      # A related-row guard, not `when_subject`: ESS 0.99.2 refuses a subject guard beside the
+      # row-set guard `already-pinned` (unsupported_construct).
+      - name: cluster-foreign
+        when_related:
+          via: input.cluster_id
+          predicate:
+            any:
+              - {all: ["defined(scope_id)", "scope_id != input.scope_id"]}
+              - state == Deleted
+        error: weft.topology.NotFound
+      - name: formation-retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.topology.StateConflict
+      - name: already-pinned
+        when_related:
+          entity: weft.cluster.Cluster
+          where: {exists: {in: formations, as: f, that: "f == input.formation_id"}}
+          exists: true
+        error: weft.cluster.FormationAlreadyPinned
+      - name: pinned
+        updates: weft.cluster.Cluster
+        instance: cluster_id
+        sets:
+          formations: {append: input.formation_id}
+        emits: [weft.cluster.FormationPinned]
+        payload:
+          weft.cluster.FormationPinned:
+            cluster_id: input.cluster_id
+            formation_id: input.formation_id
+
   # design § Step 2 "Commands: DeleteCluster (refused while a formation runs in it; or drain
   # first)" and open question 4 (default: refuse).
-  # Formations are weft.formations (layer 4, above this one), so "a formation runs in it" is an
-  # external refusal. OPEN: step 3 may replace it by a counter on the cluster that
-  # weft.architecture.CreateFormation and RetireFormation keep (sketch § 14 line 600: "the counter
-  # is stored and kept by the commands that create and end"); taken: external until then.
+  # "A formation runs in it" stays an external refusal: the cluster lists its formations
+  # (PinFormation), but a retired one stays listed and a guard over the listed formations' states
+  # nests a walk of weft.architecture.Formation rows in the subject's list. OPEN: a counter on the
+  # cluster (sketch § 14 line 600: "the counter is stored and kept by the commands that create and
+  # end") needs the vendored RetireFormation to keep it; taken: external.
   # Live pools of the cluster are this domain's rows, but a row-set guard over them is refused
   # beside the caller tie (ESS-COMMAND-009), so that check is external too. OPEN: delete the
   # pools with the cluster (an `affects:` on the outcome) instead of refusing.
@@ -577,10 +659,14 @@ commands:
   # design § Step 2 "ClusterNodePool": weft-control records the infrastructure NodePool it made
   # for the pool (ControlPlane, after weft.infrastructure.NodePoolCreated).
   # Hardening pass 4 (2026-11-26): the binding cluster-create-node-pool carries the cluster pool
-  # into the infrastructure pool (`requested_for`), and this command is the ControlPlane's level
-  # step over UnlinkedClusterNodePools joined with weft.infrastructure.TenantNodePools
+  # into the infrastructure pool, and this command is the ControlPlane's level step over
+  # UnlinkedClusterNodePools joined with weft.infrastructure.TenantNodePools
   # (ess/components.yaml). `made-for-another-pool` refuses an infrastructure pool made for another
   # cluster pool, so one infrastructure pool is never recorded for two cluster pools.
+  # D-e A (story cloud-blocks-cluster-pinning): the vendored NodePool has no `requested_for`
+  # (cloudspec C2), so the binding names the infrastructure pool by the cluster pool's id (its text
+  # form, conversion in ess/components.yaml), and the pool's `name` is what `requested_for` was.
+  # The user's pool name stays on the ClusterNodePool.
   # A pool removed while Requested is RecordRemovedClusterNodePool's (below).
   - name: weft.cluster.RecordClusterNodePoolReady
     naming:
@@ -606,14 +692,9 @@ commands:
       - name: node-pool-deleted
         when_related: {via: input.node_pool_id, predicate: state != Active}
         error: weft.cluster.UnknownNodePool
-      # An operator's own pool has no `requested_for`: `not defined` first (gap 25).
+      # An operator's own pool carries a name of the operator's, never a cluster pool's id.
       - name: made-for-another-pool
-        when_related:
-          via: input.node_pool_id
-          predicate:
-            any:
-              - not defined(requested_for)
-              - requested_for != input.cluster_node_pool_id
+        when_related: {via: input.node_pool_id, predicate: name != input.cluster_node_pool_id}
         error: weft.cluster.UnknownNodePool
       - name: ready
         moves: weft.cluster.ClusterNodePool.ready
@@ -660,12 +741,7 @@ commands:
         when_related: {via: input.node_pool_id, predicate: state != Active}
         error: weft.cluster.UnknownNodePool
       - name: made-for-another-pool
-        when_related:
-          via: input.node_pool_id
-          predicate:
-            any:
-              - not defined(requested_for)
-              - requested_for != input.cluster_node_pool_id
+        when_related: {via: input.node_pool_id, predicate: name != input.cluster_node_pool_id}
         error: weft.cluster.UnknownNodePool
       - name: recorded
         updates: weft.cluster.ClusterNodePool
@@ -721,10 +797,12 @@ views:
       - {name: control_plane, type: weft.cluster.ControlPlaneMode}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: zones, type: List<weft.shared.ZoneName>}
+      - {name: formations, type: List<weft.shared.FormationId>}
       - {name: state, type: weft.cluster.Cluster.State}
 
   # design § Step 2 "views ClustersOfAccount": the clusters an account may deploy into, its own
-  # and every default cluster ("every account may deploy into it").
+  # and every default cluster ("every account may deploy into it"). `formations` is not shown: a
+  # default cluster lists the formations of every account.
   - name: weft.cluster.ClustersOfAccount
     source: weft.cluster.Cluster
     consistency: read_your_writes
@@ -767,7 +845,8 @@ views:
   # design § Step 2 "ClusterNodePool", hardening pass 4: gap view of the ControlPlane's level step
   # RecordClusterNodePoolReady (ess/components.yaml): the pools whose infrastructure pool is not
   # recorded yet, Requested or removed while Requested. The ControlPlane joins it with
-  # weft.infrastructure.TenantNodePools on cluster_node_pool_id == requested_for.
+  # weft.infrastructure.TenantNodePools on the pool's `name`, the text of cluster_node_pool_id
+  # (D-e A, RecordClusterNodePoolReady).
   # OPEN: a pool whose infrastructure pool was never made (cluster-create-node-pool dropped
   # unknown-zone or zone-retired) stays in this view; weft.cluster would add
   # `ClusterNodePoolRefused` (the OPEN at that binding).

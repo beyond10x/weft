@@ -53,14 +53,17 @@
 # component owns them.
 
 # Hardening pass 4 (2026-11-26): binding cluster-create-node-pool carries the cluster pool's id into
-# the infrastructure pool it creates (`requested_for`), the one crossing below.
+# the infrastructure pool it creates, the one crossing below. D-e A (story
+# cloud-blocks-cluster-pinning): the vendored CreateNodePool takes no `requested_for` (cloudspec
+# C2), so the id is the pool's `name`.
 conversions:
   - from: weft.shared.ClusterNodePoolId
-    to: Optional<Uuid>
+    to: String
     because: >-
-      weft.infrastructure (layer 1) names no identifier of weft.cluster (layer 3), so it keeps the
-      cluster pool a pool was made for as an opaque Uuid; only weft.cluster reads it back, to refuse
-      an infrastructure pool made for another cluster pool.
+      weft.infrastructure (layer 1, vendored) names no identifier of weft.cluster (layer 3), so the
+      infrastructure pool made for a cluster pool is named by the cluster pool's id, its text form;
+      only weft.cluster reads it back, to refuse an infrastructure pool made for another cluster
+      pool.
   # Hardening pass 5: a stamped instant is stored as a plain one. No conversion runs the other way
   # (tools/check-stamped-time.sh refuses one), so only a stamped value reaches a stamped input.
   - from: weft.shared.StampedAt
@@ -282,6 +285,7 @@ components:
         - weft.cluster.CreateDefaultCluster
         - weft.topology.DeclareTopologyLink
         - weft.cluster.DeleteCluster
+        - weft.cluster.PinFormation
         - weft.cluster.RecordClusterNodePoolReady
         - weft.cluster.RecordRemovedClusterNodePool
         - weft.cluster.RemoveClusterNodePool
@@ -642,6 +646,7 @@ components:
         - weft.cluster.ClusterNodePoolRemoved
         - weft.cluster.ClusterNodePoolRequested
         - weft.cluster.ClusterPolicySet
+        - weft.cluster.FormationPinned
         - weft.topology.TopologyCreated
         - weft.topology.TopologyRemoved
         - weft.cluster.DefaultClusterCreated
@@ -1964,7 +1969,7 @@ bindings:
   # Hardening pass 4 (2026-11-26), the lifecycle as loops (level steps of the ControlPlane, read
   # and invoke granted in ess/9-actors/actors.yaml):
   #   ready   cluster.UnlinkedClusterNodePools joined with infrastructure.TenantNodePools on
-  #           cluster_node_pool_id == requested_for -> cluster.RecordClusterNodePoolReady (a
+  #           cluster_node_pool_id == name    -> cluster.RecordClusterNodePoolReady (a
   #           Requested row) or cluster.RecordRemovedClusterNodePool (a row removed while
   #           Requested, so its pool is deleted too)
   #   drain   cluster.RemovedClusterNodePools     -> infrastructure.DrainNodePool
@@ -1974,8 +1979,8 @@ bindings:
   #   delete  infrastructure.DrainingNodePools    -> infrastructure.DeleteNodePool (pool-has-nodes
   #                                                  until the nodes step is done)
   # Each view empties when its step succeeds, so the loop converges (sim/experiments/
-  # cluster-pool-lifecycle.yaml). No edge records Ready: NodePoolCreated carries requested_for
-  # now, so one could; the level step alone is taken.
+  # cluster-pool-lifecycle.yaml). No edge records Ready: NodePoolCreated carries the cluster pool
+  # as the pool's `name` (D-e A), so one could; the level step alone is taken.
   # OPEN: RemoveNode answers not-empty while an instance is still assigned to the draining node
   # (`external:`); nothing here moves those instances, R3's lease end does (line 470).
   - id: cluster-create-node-pool
@@ -1984,19 +1989,23 @@ bindings:
       event: weft.cluster.ClusterNodePoolRequested
     invoke:
       command: weft.infrastructure.CreateNodePool
+    # D-e A: the pool is named by the cluster pool's id (conversion above), which
+    # cluster.RecordClusterNodePoolReady reads back; the user's name stays on the cluster pool.
     mapping:
-      name: event.name
+      name: event.cluster_node_pool_id
       zone: event.zone
       machine_type: event.machine_type
       image: event.image
       min_size: event.min_size
       max_size: event.max_size
-      requested_for: event.cluster_node_pool_id
     delivery: at_least_once
     on_failure:
       # negative-size and min-above-max cannot follow: weft.cluster.AddClusterNodePool refuses
       # them. OPEN: unknown-zone and zone-retired (the zone retired between the request and this
       # step) have no escalation event; weft.cluster would add `ClusterNodePoolRefused`.
+      # OPEN: the vendored CreateNodePool has no `already-requested` (cloudspec C2), so a second
+      # delivery of one event makes a second pool of the same name; RecordClusterNodePoolReady
+      # records one, and nothing drains the other yet.
       drop: [unknown-zone, zone-retired, negative-size, min-above-max]
       retry: {except: [unknown-zone, zone-retired, negative-size, min-above-max]}
   - id: cluster-delete-node-pool
