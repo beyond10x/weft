@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:platform-ports
 - serves: vision:weft
 - depends_on: story:container-registry
-revision: 1
+revision: 2
 ---
 ## Epic
 
@@ -61,7 +61,11 @@ deployment of itself being the multi-tenant compute cloud, is having a cloud spe
 
 ## Dependencies outside weft
 
-- cloudspec: the architecture format and the Kubernetes or Helm generator
+- cloudspec story:architecture-format-constructs (§ Self-architecture of a runtime: control-plane
+  workloads with contract needs and checks, several scopes) and story:generate-out-helm (one
+  namespace per scope; unbound needs listed, never turned into engines), also
+  story:generate-out-kubernetes. Cite at the merge sha of cloudspec#4. Earlier wording: the
+  architecture format and the Kubernetes or Helm generator
   (`story:generate-out-kubernetes`; scopes as namespaces).
 
 ## Rules for this work
