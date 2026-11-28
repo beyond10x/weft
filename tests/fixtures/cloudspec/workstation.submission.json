@@ -1,0 +1,1349 @@
+{
+  "architecture": {
+    "architecture": "workstation",
+    "border": [
+      "operator"
+    ],
+    "format": "cloudspec-architecture/1",
+    "links": [
+      {
+        "carries": "prompt",
+        "from": "owner",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[0]"
+        },
+        "to": "operator"
+      },
+      {
+        "carries": "question",
+        "from": "operator",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[1]"
+        },
+        "to": "owner"
+      },
+      {
+        "carries": "question",
+        "from": "worker",
+        "protocol": "a2a",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[2]"
+        },
+        "to": "operator"
+      },
+      {
+        "carries": "order",
+        "from": "operator",
+        "protocol": "a2a",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[3]"
+        },
+        "to": "worker"
+      },
+      {
+        "carries": "model_call",
+        "from": "operator",
+        "protocol": "http",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[4]"
+        },
+        "to": "gateway"
+      },
+      {
+        "carries": "model_call",
+        "from": "worker",
+        "protocol": "http",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[5]"
+        },
+        "to": "gateway"
+      },
+      {
+        "carries": "model_call",
+        "from": "gateway",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[6]"
+        },
+        "to": "model"
+      },
+      {
+        "carries": "claim",
+        "from": "worker",
+        "protocol": "http",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.links[7]"
+        },
+        "to": "builds"
+      }
+    ],
+    "parts": {
+      "builds": {
+        "block": "workloads",
+        "checks": {
+          "alive": {
+            "kind": "http",
+            "path": "/alive"
+          },
+          "ready": {
+            "kind": "http",
+            "path": "/ready"
+          }
+        },
+        "claims": {
+          "cpu_millis": 500,
+          "memory_mib": 512
+        },
+        "egress": [],
+        "image": "registry.example/agenticspec-core@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "in": "split",
+        "isolation": "none",
+        "kind": "service",
+        "replicas": 1,
+        "secrets": [],
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "units.builds"
+        }
+      },
+      "core": {
+        "block": "workloads",
+        "checks": {
+          "alive": {
+            "kind": "http",
+            "path": "/alive",
+            "port": 8080
+          },
+          "ready": {
+            "kind": "http",
+            "path": "/ready",
+            "port": 8080
+          }
+        },
+        "claims": {
+          "cpu_millis": 500,
+          "memory_mib": 512
+        },
+        "egress": [],
+        "image": "registry.example/agenticspec-core@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "in": "split",
+        "isolation": "none",
+        "kind": "service",
+        "ports": [
+          {
+            "bind": "all",
+            "name": "metrics_scrape",
+            "port": 9090,
+            "protocol": "metrics_scrape"
+          },
+          {
+            "bind": "all",
+            "name": "operator",
+            "port": 8080
+          }
+        ],
+        "replicas": 1,
+        "secrets": [],
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "units.core"
+        }
+      },
+      "gateway": {
+        "block": "workloads",
+        "checks": {
+          "alive": {
+            "kind": "http",
+            "path": "/alive",
+            "port": 8081
+          },
+          "ready": {
+            "kind": "http",
+            "path": "/ready",
+            "port": 8081
+          }
+        },
+        "claims": {
+          "cpu_millis": 500,
+          "memory_mib": 512
+        },
+        "egress": [
+          {
+            "address": "models.example:443",
+            "carries": "model_call",
+            "link": "gateway -> model carries model_call",
+            "name": "models.example:443",
+            "to": "model"
+          }
+        ],
+        "image": "registry.example/agenticspec-core@sha256:0000000000000000000000000000000000000000000000000000000000000001",
+        "in": "split",
+        "isolation": "none",
+        "kind": "service",
+        "needs": [
+          {
+            "contract": "model_endpoint",
+            "route": "frontier"
+          }
+        ],
+        "replicas": 1,
+        "secrets": [
+          "model-api-key"
+        ],
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "units.gateway"
+        }
+      },
+      "model": {
+        "block": "model",
+        "external": true,
+        "reach": {
+          "address": "models.example:443"
+        },
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.parts.model"
+        }
+      },
+      "operator": {
+        "block": "workloads",
+        "checks": {
+          "startup": {
+            "kind": "role",
+            "role": "agent-runtime",
+            "step": "check"
+          }
+        },
+        "claims": {
+          "cpu_millis": 500,
+          "memory_mib": 512
+        },
+        "egress": [
+          {
+            "address": "chat-relay.example:443",
+            "name": "chat-relay",
+            "named": true,
+            "to": "chat-relay"
+          },
+          {
+            "carries": "question",
+            "link": "operator -> owner carries question over chat",
+            "name": "owner",
+            "to": "owner"
+          }
+        ],
+        "in": "split",
+        "isolation": "none",
+        "kind": "agent",
+        "package": {
+          "agent": {
+            "digest": "sha256:d8c0e5fc773801390e7d63d84585821ee37748788f2c44c3f77df1517331f04a",
+            "document": {
+              "agent": {
+                "brief": "You act for the owner. Take each prompt, order coding agents to do the work, answer their questions, and ask the owner only what you cannot decide.",
+                "id": "operator",
+                "name": "Operator"
+              },
+              "format": "loom.agent/1",
+              "model": {
+                "roles": [
+                  {
+                    "model": "frontier",
+                    "role": "agent"
+                  }
+                ]
+              }
+            }
+          },
+          "runtime": {
+            "role": "agent-runtime"
+          }
+        },
+        "replicas": 1,
+        "secrets": [
+          "chat-token"
+        ],
+        "shape": "service",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "units.operator"
+        }
+      },
+      "owner": {
+        "block": "actors",
+        "external": true,
+        "kind": "human",
+        "reach": {
+          "name": "owner"
+        },
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.parts.owner"
+        }
+      },
+      "split": {
+        "block": "scope",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "binding.name"
+        }
+      },
+      "tree": {
+        "access": "read_write_once",
+        "block": "resources",
+        "kind": "volume",
+        "mount": "/workspace",
+        "per": "worker",
+        "sharing": "exclusive",
+        "size": "20Gi",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "architecture.document.parts.tree"
+        }
+      },
+      "worker": {
+        "block": "workloads",
+        "checks": {
+          "startup": {
+            "kind": "role",
+            "role": "agent-runtime",
+            "step": "check"
+          }
+        },
+        "claims": {
+          "cpu_millis": 2000,
+          "memory_mib": 4096
+        },
+        "egress": [
+          {
+            "name": "docs-mirror",
+            "named": true,
+            "to": "docs-mirror",
+            "unresolved": true
+          }
+        ],
+        "in": "split",
+        "isolation": "process",
+        "kind": "agent",
+        "network": "isolated",
+        "package": {
+          "agent": {
+            "digest": "sha256:f07e1a0c10934468d5ba578a33346e221576eea5adba211e0d0da8cd5d0704fd",
+            "document": {
+              "agent": {
+                "brief": "You take one task, change the code in your own workspace, build and test it, and propose the change. Ask when the task is unclear.",
+                "id": "coder",
+                "name": "Coding agent"
+              },
+              "format": "loom.agent/1",
+              "model": {
+                "roles": [
+                  {
+                    "model": "frontier",
+                    "role": "agent"
+                  }
+                ]
+              }
+            }
+          },
+          "runtime": {
+            "role": "agent-runtime"
+          }
+        },
+        "replicas": 12,
+        "secrets": [],
+        "shape": "service",
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1",
+          "path": "units.worker"
+        }
+      }
+    },
+    "source": {
+      "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+      "format": "agenticspec-deployment/1",
+      "path": "architecture.document"
+    },
+    "summary": "One workstation, one owner, an operator agent acting for the owner, coding agents, a shared build pool."
+  },
+  "binding": {
+    "architecture": "workstation",
+    "binding": "split",
+    "roles": {
+      "agent-runtime": {
+        "image": "registry.example/agent-runtime@sha256:0000000000000000000000000000000000000000000000000000000000000002"
+      }
+    }
+  },
+  "coverage": {
+    "format": "cloudspec-coverage/1",
+    "steps": [
+      {
+        "counts": {
+          "mapped": 94,
+          "mapped_with_loss": 41,
+          "refused": 0
+        },
+        "entries": [
+          {
+            "note": "the bundle declares no scope; its one scope (one namespace) takes the binding's name",
+            "object": "binding.name",
+            "status": "mapped",
+            "to": "parts.split"
+          },
+          {
+            "note": "an architecture field this translator does not read",
+            "object": "architecture.document.policies",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "an architecture field this translator does not read",
+            "object": "architecture.document.view",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "served on every address: a Service port; protocol metrics_scrape",
+            "object": "ingress[0]",
+            "status": "mapped",
+            "to": "parts.core.ports"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[0].audience",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[0].authenticated",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "served on every address: a Service port; protocol http",
+            "object": "ingress[1]",
+            "status": "mapped",
+            "to": "parts.core.ports"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[1].audience",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[1].authenticated",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "served on every address: a Service port; protocol event_stream",
+            "object": "ingress[2]",
+            "status": "mapped",
+            "to": "parts.core.ports"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[2].audience",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[2].authenticated",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "served on every address: a Service port; protocol ui",
+            "object": "ingress[3]",
+            "status": "mapped",
+            "to": "parts.core.ports"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[3].audience",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "no construct in this slice: the unit enforces it itself",
+            "object": "ingress[3].authenticated",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "bound to loopback with no port: nothing served on the network, nothing written",
+            "object": "ingress[4]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "requires network isolation: its unit does",
+            "object": "binding.document.parts.worker.network",
+            "status": "mapped",
+            "to": "parts.worker.network"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.box.egress",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.box.isolation",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "packed in unit worker: runs inside its workload; the part's block has no construct of its own",
+            "object": "architecture.document.parts.box",
+            "status": "mapped_with_loss",
+            "to": "parts.worker"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.builds.capacity",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.builds.job_limit",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a unit of kind service: a workload of kind service",
+            "object": "units.builds",
+            "status": "mapped",
+            "to": "parts.builds"
+          },
+          {
+            "note": "the unit's code names the image with its digest",
+            "object": "units.builds.code.runtime",
+            "status": "mapped",
+            "to": "parts.builds.image"
+          },
+          {
+            "note": "cpu and memory",
+            "object": "units.builds.claims",
+            "status": "mapped",
+            "to": "parts.builds.claims"
+          },
+          {
+            "note": "the least level the unit's parts need (none); the target gives container",
+            "object": "units.builds.isolation",
+            "status": "mapped",
+            "to": "parts.builds.isolation"
+          },
+          {
+            "note": "the check names no port",
+            "object": "units.builds.checks.alive",
+            "status": "mapped",
+            "to": "parts.builds.checks.alive"
+          },
+          {
+            "note": "the check names no port",
+            "object": "units.builds.checks.ready",
+            "status": "mapped",
+            "to": "parts.builds.checks.ready"
+          },
+          {
+            "note": "resource.claim: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.builds.ports[0]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.builds.secrets",
+            "status": "mapped"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.builds.egress",
+            "status": "mapped"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.builds.roles",
+            "status": "mapped"
+          },
+          {
+            "note": "the part its unit is named after: a workload",
+            "object": "architecture.document.parts.builds",
+            "status": "mapped",
+            "to": "parts.builds"
+          },
+          {
+            "note": "packed in unit core: runs inside its workload; the part's block has no construct of its own",
+            "object": "architecture.document.parts.chat",
+            "status": "mapped_with_loss",
+            "to": "parts.core"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.gateway.rate_limit_per_minute",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a unit of kind service: a workload of kind service",
+            "object": "units.gateway",
+            "status": "mapped",
+            "to": "parts.gateway"
+          },
+          {
+            "note": "the unit's code names the image with its digest",
+            "object": "units.gateway.code.runtime",
+            "status": "mapped",
+            "to": "parts.gateway.image"
+          },
+          {
+            "note": "cpu and memory",
+            "object": "units.gateway.claims",
+            "status": "mapped",
+            "to": "parts.gateway.claims"
+          },
+          {
+            "note": "the least level the unit's parts need (none); the target gives container",
+            "object": "units.gateway.isolation",
+            "status": "mapped",
+            "to": "parts.gateway.isolation"
+          },
+          {
+            "note": "probe target: the check's own port",
+            "object": "units.gateway.checks.alive",
+            "status": "mapped",
+            "to": "parts.gateway.checks.alive"
+          },
+          {
+            "note": "probe target: the check's own port",
+            "object": "units.gateway.checks.ready",
+            "status": "mapped",
+            "to": "parts.gateway.checks.ready"
+          },
+          {
+            "note": "gateway.call: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.gateway.ports[0]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "by name, never a value",
+            "object": "units.gateway.secrets[0]",
+            "status": "mapped",
+            "to": "parts.gateway.secrets"
+          },
+          {
+            "note": "a destination by name, with its address; carries and link kept as provenance",
+            "object": "units.gateway.egress[0]",
+            "status": "mapped",
+            "to": "parts.gateway.egress"
+          },
+          {
+            "note": "a contract need on model_endpoint with route frontier; unbound until a binding names an engine; grants: calls to the model route frontier, a contract need on model_endpoint (docs/layers.md layer 1); unbound unless the binding names an engine",
+            "object": "units.gateway.roles[0]",
+            "status": "mapped",
+            "to": "parts.gateway.needs[0]"
+          },
+          {
+            "note": "the part its unit is named after: a workload",
+            "object": "architecture.document.parts.gateway",
+            "status": "mapped",
+            "to": "parts.gateway"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.model.route",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "an external dependency: never deployed, keeps its block",
+            "object": "architecture.document.parts.model",
+            "status": "mapped",
+            "to": "parts.model"
+          },
+          {
+            "note": "reached at an address",
+            "object": "packing.document.external[0]",
+            "status": "mapped",
+            "to": "parts.model.reach"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.operator.acts_for",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.operator.harness",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.operator.role",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a unit of kind agent: a workload of kind agent",
+            "object": "units.operator",
+            "status": "mapped",
+            "to": "parts.operator"
+          },
+          {
+            "note": "none declared and no schedule: a persistent agent, shape service",
+            "object": "units.operator.shape",
+            "status": "mapped",
+            "to": "parts.operator.shape"
+          },
+          {
+            "note": "the agent document by digest, from agents.<digest>.document (no content_base64); the agent of part operator",
+            "object": "units.operator.code.agents[0]",
+            "status": "mapped",
+            "to": "parts.operator.package.agent"
+          },
+          {
+            "note": "the runtime is the one bound to role agent-runtime at generation; grants: the unit is run by the runtime the deployment binds to role agent-runtime; that runtime receives the unit's agent document by digest and declares the unit's role checks",
+            "object": "units.operator.code.role",
+            "status": "mapped",
+            "to": "parts.operator.package.runtime"
+          },
+          {
+            "note": "cpu and memory",
+            "object": "units.operator.claims",
+            "status": "mapped",
+            "to": "parts.operator.claims"
+          },
+          {
+            "note": "the least level the unit's parts need (none); the target gives container",
+            "object": "units.operator.isolation",
+            "status": "mapped",
+            "to": "parts.operator.isolation"
+          },
+          {
+            "note": "the check the runtime bound to role agent-runtime declares as step check; resolved from the binding at generation",
+            "object": "units.operator.checks.startup",
+            "status": "mapped",
+            "to": "parts.operator.checks.startup"
+          },
+          {
+            "note": "channel.message: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.operator.ports[0]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "harness.session: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.operator.ports[1]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "model.inference: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.operator.ports[2]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "question.question: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.operator.ports[3]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "by name, never a value",
+            "object": "units.operator.secrets[0]",
+            "status": "mapped",
+            "to": "parts.operator.secrets"
+          },
+          {
+            "note": "a destination by name, with its address; carries and link kept as provenance",
+            "object": "units.operator.egress[0]",
+            "status": "mapped",
+            "to": "parts.operator.egress"
+          },
+          {
+            "note": "a destination by name; carries and link kept as provenance",
+            "object": "units.operator.egress[2]",
+            "status": "mapped",
+            "to": "parts.operator.egress"
+          },
+          {
+            "note": "grants: the unit is run by the runtime the deployment binds to role agent-runtime; that runtime receives the unit's agent document by digest and declares the unit's role checks",
+            "object": "units.operator.roles[0]",
+            "status": "mapped",
+            "to": "parts.operator.package.runtime"
+          },
+          {
+            "note": "the part its unit is named after: a workload",
+            "object": "architecture.document.parts.operator",
+            "status": "mapped",
+            "to": "parts.operator"
+          },
+          {
+            "note": "an external principal: an actor",
+            "object": "architecture.document.parts.owner",
+            "status": "mapped",
+            "to": "parts.owner"
+          },
+          {
+            "note": "reached by a destination name",
+            "object": "packing.document.external[1]",
+            "status": "mapped",
+            "to": "parts.owner.reach"
+          },
+          {
+            "note": "the volume's mount path",
+            "object": "units.worker.claims.volumes.tree.mount",
+            "status": "mapped",
+            "to": "parts.tree.mount"
+          },
+          {
+            "note": "a volume, one per instance of its unit",
+            "object": "architecture.document.parts.tree",
+            "status": "mapped",
+            "to": "parts.tree"
+          },
+          {
+            "note": "size and access of the volume",
+            "object": "units.worker.claims.volumes.tree",
+            "status": "mapped",
+            "to": "parts.tree"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.worker.count",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a part field this translator does not read",
+            "object": "architecture.document.parts.worker.harness",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "a unit of kind agent: a workload of kind agent",
+            "object": "units.worker",
+            "status": "mapped",
+            "to": "parts.worker"
+          },
+          {
+            "note": "none declared and no schedule: a persistent agent, shape service",
+            "object": "units.worker.shape",
+            "status": "mapped",
+            "to": "parts.worker.shape"
+          },
+          {
+            "note": "the agent document by digest, from agents.<digest>.document (no content_base64); the agent of part worker",
+            "object": "units.worker.code.agents[0]",
+            "status": "mapped",
+            "to": "parts.worker.package.agent"
+          },
+          {
+            "note": "the runtime is the one bound to role agent-runtime at generation; grants: the unit is run by the runtime the deployment binds to role agent-runtime; that runtime receives the unit's agent document by digest and declares the unit's role checks",
+            "object": "units.worker.code.role",
+            "status": "mapped",
+            "to": "parts.worker.package.runtime"
+          },
+          {
+            "note": "cpu and memory",
+            "object": "units.worker.claims",
+            "status": "mapped",
+            "to": "parts.worker.claims"
+          },
+          {
+            "note": "the least level the unit's parts need (process); the target gives container",
+            "object": "units.worker.isolation",
+            "status": "mapped",
+            "to": "parts.worker.isolation"
+          },
+          {
+            "note": "the check the runtime bound to role agent-runtime declares as step check; resolved from the binding at generation",
+            "object": "units.worker.checks.startup",
+            "status": "mapped",
+            "to": "parts.worker.checks.startup"
+          },
+          {
+            "note": "sandbox.sandbox: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[0]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "workspace.lease: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[1]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "workspace.proposal: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[2]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "harness.session: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[3]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "model.inference: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[4]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "question.question: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[5]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "resource.claim: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.worker.ports[6]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.worker.secrets",
+            "status": "mapped"
+          },
+          {
+            "note": "a destination by name; carries and link kept as provenance",
+            "object": "units.worker.egress[0]",
+            "status": "mapped",
+            "to": "parts.worker.egress"
+          },
+          {
+            "note": "grants: the unit is run by the runtime the deployment binds to role agent-runtime; that runtime receives the unit's agent document by digest and declares the unit's role checks",
+            "object": "units.worker.roles[0]",
+            "status": "mapped",
+            "to": "parts.worker.package.runtime"
+          },
+          {
+            "note": "the part its unit is named after: a workload",
+            "object": "architecture.document.parts.worker",
+            "status": "mapped",
+            "to": "parts.worker"
+          },
+          {
+            "note": "a unit of kind core: a workload of kind service",
+            "object": "units.core",
+            "status": "mapped",
+            "to": "parts.core"
+          },
+          {
+            "note": "the unit's code names the image with its digest",
+            "object": "units.core.code.runtime",
+            "status": "mapped",
+            "to": "parts.core.image"
+          },
+          {
+            "note": "cpu and memory",
+            "object": "units.core.claims",
+            "status": "mapped",
+            "to": "parts.core.claims"
+          },
+          {
+            "note": "the least level the unit's parts need (none); the target gives container",
+            "object": "units.core.isolation",
+            "status": "mapped",
+            "to": "parts.core.isolation"
+          },
+          {
+            "note": "probe target: the check's own port",
+            "object": "units.core.checks.alive",
+            "status": "mapped",
+            "to": "parts.core.checks.alive"
+          },
+          {
+            "note": "probe target: the check's own port",
+            "object": "units.core.checks.ready",
+            "status": "mapped",
+            "to": "parts.core.checks.ready"
+          },
+          {
+            "note": "channel.message: a protocol port; the protocol stays in the package, no construct in this slice",
+            "object": "units.core.ports[0]",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.core.secrets",
+            "status": "mapped"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.core.egress",
+            "status": "mapped"
+          },
+          {
+            "note": "none declared; nothing granted",
+            "object": "units.core.roles",
+            "status": "mapped"
+          },
+          {
+            "note": "a link field this translator does not read",
+            "object": "architecture.document.links[0].over",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[0]",
+            "status": "mapped",
+            "to": "links[0]"
+          },
+          {
+            "note": "a link field this translator does not read",
+            "object": "architecture.document.links[1].over",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[1]",
+            "status": "mapped",
+            "to": "links[1]"
+          },
+          {
+            "note": "a link between two units: the transport is the link's protocol; no egress",
+            "object": "units.worker.egress[3]",
+            "status": "mapped",
+            "to": "links[2].protocol"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[2]",
+            "status": "mapped",
+            "to": "links[2]"
+          },
+          {
+            "note": "a link between two units: the transport is the link's protocol; no egress",
+            "object": "units.operator.egress[3]",
+            "status": "mapped",
+            "to": "links[3].protocol"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[3]",
+            "status": "mapped",
+            "to": "links[3]"
+          },
+          {
+            "note": "a link between two units: the transport is the link's protocol; no egress",
+            "object": "units.operator.egress[1]",
+            "status": "mapped",
+            "to": "links[4].protocol"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[4]",
+            "status": "mapped",
+            "to": "links[4]"
+          },
+          {
+            "note": "a link between two units: the transport is the link's protocol; no egress",
+            "object": "units.worker.egress[2]",
+            "status": "mapped",
+            "to": "links[5].protocol"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[5]",
+            "status": "mapped",
+            "to": "links[5]"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[6]",
+            "status": "mapped",
+            "to": "links[6]"
+          },
+          {
+            "note": "a link between two units: the transport is the link's protocol; no egress",
+            "object": "units.worker.egress[1]",
+            "status": "mapped",
+            "to": "links[7].protocol"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.links[7]",
+            "status": "mapped",
+            "to": "links[7]"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.border",
+            "status": "mapped",
+            "to": "border"
+          },
+          {
+            "note": "",
+            "object": "architecture.name",
+            "status": "mapped",
+            "to": "architecture"
+          },
+          {
+            "note": "",
+            "object": "architecture.document.summary",
+            "status": "mapped",
+            "to": "summary"
+          },
+          {
+            "note": "units and external parts, read through units[], external and the parts",
+            "object": "packing",
+            "status": "mapped"
+          },
+          {
+            "note": "what the target gives; each unit's isolation (what its parts need) is checked against it",
+            "object": "binding.document.target.isolation",
+            "status": "mapped"
+          },
+          {
+            "note": "where the target pulls images from: a target fact, not in the architecture; read by generate kubernetes",
+            "object": "binding.document.target.images",
+            "status": "mapped"
+          },
+          {
+            "note": "whether the target enforces network rules: a target fact, not in the architecture; read by generate kubernetes",
+            "object": "binding.document.target.network_policy",
+            "status": "mapped"
+          },
+          {
+            "note": "the same values as units[]; read from there",
+            "object": "binding.document.claims",
+            "status": "mapped"
+          },
+          {
+            "note": "the same values as units[]; read from there",
+            "object": "binding.document.parts",
+            "status": "mapped"
+          },
+          {
+            "note": "the same values as units[]; read from there",
+            "object": "binding.document.packing",
+            "status": "mapped"
+          },
+          {
+            "note": "read through the bundle's runtimes, keyed by digest",
+            "object": "binding.document.runtimes.core",
+            "status": "mapped"
+          },
+          {
+            "note": "the image of the units whose code names this digest",
+            "object": "runtimes.sha256:0000000000000000000000000000000000000000000000000000000000000001",
+            "status": "mapped"
+          },
+          {
+            "note": "ports, protocols and invariants of the contract have no construct in this slice",
+            "object": "contract",
+            "status": "mapped_with_loss"
+          },
+          {
+            "note": "none declared",
+            "object": "requirements",
+            "status": "mapped"
+          },
+          {
+            "note": "none declared",
+            "object": "nested",
+            "status": "mapped"
+          },
+          {
+            "note": "the agent document of the agent workload operator, delivered by digest",
+            "object": "agents.sha256:d8c0e5fc773801390e7d63d84585821ee37748788f2c44c3f77df1517331f04a",
+            "status": "mapped",
+            "to": "parts.operator.package.agent"
+          },
+          {
+            "note": "the agent document of the agent workload worker, delivered by digest",
+            "object": "agents.sha256:f07e1a0c10934468d5ba578a33346e221576eea5adba211e0d0da8cd5d0704fd",
+            "status": "mapped",
+            "to": "parts.worker.package.agent"
+          }
+        ],
+        "source": {
+          "digest": "sha256:87813ba898809064a75f91416da70f6ed518bfa9631babf81e8553124c0772cf",
+          "format": "agenticspec-deployment/1"
+        },
+        "status": "mapped_with_loss",
+        "step": "translate agenticspec"
+      },
+      {
+        "counts": {
+          "mapped": 3,
+          "mapped_with_loss": 0,
+          "refused": 23
+        },
+        "entries": [
+          {
+            "note": "a scope: the containment of its parts, nothing runs of it (split)",
+            "object": "parts.split",
+            "status": "mapped"
+          },
+          {
+            "note": "weft does not run this yet: a long-lived service (builds, workload kind service)",
+            "object": "parts.builds",
+            "rule": "weft_service_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a long-lived service (gateway, workload kind service)",
+            "object": "parts.gateway",
+            "rule": "weft_service_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an egress destination (models.example:443)",
+            "object": "parts.gateway.egress[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a secret at start (model-api-key)",
+            "object": "parts.gateway.secrets[0]",
+            "rule": "weft_secret_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "an external part: never deployed (model)",
+            "object": "parts.model",
+            "status": "mapped"
+          },
+          {
+            "note": "weft does not run this yet: an agent (operator, workload kind agent, shape service)",
+            "object": "parts.operator",
+            "rule": "weft_kind_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an egress destination (chat-relay)",
+            "object": "parts.operator.egress[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an egress destination (owner)",
+            "object": "parts.operator.egress[1]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a secret at start (chat-token)",
+            "object": "parts.operator.secrets[0]",
+            "rule": "weft_secret_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "an external part: never deployed (owner)",
+            "object": "parts.owner",
+            "status": "mapped"
+          },
+          {
+            "note": "weft does not run this yet: a volume (tree)",
+            "object": "parts.tree",
+            "rule": "weft_volume_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an agent (worker, workload kind agent, shape service)",
+            "object": "parts.worker",
+            "rule": "weft_kind_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an egress destination (docs-mirror)",
+            "object": "parts.worker.egress[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a long-lived service (core, workload kind service)",
+            "object": "parts.core",
+            "rule": "weft_service_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an inbound endpoint (metrics_scrape, port 9090)",
+            "object": "parts.core.ports[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an inbound endpoint (operator, port 8080)",
+            "object": "parts.core.ports[1]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (owner->operator:prompt)",
+            "object": "links[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (operator->owner:question)",
+            "object": "links[1]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (worker->operator:question)",
+            "object": "links[2]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (operator->worker:order)",
+            "object": "links[3]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (operator->gateway:model_call)",
+            "object": "links[4]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (worker->gateway:model_call)",
+            "object": "links[5]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (gateway->model:model_call)",
+            "object": "links[6]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (worker->builds:claim)",
+            "object": "links[7]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an ingress on the border (operator)",
+            "object": "border.operator",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          }
+        ],
+        "source": {
+          "digest": "sha256:436cf55bec6932566fc300e0941db8d14e9ecc4a8c8dc241f1d2a39c6484c551",
+          "format": "cloudspec-architecture/1"
+        },
+        "status": "refused",
+        "step": "generate weft"
+      }
+    ]
+  },
+  "digests": {
+    "architecture": "sha256:436cf55bec6932566fc300e0941db8d14e9ecc4a8c8dc241f1d2a39c6484c551",
+    "binding": "sha256:975ed79dba0dfc05d83f4681faf90a15aad653a2ef4dc0b329033af751485e5f"
+  },
+  "format": "cloudspec-weft-submission/1"
+}
