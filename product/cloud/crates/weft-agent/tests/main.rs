@@ -1,287 +1,5 @@
 //! The one integration-test binary of weft-agent.
 
-/// `confine`: one process of an instance runs as one exec of the `substrate-daemon` the setup hook
-/// `tools/test-setup.d/20-substrate.sh` started for this test run; its socket path comes from the
-/// environment (`WEFT_SUBSTRATE_SOCKET`).
-mod confine {
-    use std::io::ErrorKind;
-    use std::net::{SocketAddr, TcpListener};
-    use std::path::{Path, PathBuf};
-    use std::process::Command;
-
-    use weft_agent::confine::{Confine, ExecState, HostFile, Process};
-
-    const SOCKET_VARIABLE: &str = "WEFT_SUBSTRATE_SOCKET";
-    const PROBE: &str = env!("CARGO_BIN_EXE_weft-probe");
-    const PROBE_MOUNT: &str = "/opt/weft/weft-probe";
-
-    fn socket() -> PathBuf {
-        let path = std::env::var_os(SOCKET_VARIABLE).unwrap_or_else(|| {
-            panic!("{SOCKET_VARIABLE} is unset: the setup hook tools/test-setup.d/20-substrate.sh starts the daemon")
-        });
-        let path = PathBuf::from(path);
-        assert!(
-            path.exists(),
-            "{SOCKET_VARIABLE}={} does not exist: no substrate-daemon serves it",
-            path.display()
-        );
-        path
-    }
-
-    fn block_on<F: std::future::Future>(future: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("a tokio runtime builds")
-            .block_on(future)
-    }
-
-    /// Accepts every connection waiting on a non-blocking listener and returns how many there were.
-    fn accept_waiting(listener: &TcpListener) -> usize {
-        let mut accepted = 0;
-        loop {
-            match listener.accept() {
-                Ok(_) => accepted += 1,
-                Err(error) if error.kind() == ErrorKind::WouldBlock => return accepted,
-                Err(error) => panic!("accept on the probe listener failed: {error}"),
-            }
-        }
-    }
-
-    fn run(process: &Process) -> (Vec<ExecState>, weft_agent::confine::Exited) {
-        let mut states = Vec::new();
-        let exited = block_on(async {
-            let confine = Confine::connect(&socket())
-                .await
-                .expect("the daemon answers");
-            confine.run(process, |state| states.push(state)).await
-        })
-        .expect("the exec runs to exec.exited");
-        (states, exited)
-    }
-
-    #[test]
-    fn a_snippet_runs_confined_and_its_exit_and_output_are_observed() {
-        let (states, exited) = run(&Process::new(["sh", "-c", "echo weft"]));
-        assert_eq!(
-            states.first(),
-            Some(&ExecState::Accepted),
-            "states: {states:?}"
-        );
-        assert_eq!(
-            states.last(),
-            Some(&ExecState::Exited),
-            "states: {states:?}"
-        );
-        assert!(
-            states.len() >= 2,
-            "the exec never left accepted: {states:?}"
-        );
-        assert_eq!(
-            exited.code,
-            Some(0),
-            "stderr: {}",
-            String::from_utf8_lossy(&exited.stderr)
-        );
-        assert_eq!(String::from_utf8_lossy(&exited.stdout), "weft\n");
-    }
-
-    #[test]
-    fn the_probe_reaches_host_loopback_unconfined_and_not_from_the_sandbox() {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener binds");
-        listener
-            .set_nonblocking(true)
-            .expect("the listener turns non-blocking");
-        let address: SocketAddr = listener.local_addr().expect("the listener has an address");
-        let target = address.to_string();
-
-        // Positive control: the same binary and arguments, unconfined, reach the listener.
-        let unconfined = Command::new(PROBE)
-            .arg(&target)
-            .output()
-            .expect("the probe starts unconfined");
-        let unconfined_report = String::from_utf8_lossy(&unconfined.stdout).into_owned();
-        assert!(
-            unconfined_report.starts_with("connected "),
-            "the probe cannot connect even unconfined, so it proves no confinement: {unconfined_report:?} {:?}",
-            String::from_utf8_lossy(&unconfined.stderr)
-        );
-        assert_eq!(
-            accept_waiting(&listener),
-            1,
-            "the unconfined probe made one connection"
-        );
-
-        // The confined run: the same binary, bound read-only into the exec, the same arguments.
-        let probe = Path::new(PROBE)
-            .canonicalize()
-            .expect("the probe binary has a canonical path");
-        let process =
-            Process::new([PROBE_MOUNT, target.as_str()]).file(HostFile::new(probe, PROBE_MOUNT));
-        let (states, exited) = run(&process);
-        let confined_report = String::from_utf8_lossy(&exited.stdout).into_owned();
-        assert_eq!(
-            states.last(),
-            Some(&ExecState::Exited),
-            "states: {states:?}"
-        );
-        assert!(
-            confined_report.starts_with("refused ") || confined_report.starts_with("unreachable "),
-            "the confined probe did not report refused or unreachable: {confined_report:?} (exit {:?}, stderr {:?})",
-            exited.code,
-            String::from_utf8_lossy(&exited.stderr)
-        );
-        assert_eq!(
-            accept_waiting(&listener),
-            0,
-            "the sandbox reached the host loopback listener"
-        );
-    }
-
-    /// Adversary: a node runs more than four processes at once. `Confine::run` holds one event
-    /// stream of the daemon per run, and substrate 0.29.0 grants four streams per subject
-    /// (`EventStreamPolicy::production`, `streams_per_subject: 4`): the fifth concurrent run is
-    /// refused (`event.stream-capacity`) before its process starts.
-    #[test]
-    fn five_processes_run_at_once_on_one_daemon() {
-        const RUNS: usize = 5;
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(RUNS));
-        let threads: Vec<_> = (0..RUNS)
-            .map(|n| {
-                let barrier = barrier.clone();
-                std::thread::spawn(move || {
-                    let script = format!("sleep 2; echo run{n}");
-                    let process = Process::new(["sh", "-c", script.as_str()]);
-                    block_on(async {
-                        let confine = Confine::connect(&socket()).await?;
-                        barrier.wait();
-                        confine.run(&process, |_| {}).await
-                    })
-                })
-            })
-            .collect();
-        let ended: Vec<_> = threads
-            .into_iter()
-            .map(|thread| thread.join().expect("a run thread ends"))
-            .collect();
-        for (n, end) in ended.iter().enumerate() {
-            match end {
-                Ok(exited) => {
-                    assert_eq!(exited.code, Some(0), "run {n}");
-                    assert_eq!(String::from_utf8_lossy(&exited.stdout), format!("run{n}\n"));
-                }
-                Err(error) => panic!("run {n} of {RUNS} concurrent runs failed: {error}"),
-            }
-        }
-    }
-
-    /// Adversary: a node agent's daemon lives past its first thousand events. `Confine::run`
-    /// opens the event stream from the start of the daemon's history (cursor `None`), and
-    /// substrate 0.29.0 replays at most 16 pages of 64 events before it ends the stream with
-    /// `event.catch-up-limit`; the history holds 10,000 events. Every run after the 1,024th event
-    /// fails, though the daemon is healthy. The events here come from empty workspaces created and
-    /// destroyed, the cheapest record the daemon writes; a run of processes writes the same kind.
-    #[test]
-    fn a_process_runs_on_a_daemon_with_more_than_a_thousand_events() {
-        use b10x_substrate_sdk::Client;
-        use std::time::{Duration, Instant};
-
-        const PAST_CATCH_UP: u64 = 16 * 64 + 64;
-        let filled = block_on(async {
-            let client = Client::builder()
-                .unix_socket(socket())
-                .connect()
-                .await
-                .expect("the daemon answers");
-            let started = Instant::now();
-            loop {
-                let page = client
-                    .events(None, 1)
-                    .await
-                    .expect("the daemon lists its events");
-                let first = page.first_retained_sequence.unwrap_or(1);
-                let retained = page.through_sequence.saturating_sub(first) + 1;
-                if retained >= PAST_CATCH_UP {
-                    return retained;
-                }
-                assert!(
-                    started.elapsed() < Duration::from_secs(40),
-                    "the daemon recorded only {retained} events in 40 s, the case cannot build its state"
-                );
-                for _ in 0..16 {
-                    let workspace = client
-                        .workspace()
-                        .empty()
-                        .create()
-                        .await
-                        .expect("an empty workspace is created");
-                    workspace
-                        .destroy()
-                        .await
-                        .expect("the workspace is destroyed");
-                }
-            }
-        });
-        let ended = block_on(async {
-            let confine = Confine::connect(&socket())
-                .await
-                .expect("the daemon answers");
-            confine
-                .run(&Process::new(["sh", "-c", "echo weft"]), |_| {})
-                .await
-        });
-        match ended {
-            Ok(exited) => {
-                assert_eq!(exited.code, Some(0));
-                assert_eq!(String::from_utf8_lossy(&exited.stdout), "weft\n");
-            }
-            Err(error) => panic!("the run after {filled} daemon events failed: {error}"),
-        }
-    }
-
-    /// Adversary: the states `run` reports belong to its own exec. A second exec starts while the
-    /// first runs, so the first run's event stream carries the second's `operation.accepted`
-    /// (`exec.start`) and its exec events; none of them may enter the first run's states. The
-    /// states of each run follow the lifecycle, each at most once: `accepted`, then `running`,
-    /// then `exited`.
-    #[test]
-    fn the_states_of_a_run_are_its_own_exec_s_while_another_exec_starts() {
-        fn rank(state: ExecState) -> u8 {
-            match state {
-                ExecState::Accepted => 0,
-                ExecState::Running => 1,
-                _ => 2,
-            }
-        }
-        let long = std::thread::spawn(|| run(&Process::new(["sh", "-c", "sleep 2; echo long"])));
-        std::thread::sleep(std::time::Duration::from_millis(700));
-        let (short_states, short) = run(&Process::new(["sh", "-c", "echo short"]));
-        let (long_states, long) = long.join().expect("the long run ends");
-        assert_eq!(String::from_utf8_lossy(&long.stdout), "long\n");
-        assert_eq!(String::from_utf8_lossy(&short.stdout), "short\n");
-        for states in [&long_states, &short_states] {
-            assert_eq!(
-                states.first(),
-                Some(&ExecState::Accepted),
-                "states: {states:?}"
-            );
-            assert_eq!(
-                states.last(),
-                Some(&ExecState::Exited),
-                "states: {states:?}"
-            );
-            assert!(
-                states.windows(2).all(|pair| rank(pair[0]) < rank(pair[1])),
-                "the states are out of lifecycle order, so another exec's event entered them: {states:?}"
-            );
-        }
-        assert!(
-            long_states.contains(&ExecState::Running),
-            "the long run never reported running: {long_states:?}"
-        );
-    }
-}
-
 /// `join` (`story:skeleton-node-join-session`): `weft-agent` joins the node `ProvisionPoolNode`
 /// made with its token, reports what it observed, and opens its session with a `hello` frame on
 /// the node channel of the control host, which records it as `OpenNodeSession` sent by the
@@ -472,18 +190,23 @@ mod join {
     /// A stand-in control host on loopback: it answers `JoinNode` `joined` and
     /// `RecordNodeObservation` `ready`, and each `hello` with what `hello` gives for its number
     /// (from 0): `Some((status, body))`, or `None` to close the connection unanswered. Each
-    /// `hello`'s arrival instant is pushed to the returned list.
+    /// `hello`'s arrival instant is pushed to the second returned list, each
+    /// `RecordNodeObservation`'s input to the third.
+    #[allow(clippy::type_complexity, reason = "three handles of one test fixture")]
     fn stand_in(
         hello: impl Fn(usize) -> Option<(u16, Value)> + Send + 'static,
     ) -> (
         std::net::SocketAddr,
         std::sync::Arc<std::sync::Mutex<Vec<Instant>>>,
+        std::sync::Arc<std::sync::Mutex<Vec<Value>>>,
     ) {
         use std::io::{BufRead, BufReader, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let address = listener.local_addr().expect("an address");
         let arrivals = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let seen = arrivals.clone();
+        let observations = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let observed = observations.clone();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
@@ -514,6 +237,10 @@ mod join {
                         Some((202, json!({"outcome": "joined", "published": []})))
                     }
                     "/weft/commands/RecordNodeObservation" => {
+                        observed
+                            .lock()
+                            .expect("the observations lock")
+                            .push(serde_json::from_slice(&body).unwrap_or(Value::Null));
                         Some((202, json!({"outcome": "ready", "published": []})))
                     }
                     "/node/hello" => {
@@ -537,14 +264,162 @@ mod join {
                 }
             }
         });
-        (address, arrivals)
+        (address, arrivals, observations)
+    }
+
+    /// The node's observation is what its `NodeFacts` port answered, and nothing else: a stub
+    /// port that answers what the local adapter never does (level `MicroVm`, 3 CPUs) is what
+    /// `RecordNodeObservation` carries, and a fact the port withholds is reported `false`.
+    #[test]
+    fn the_observation_is_what_the_node_facts_port_answered() {
+        use weft_platform::node::{
+            Capacity, Exec, ExecError, ExecState, Exited, Facts, Isolation, IsolationLevel,
+            NodeFacts, Process,
+        };
+        use weft_platform::Refusal;
+
+        struct Stub;
+        impl NodeFacts for Stub {
+            fn observe(&self) -> Result<Facts, Refusal> {
+                Ok(Facts {
+                    capacity: vec![Capacity {
+                        resource_class: "cpu".to_owned(),
+                        amount: 3,
+                    }],
+                    isolation: Isolation {
+                        levels: vec![IsolationLevel::MicroVm],
+                        cgroups_delegated: None,
+                        egress_denied: Some(true),
+                        kvm_present: Some(true),
+                        gpu_passthrough: None,
+                    },
+                })
+            }
+        }
+        impl Exec for Stub {
+            fn run(&self, _: &Process, _: &mut dyn FnMut(ExecState)) -> Result<Exited, ExecError> {
+                Err(Refusal::NotServed {
+                    operation: "run".to_owned(),
+                }
+                .into())
+            }
+        }
+
+        let (control, _, observations) = stand_in(|_| Some((409, json!({"published": []}))));
+        let report = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("observation-{}.jsonl", std::process::id()));
+        let options = weft_agent::agent::Options::parse([
+            "--control".to_owned(),
+            format!("http://{control}"),
+            "--node-id".to_owned(),
+            "node-1".to_owned(),
+            "--join-token".to_owned(),
+            "token".to_owned(),
+            "--substrate".to_owned(),
+            "/nonexistent/substrate.sock".to_owned(),
+            "--report".to_owned(),
+            report.to_string_lossy().into_owned(),
+        ])
+        .expect("the arguments parse");
+        let ended = weft_agent::agent::run(&options, &Stub, &Stub);
+        let _ = std::fs::remove_file(&report);
+        assert!(ended.is_err(), "the refused hello ends the run: {ended:?}");
+        let observations = observations.lock().expect("the observations lock").clone();
+        assert_eq!(observations.len(), 1, "{observations:?}");
+        assert_eq!(
+            observations[0]["capacity"],
+            json!([{"resource_class": "cpu", "amount": 3}])
+        );
+        assert_eq!(
+            observations[0]["isolation_facts"],
+            json!({
+                "levels": ["MicroVm"],
+                "cgroups_delegated": false,
+                "egress_denied": true,
+                "kvm_present": true,
+                "gpu_passthrough": false,
+            })
+        );
+    }
+
+    /// Adversary (weft#29): a fact the port answers present and `false` is reported `false`.
+    /// The case above pins absent -> `false` and `true` -> `true` only, so `fact.is_some()` in
+    /// place of `fact.unwrap_or(false)` (`isolation_facts` in `agent.rs`) passes the whole suite
+    /// and reports a GPU passed through on every node the local adapter observes (it answers
+    /// `gpu_passthrough: Some(false)`, and `kvm_present: Some(false)` on a host without KVM).
+    #[test]
+    fn a_fact_the_port_answers_false_is_reported_false() {
+        use weft_platform::node::{
+            Capacity, Exec, ExecError, ExecState, Exited, Facts, Isolation, IsolationLevel,
+            NodeFacts, Process,
+        };
+        use weft_platform::Refusal;
+
+        struct Stub;
+        impl NodeFacts for Stub {
+            fn observe(&self) -> Result<Facts, Refusal> {
+                Ok(Facts {
+                    capacity: vec![Capacity {
+                        resource_class: "cpu".to_owned(),
+                        amount: 1,
+                    }],
+                    isolation: Isolation {
+                        levels: vec![IsolationLevel::Container],
+                        cgroups_delegated: Some(false),
+                        egress_denied: Some(false),
+                        kvm_present: Some(false),
+                        gpu_passthrough: Some(false),
+                    },
+                })
+            }
+        }
+        impl Exec for Stub {
+            fn run(&self, _: &Process, _: &mut dyn FnMut(ExecState)) -> Result<Exited, ExecError> {
+                Err(Refusal::NotServed {
+                    operation: "run".to_owned(),
+                }
+                .into())
+            }
+        }
+
+        let (control, _, observations) = stand_in(|_| Some((409, json!({"published": []}))));
+        let report = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("observation-false-{}.jsonl", std::process::id()));
+        let options = weft_agent::agent::Options::parse([
+            "--control".to_owned(),
+            format!("http://{control}"),
+            "--node-id".to_owned(),
+            "node-1".to_owned(),
+            "--join-token".to_owned(),
+            "token".to_owned(),
+            "--substrate".to_owned(),
+            "/nonexistent/substrate.sock".to_owned(),
+            "--report".to_owned(),
+            report.to_string_lossy().into_owned(),
+        ])
+        .expect("the arguments parse");
+        let ended = weft_agent::agent::run(&options, &Stub, &Stub);
+        let _ = std::fs::remove_file(&report);
+        assert!(ended.is_err(), "the refused hello ends the run: {ended:?}");
+        let observations = observations.lock().expect("the observations lock").clone();
+        assert_eq!(observations.len(), 1, "{observations:?}");
+        assert_eq!(
+            observations[0]["isolation_facts"],
+            json!({
+                "levels": ["Container"],
+                "cgroups_delegated": false,
+                "egress_denied": false,
+                "kvm_present": false,
+                "gpu_passthrough": false,
+            })
+        );
     }
 
     /// A refused `hello` is reported with its status and ends the agent with a failure
     /// (`session-refused`: the node closes and does not dial again).
     #[test]
     fn a_refused_hello_is_reported_and_ends_the_agent() {
-        let (control, arrivals) = stand_in(|_| {
+        let (control, arrivals, _) = stand_in(|_| {
             Some((
                 409,
                 json!({"outcome": "already-open", "error": "weft.nodes.SessionAlreadyOpen", "published": []}),
@@ -565,7 +440,7 @@ mod join {
     /// for it.
     #[test]
     fn a_hello_whose_connection_is_lost_is_sent_again_after_the_redial_delay() {
-        let (control, arrivals) =
+        let (control, arrivals, _) =
             stand_in(|number| (number > 0).then(|| (200, json!({"session_id": "session-1"}))));
         let mut agent = NodeAgent::start_at(control, "node-1", "token");
         let lines = agent.wait_for(HELLO_LIMIT, |lines| !hellos(lines).is_empty());

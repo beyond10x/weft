@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ports-node-exec-facts
 kind: story
-status: draft
+status: active
 title: The `weft-platform` crate with the `exec` and `node-facts` ports; `confine` moves behind them
 relations:
 - decomposes: epic:platform-ports
@@ -26,7 +26,10 @@ scope:
   path: product/cloud/crates/weft-agent/tests/main.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T01:05:46Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T01:05:46Z", actor: "human:operator", revision: 4, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
