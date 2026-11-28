@@ -3594,3 +3594,250 @@ mod adversary_edge {
         assert_eq!((entry.encode)(&ready), None);
     }
 }
+
+/// Adversary of `story:cloud-blocks-rust`: the quota moved from `CreateInstance` to
+/// `PlaceInstance`, and the scope checks the blocks dropped from `SubmitSchedulingRequest`.
+mod adversary_cloud_blocks_rust {
+    use serde_json::json;
+    use weft_controllers::placement::STEP;
+    use weft_impl::bindings::outcome_name;
+    use weft_impl::context::mint;
+    use weft_system::SystemEvent;
+    use weft_testkit::steps;
+    use weft_types::behaviour::{
+        ClusterStorage, InstanceStorage, NodeStorage, QuotaStorage, SchedulingRequestStorage,
+    };
+    use weft_types::cluster::ClusterState;
+    use weft_types::primitives::Uuid;
+    use weft_types::scheduling::obligations::PlaceInstanceBehavior;
+    use weft_types::scheduling::{
+        PlaceInstance, PlacementDecisions, SchedulingRequestSnapshot, SchedulingRequestState,
+    };
+    use weft_types::shared::{
+        AccountId, InstanceId, IsolationLevel, QuotaId, SchedulingRequestId, ScopeId, ServiceId,
+        StampedAt, WorkloadId,
+    };
+    use weft_types::workloads::{InstanceState, ReplicaRequested};
+
+    use super::ready::{another_node, at, Ready};
+
+    /// A node identity that sorts before any minted one in the view's order.
+    const FIRST: &str = "00000000-0000-4000-8000-000000000000";
+
+    fn decisions(r: &Ready) -> Vec<PlacementDecisions> {
+        r.w.process
+            .host()
+            .system()
+            .weft_control
+            .placement_decisions()
+            .expect("the view reads")
+    }
+
+    fn set_limit(r: &Ready, limit: i64) {
+        let mut ports = r.ports();
+        let key = QuotaId(Uuid(r.w.path.quota_id.clone()));
+        let mut quota = QuotaStorage::get(&ports, &key).expect("the quota row");
+        quota.data.limit = limit;
+        quota.data.remaining = limit;
+        QuotaStorage::put(&mut ports, quota);
+    }
+
+    /// The input that places `request` on the world's node at `Container`, as the Scheduler
+    /// sends it.
+    fn input(r: &Ready, request: &SchedulingRequestSnapshot) -> PlaceInstance {
+        let node = NodeStorage::get(&r.ports(), &r.node).expect("the node row");
+        PlaceInstance {
+            request_id: request.data.request_id.clone(),
+            tenant_id: r.tenant(),
+            scope_id: request.data.scope_id.clone(),
+            cluster_id: r.cluster(),
+            formation_id: request.data.formation_id.clone(),
+            node_id: r.node.clone(),
+            node_pool_id: node.data.node_pool_id,
+            zone: node.data.zone,
+            isolation: IsolationLevel::Container,
+            bindings: Vec::new(),
+            cluster_node_pool_id: None,
+            topology_group_id: None,
+            peer_groups: Vec::new(),
+            decided_at: StampedAt(at(-1)),
+        }
+    }
+
+    fn place(r: &Ready, input: PlaceInstance) -> String {
+        let mut ports = r.ports();
+        outcome_name(&PlaceInstanceBehavior::place_instance(&mut ports, input).expect("an outcome"))
+    }
+
+    /// Before the blocks, `CreateInstance` refused an instance past the scope's quota, so the
+    /// live instances of a scope never held more than its quota and `PlaceInstance` could count
+    /// a `Pending` one as held. Now an instance past the quota is created `Pending` too: two
+    /// `Pending` instances of 1 cpu each under a quota of 1 cpu each count the other as held,
+    /// and neither is ever placed. The quota admits one of them; one of them is placed.
+    #[test]
+    fn of_two_pending_instances_the_quota_admits_one_is_placed() {
+        let r = Ready::new();
+        set_limit(&r, 1);
+        let mut ports = r.ports();
+        let mut sibling = InstanceStorage::get(&ports, &r.request.data.instance_id)
+            .expect("the request's instance");
+        sibling.data.instance_id = InstanceId(Uuid(mint()));
+        sibling.data.service_id = None;
+        sibling.state = InstanceState::Pending;
+        InstanceStorage::put(&mut ports, sibling.clone());
+        let mut other = r.request.clone();
+        other.data.request_id = SchedulingRequestId(Uuid(mint()));
+        other.data.instance_id = sibling.data.instance_id.clone();
+        SchedulingRequestStorage::put(&mut ports, other.clone());
+
+        let first = place(&r, input(&r, &r.request));
+        let second = place(&r, input(&r, &other));
+        assert!(
+            first == "placed" || second == "placed",
+            "a quota of 1 cpu and two Pending instances of 1 cpu: neither placed ({first}, {second})"
+        );
+    }
+
+    /// The same through the running controllers: the world's replica is `Pending` within its
+    /// quota of 1 cpu; a second replica past the quota is created (the blocks took
+    /// `CreateInstance` out of the outcome group `quota`). Before, the first replica was placed
+    /// on the next tick and the second refused at creation; now the Scheduler places neither.
+    #[test]
+    fn a_replica_past_the_quota_does_not_keep_the_replica_within_it_from_being_placed() {
+        let r = Ready::new();
+        set_limit(&r, 1);
+        r.w.process.host().replay(vec![SystemEvent::WorkloadsReplicaRequested(
+            ReplicaRequested {
+                service_id: ServiceId(Uuid(r.w.ids.service_id.clone())),
+                workload_id: WorkloadId(Uuid(r.w.ids.workload_id.clone())),
+                replica_index: 1,
+            },
+        )]);
+        let pending = SchedulingRequestStorage::list(&r.ports())
+            .into_iter()
+            .filter(|row| row.state == SchedulingRequestState::Pending)
+            .count();
+        assert_eq!(pending, 2, "the replica past the quota has its request");
+        for _ in 0..4 {
+            r.w.process.host().tick();
+        }
+        let placed: Vec<_> = decisions(&r)
+            .into_iter()
+            .filter(|row| row.instance_id == r.request.data.instance_id)
+            .collect();
+        assert_eq!(
+            placed.len(),
+            1,
+            "the replica within the quota is not placed: {:?}",
+            decisions(&r)
+        );
+    }
+
+    /// The blocks dropped `SubmitSchedulingRequest`'s check that the instance is the request's
+    /// scope's (`instance-of-other-account`); the story moves the dropped scope checks to
+    /// weft's run-time admission. A ReleaseController of `globex` (granted
+    /// `SubmitSchedulingRequest`) asks to schedule `acme`'s placed instance in its own scope and
+    /// formation: the Scheduler must not place `acme`'s instance as `globex`'s, under
+    /// `globex`'s tenant (which `shared-kernel` then compares) and quota.
+    #[test]
+    fn another_scope_cannot_get_this_scope_s_instance_placed() {
+        let r = Ready::new();
+        r.w.process.host().tick();
+        let acme_instance = r.request.data.instance_id.clone();
+        let acme_scope = r.request.data.scope_id.clone();
+        assert_eq!(
+            decisions(&r)
+                .iter()
+                .filter(|row| row.instance_id == acme_instance)
+                .count(),
+            1,
+            "acme's request is placed first"
+        );
+        another_node(&r.ports(), &r.node, FIRST);
+
+        let client = r.w.process.client();
+        let tenant = steps::create_tenant(client, "globex");
+        let account = steps::create_account(client, &tenant);
+        let scope = steps::record_account_scope(client, &account);
+        steps::grant_top_quota(client, &account);
+        let caller = steps::account_caller(&tenant, &account, &scope);
+        let formation = steps::create_formation(client, &caller, &scope);
+        steps::pin_formation(client, &caller, &scope, &r.w.path.cluster_id, &formation);
+
+        let answer = client
+            .command(
+                "weft.scheduling.SubmitSchedulingRequest",
+                "weft.actors.ReleaseController",
+                caller.clone(),
+                json!({
+                    "instance_id": acme_instance.0 .0,
+                    "scope_id": scope,
+                    "formation_id": formation,
+                    "claims": [{"name": "cpu", "class": "cpu", "amount": 1, "selector": {}}],
+                    "min_isolation": "Container",
+                    "zones": [],
+                    "priority": r.request.data.priority.0,
+                    "gang_id": null,
+                }),
+            )
+            .expect("the control host answers");
+        let outcome = answer.body["outcome"].as_str().unwrap_or_default().to_owned();
+        for _ in 0..2 {
+            r.w.process.host().tick();
+        }
+        let foreign: Vec<_> = decisions(&r)
+            .into_iter()
+            .filter(|row| row.instance_id == acme_instance && row.scope_id != acme_scope)
+            .collect();
+        assert!(
+            foreign.is_empty(),
+            "SubmitSchedulingRequest answered {outcome} ({}); acme's instance placed in another scope: {foreign:?}",
+            answer.status
+        );
+    }
+
+    /// Catches the mutant "the quota counts only the instances of the request's own scope": a
+    /// `Running` instance of another scope, whose account's quota draws from the quota of the
+    /// account that holds the request's scope, holds part of that quota.
+    #[test]
+    fn an_instance_of_a_scope_whose_quota_draws_from_this_one_counts_against_it() {
+        let r = Ready::new();
+        let client = r.w.process.client();
+        let tenant = steps::create_tenant(client, "initech");
+        let account = steps::create_account(client, &tenant);
+        let scope = steps::record_account_scope(client, &account);
+        let mut ports = r.ports();
+        let key = QuotaId(Uuid(r.w.path.quota_id.clone()));
+        let mut child = QuotaStorage::get(&ports, &key).expect("the quota row");
+        child.data.quota_id = QuotaId(Uuid(mint()));
+        child.data.account_id = AccountId(Uuid(account));
+        child.data.parent_quota_id = Some(key);
+        child.data.limit = 64;
+        QuotaStorage::put(&mut ports, child);
+        set_limit(&r, 1);
+        let mut sibling = InstanceStorage::get(&ports, &r.request.data.instance_id)
+            .expect("the request's instance");
+        sibling.data.instance_id = InstanceId(Uuid(mint()));
+        sibling.data.service_id = None;
+        sibling.data.scope_id = ScopeId(Uuid(scope));
+        sibling.state = InstanceState::Running;
+        InstanceStorage::put(&mut ports, sibling);
+        assert_eq!(place(&r, input(&r, &r.request)), "quota-exceeded");
+    }
+
+    /// Catches the mutant "the placement step takes a deleted cluster as the formation's":
+    /// `PlaceInstance` has no guard on the cluster's state, so the step's filter is the only
+    /// thing that keeps a request of a formation pinned to a deleted cluster from being placed.
+    /// The step sends nothing for it and does not wait.
+    #[test]
+    fn a_request_of_a_formation_pinned_to_a_deleted_cluster_is_not_sent() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut cluster = ClusterStorage::get(&ports, &r.cluster()).expect("the cluster row");
+        cluster.state = ClusterState::Deleted;
+        ClusterStorage::put(&mut ports, cluster);
+        r.w.process.host().tick();
+        assert!(decisions(&r).is_empty(), "{:?}", decisions(&r));
+        assert!(r.ports().store().step_waits(STEP).is_empty());
+    }
+}
