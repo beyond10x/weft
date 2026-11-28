@@ -4,6 +4,7 @@
 principal_id: 5ae6e7f9-27ac-49de-b278-4e6c8ff33f98
 tenant_id: null
 account_id: null
+scope_id: null
 roles:
   - cluster_operator
 display: cluster-operator

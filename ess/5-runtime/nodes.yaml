@@ -450,8 +450,8 @@ entities:
         type: weft.shared.InstanceId
       # hardening pass 1 D3: the account the stream acts in (the caller's, tied to the instance's
       # account at open), so CloseExecSession can tie the stream to its caller.
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       # Who opened it.
       - name: principal_id
         type: weft.shared.PrincipalId
@@ -493,9 +493,9 @@ entities:
       # references: the account (2. Tenancy) outlives a stream.
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
     lifecycle:
       initial: Open
       states: [Open, Closed]
@@ -1718,9 +1718,9 @@ commands:
   # input; no binding in ess/components.yaml maps OpenExecSession. Which kinds a role permits
   # (Viewer: Logs only; ClusterOperator: none, "sees no tenant's ... workloads' data") is the
   # access domain's RoleBinding check, decided before any row is read.
-  # hardening pass 1 D3: `account_id` is the account the stream acts in; it must be the caller's
+  # hardening pass 1 D3: `scope_id` is the account the stream acts in; it must be the caller's
   # and the instance's. An ESS caller value cannot be compared with a related row's field, so the
-  # input carries the anchor: caller -> input.account_id -> instance -> assignment.
+  # input carries the anchor: caller -> input.scope_id -> instance -> assignment.
   - name: weft.nodes.OpenExecSession
     naming:
       display: Open an exec stream into an instance
@@ -1729,7 +1729,7 @@ commands:
       - {name: node_id, type: weft.shared.NodeId}
       - {name: assignment_id, type: weft.shared.AssignmentId}
       - {name: instance_id, type: weft.shared.InstanceId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: kind, type: weft.nodes.ExecKind}
     outcomes:
       # Kept `external`: the fact is in weft (the access domain's RoleBindings), but it joins the
@@ -1742,7 +1742,7 @@ commands:
       # hardening pass 1 D3: a stream acts in the caller's account only; another account answers
       # as a missing assignment.
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.nodes.AssignmentNotFound
       - name: no-such-assignment
         when_related: {via: input.assignment_id, exists: false}
@@ -1761,7 +1761,7 @@ commands:
       # the row predicates, before any state of a foreign row answers; another account's instance
       # answers as a missing assignment.
       - name: instance-of-other-account
-        when_related: {via: input.instance_id, predicate: account_id != input.account_id}
+        when_related: {via: input.instance_id, predicate: scope_id != input.scope_id}
         error: weft.nodes.AssignmentNotFound
       # hardening pass 1 D3 (disclosure): the assignment is tied to that instance before its node,
       # session or state answer; an assignment of another (possibly foreign) instance answers as a
@@ -1789,7 +1789,7 @@ commands:
           node_id: input.node_id
           assignment_id: input.assignment_id
           instance_id: input.instance_id
-          account_id: {caller: account_id}
+          scope_id: {caller: scope_id}
           principal_id: {caller: principal_id}
           kind: input.kind
           opened_at: {generated: true}
@@ -1817,7 +1817,7 @@ commands:
       # state does.
       - name: not-callers-account
         when_subject:
-          predicate: account_id != caller.account_id
+          predicate: scope_id != caller.scope_id
         error: weft.nodes.ExecSessionNotFound
       - name: closed
         moves: weft.nodes.ExecSession.close

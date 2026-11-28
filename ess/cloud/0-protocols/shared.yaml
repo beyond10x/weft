@@ -1,0 +1,394 @@
+# Moved from weft@6798e7d:ess/0-foundation/shared.yaml: the identifiers of the moved entities and the
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
+# value types the moved blocks use.
+domain: weft.shared
+
+summary: >-
+  Identifiers of every entity of the cloud blocks and the value types more than one block uses.
+  A block refers to an entity of another block through its identifier here.
+
+naming:
+  wire: weft
+  display: Shared
+
+types:
+  # cloudspec (D1 A): the identifier of weft.scope.Scope; weft's AccountId
+  # (weft@6798e7d:ess/0-foundation/shared.yaml:15) in the moved blocks.
+  - name: weft.shared.ScopeId
+    kind: newtype
+    of: Uuid
+  # A caller by value (weft@6798e7d:ess/0-foundation/shared.yaml:18): no block holds a principal
+  # entity; a deployment names its callers.
+  - name: weft.shared.PrincipalId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:25
+  - name: weft.shared.FormationId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:28
+  - name: weft.shared.FormationRevisionId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:31
+  - name: weft.shared.EnvironmentId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:34
+  # cloudspec (D7 A): held by value; the entity it identifies is a run-time record of weft.
+  - name: weft.shared.ReleaseId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:37
+  - name: weft.shared.ComponentName
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:41
+  - name: weft.shared.ArtifactDigest
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:44
+  # cloudspec (D7 A): held by value; the entity it identifies is a run-time record of weft.
+  - name: weft.shared.InstanceId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:47
+  - name: weft.shared.ProcessName
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:50
+  - name: weft.shared.InvocationId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:53
+  - name: weft.shared.SnapshotId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:57
+  - name: weft.shared.ConfigId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:60
+  - name: weft.shared.EndpointId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:63
+  - name: weft.shared.BoxId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:66
+  - name: weft.shared.JobId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:70
+  - name: weft.shared.DeploymentSourceId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:73
+  - name: weft.shared.TranslatorId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:76
+  - name: weft.shared.TranslationId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:79
+  - name: weft.shared.PlanId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:83
+  - name: weft.shared.ResourceClassName
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:86
+  - name: weft.shared.ClaimId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:89
+  - name: weft.shared.BindingId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:92
+  - name: weft.shared.DeviceId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:95
+  - name: weft.shared.VolumeId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:99
+  - name: weft.shared.SecretId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:102
+  - name: weft.shared.SecretVersionId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:105
+  - name: weft.shared.SecretGrantId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:109
+  - name: weft.shared.WorkloadIdentity
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:113
+  - name: weft.shared.CloudId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:124
+  - name: weft.shared.TopologyId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:127
+  - name: weft.shared.TopologyGroupId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:130
+  - name: weft.shared.TopologyLinkId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:133
+  - name: weft.shared.NodeId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:136
+  - name: weft.shared.NodePoolId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:139
+  - name: weft.shared.ZoneName
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:153
+  - name: weft.shared.OfferingId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:156
+  # cloudspec (D7 A): held by value; the entity it identifies is a run-time record of weft.
+  - name: weft.shared.EngineId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:159
+  - name: weft.shared.ServiceInstanceId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:162
+  - name: weft.shared.ServiceBindingId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:194
+  - name: weft.shared.BackupId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:197
+  # cloudspec (D7 A): held by value; the entity it identifies is a run-time record of weft.
+  - name: weft.shared.OfferingPlanId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:203
+  - name: weft.shared.RestoreId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:206
+  - name: weft.shared.CoverageEntryId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:215
+  - name: weft.shared.ComponentId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:218
+  - name: weft.shared.ConfigMountId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:221
+  - name: weft.shared.ConfigOverrideId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:224
+  - name: weft.shared.LinkId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:227
+  - name: weft.shared.RouteId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:230
+  - name: weft.shared.ScaleSettingId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:233
+  - name: weft.shared.ExchangePolicyId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:236
+  - name: weft.shared.IdentityDocumentId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:239
+  - name: weft.shared.TokenExchangeId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:242
+  - name: weft.shared.TrustDomainId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:248
+  - name: weft.shared.ConcurrencyId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:251
+  - name: weft.shared.DeadlineId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:263
+  - name: weft.shared.RateId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:304
+  - name: weft.shared.EdgeCertificateId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:307
+  - name: weft.shared.BucketId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:310
+  - name: weft.shared.FilesystemId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:313
+  - name: weft.shared.VolumeSnapshotId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:316
+  - name: weft.shared.GangId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:319
+  - name: weft.shared.PriorityClassName
+    kind: newtype
+    of: String
+  # weft@6798e7d:ess/0-foundation/shared.yaml:322
+  - name: weft.shared.ScaleRequestId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:325
+  - name: weft.shared.SchedulingRequestId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:328
+  - name: weft.shared.SecretBackendId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:334
+  - name: weft.shared.RuntimeId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:337
+  - name: weft.shared.ScheduleId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:340
+  - name: weft.shared.ServiceId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:343
+  - name: weft.shared.SessionId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:346
+  - name: weft.shared.TriggerId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:349
+  - name: weft.shared.WakeId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:352
+  - name: weft.shared.LogStreamId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:355
+  - name: weft.shared.TelemetrySinkId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:358
+  - name: weft.shared.TelemetryPolicyId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:361
+  - name: weft.shared.MetricSeriesId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:364
+  - name: weft.shared.AlertRuleId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:370
+  - name: weft.shared.NotificationTargetId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:400
+  - name: weft.shared.AttestationId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:403
+  - name: weft.shared.WarmPoolId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:406
+  - name: weft.shared.WorkloadId
+    kind: newtype
+    of: Uuid
+  # weft@6798e7d:ess/0-foundation/shared.yaml:416
+  - name: weft.shared.StampedAt
+    kind: newtype
+    of: Timestamp
+  # weft@6798e7d:ess/0-foundation/shared.yaml:420
+  - name: weft.shared.IsolationLevel
+    kind: enum
+    ordered: true
+    variants: [ProcessSandbox, Container, UserKernel, MicroVm]
+  # weft@6798e7d:ess/0-foundation/shared.yaml:433
+  - name: weft.shared.Sharing
+    kind: enum
+    variants: [Exclusive, SharedReadOnly, SharedReadWrite]
+  # weft@6798e7d:ess/0-foundation/shared.yaml:437
+  - name: weft.shared.SleepKind
+    kind: enum
+    variants: [Stop, Suspend]
+  # weft@6798e7d:ess/0-foundation/shared.yaml:441
+  - name: weft.shared.SleepPolicy
+    kind: struct
+    fields:
+      - name: idle_after
+        type: Duration
+      - name: kind
+        type: weft.shared.SleepKind
+  # weft@6798e7d:ess/0-foundation/shared.yaml:449
+  - name: weft.shared.ResourceAmount
+    kind: struct
+    fields:
+      - name: resource_class
+        type: weft.shared.ResourceClassName
+      - name: amount
+        type: Integer
+    invariants:
+      - amount >= 0
+  # weft@6798e7d:ess/0-foundation/shared.yaml:459
+  - name: weft.shared.IsolationFacts
+    kind: struct
+    fields:
+      - name: kvm_present
+        type: Boolean
+      - name: cgroups_delegated
+        type: Boolean
+      - name: egress_denied
+        type: Boolean
+      - name: gpu_passthrough
+        type: Boolean
+      - name: levels
+        type: List<weft.shared.IsolationLevel>

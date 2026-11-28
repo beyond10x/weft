@@ -56,8 +56,8 @@ const BudgetMeter: HostComponent = (p) => {
 
 /**
  * The name of an alert rule for its id: what `label_from` would draw, but AlertRules takes
- * account_id and ess-ui/1 reads a `label_from` view without params. The slot names the scoped read
- * (`reads: AlertRules(account_id: actor.account_id)`); useLabelMap (runtime.tsx) binds the param
+ * scope_id and ess-ui/1 reads a `label_from` view without params. The slot names the scoped read
+ * (`reads: AlertRules(scope_id: actor.scope_id)`); useLabelMap (runtime.tsx) binds the param
  * from the signed-in actor. The id, as an id, until the name is known.
  */
 const AlertRuleName: HostComponent = (p) => {

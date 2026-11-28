@@ -1,4 +1,4 @@
-//! `weft.workloads.CreateInstance` (`PLAN.md` § Obligations, `ess/4-applications/workloads.yaml`),
+//! `weft.workloads.CreateInstance` (`PLAN.md` § Obligations, `ess/cloud/5-workloads/workloads.yaml`),
 //! in the selection precedence of its contract:
 //!
 //! 1. every existence check before every predicate, in declaration order: `no-workload`, then,
@@ -9,13 +9,13 @@
 //!    `foreign-warm-pool`, `foreign-service`); `replica-live`, only for a replica's request
 //!    (service and index given): a live instance (`Pending`, `Scheduled`, `Starting`,
 //!    `Running`, `Paused`) of the same service and index;
-//! 3. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
-//!    the same store ([`crate::quota`]): the workload's claims would take its account, or an
-//!    account above it, past a quota. It is answered before `created`, the branch the contract
-//!    takes "otherwise" (its default, where no branch answered);
-//! 4. `created`: a `Pending` instance with the workload's account, artifact, isolation as its
-//!    minimum, processes and restart policy, and `InstanceCreated` with the workload's
+//! 3. `created` otherwise: a `Pending` instance with the workload's scope, artifact, isolation
+//!    as its minimum, processes and restart policy, and `InstanceCreated` with the workload's
 //!    formation, claims and priority and the formation's zones.
+//!
+//! The blocks take `CreateInstance` out of the outcome group `quota`: an instance is created
+//! without a quota check, and `weft.scheduling.PlaceInstance` (`quota-exceeded`, weft's run-time
+//! admission) refuses to place one past its scope's quota.
 
 use weft_types::behaviour::{
     BoxStorage, FormationStorage, InstanceStorage, InvocationStorage, JobStorage, ServiceStorage,
@@ -27,8 +27,8 @@ use weft_types::shared::{InstanceId, WorkloadId};
 use weft_types::workloads::obligations::CreateInstanceBehavior;
 use weft_types::workloads::{
     CreateInstance, CreateInstanceOutcome, DesiredRun, ForeignOwner, InstanceCreated, InstanceData,
-    InstanceHealth, InstanceSnapshot, InstanceState, NotFound, QuotaExceeded, ReplicaLive,
-    ServiceNotFound, WorkloadIsRetired, WorkloadNotFound, WorkloadState,
+    InstanceHealth, InstanceSnapshot, InstanceState, NotFound, ReplicaLive, ServiceNotFound,
+    WorkloadIsRetired, WorkloadNotFound, WorkloadState,
 };
 
 use crate::context::mint;
@@ -140,11 +140,6 @@ impl CreateInstanceBehavior for Ports {
         }
 
         let workload = workload.data;
-        if quota::exceeded(self, &workload.account_id, &workload.claims) {
-            return Ok(CreateInstanceOutcome::OverQuota {
-                error: QuotaExceeded,
-            });
-        }
 
         let zones = FormationStorage::get(self, &workload.formation_id)
             .map(|formation| formation.data.zones)
@@ -154,7 +149,7 @@ impl CreateInstanceBehavior for Ports {
             instance_id: instance_id.clone(),
             workload_id: input.workload_id.clone(),
             minimum_isolation: workload.isolation,
-            account_id: workload.account_id.clone(),
+            scope_id: workload.scope_id.clone(),
             formation_id: workload.formation_id.clone(),
             claims: workload.claims.clone(),
             service_id: input.service_id.clone(),
@@ -170,7 +165,7 @@ impl CreateInstanceBehavior for Ports {
                 data: InstanceData {
                     instance_id,
                     workload_id: input.workload_id,
-                    account_id: workload.account_id,
+                    scope_id: workload.scope_id,
                     artifact_digest: workload.artifact_digest,
                     minimum_isolation: workload.isolation,
                     isolation: None,

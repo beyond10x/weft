@@ -1,0 +1,9 @@
+format cloudspec-vendor/2
+commit 1111111111111111111111111111111111111111
+system weft
+exclude 13-actors/actors.yaml
+exclude components.yaml
+source 2222222222222222222222222222222222222222222222222222222222222222 blocks/0-protocols/shared.yaml
+output 6602986efe81f80c47dd1a1c7b7730f4518b4819f98aa9511f32b5d12cd08896 0-protocols/shared.yaml
+source 3333333333333333333333333333333333333333333333333333333333333333 blocks/2-infrastructure/topology.yaml
+output 1aae8d0ba9adf767c2d71257bdde31d4c2daaf9fd46509d7e52d0cc5ea21138d 2-infrastructure/topology.yaml

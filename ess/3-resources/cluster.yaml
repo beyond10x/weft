@@ -10,11 +10,13 @@
 # infrastructure command.
 #
 # Layer 3: a cluster names an account (weft.accounts, layer 2) and a cloud, zones and node pools
-# (weft.infrastructure, layer 1). Formations (layer 4) will name a cluster (design § Step 3); this
-# file names nothing above layer 3, so every check on formations is an external refusal here.
+# (weft.infrastructure, layer 1). D-e A (story cloud-blocks-cluster-pinning): the vendored
+# weft.architecture.Formation (ess/cloud/, below weft's files) no longer names a cluster (cloudspec
+# C2), so a cluster records the formations that run in it (PinFormation), and
+# weft.scheduling.PlaceInstance refuses a request whose formation it does not list.
 #
 # Caller ties (docs/hardening/pass-1.md "The frame", D3 and "What changed"): every tenant command
-# compares the account it acts in with `caller.account_id`; another account's row answers NotFound,
+# compares the account it acts in with `caller.scope_id`; another account's row answers NotFound,
 # as a missing one does. The default cluster has no account, so it answers NotFound to every
 # tenant command that addresses it.
 #
@@ -46,32 +48,6 @@ types:
     kind: enum
     variants: [Shared, Dedicated]
 
-  # design § Step 2b "Topology": `kind` (Star, Ring, Mesh, Tree, Line, Custom).
-  - name: weft.cluster.TopologyKind
-    kind: enum
-    variants: [Star, Ring, Mesh, Tree, Line, Custom]
-
-  # design § Step 2b "TopologyGroup": "its role in the kind (the hub of a star, a position in a
-  # ring, a level and parent in a tree)".
-  # OPEN: the design names the hub, a ring position and a tree level and parent, not a role
-  # vocabulary. Taken: Star: Hub or Spoke; Tree: Root or Child (a Child names its parent, the
-  # level follows from the parents); Ring, Line, Mesh, Custom: Member (Ring and Line order members
-  # by `position`).
-  - name: weft.cluster.GroupRole
-    kind: enum
-    variants: [Hub, Spoke, Root, Child, Member]
-
-  # design § Step 2b "TrafficPattern (a value on a formation or a link of a formation)". Declared
-  # here for weft.formations (layer 4) and weft.scheduling (layer 5) to name; no field of this
-  # domain carries it.
-  # OPEN: the design writes `FanOut`/`Broadcast`. Taken: one variant, FanOut; Broadcast is its
-  # other name.
-  # OPEN: a type more than one domain uses belongs in weft.shared (AGENTS.md); it sits here, where
-  # the coordinator placed it, until a formation names it.
-  - name: weft.cluster.TrafficPattern
-    kind: enum
-    variants: [AllToAll, FanIn, FanOut, Pipeline, RingAllReduce, RequestResponse]
-
 entities:
   # design § Step 2 "Cluster": name, owning account (absent for the default cluster),
   # control_plane, minimum isolation level, zones it may use, state.
@@ -92,8 +68,8 @@ entities:
     fields:
       - name: cloud_id
         type: weft.shared.CloudId
-      - name: account_id
-        type: Optional<weft.shared.AccountId>
+      - name: scope_id
+        type: Optional<weft.shared.ScopeId>
         summary: The owning account; absent for the cloud's default cluster.
       - name: name
         type: String
@@ -103,17 +79,28 @@ entities:
         type: weft.shared.IsolationLevel
       - name: zones
         type: List<weft.shared.ZoneName>
+      # D-e A: design § Step 3 "a formation deploys into one cluster", fixed once it is pinned.
+      # Empty at create; PinFormation appends. A formation is listed by at most one cluster
+      # (PinFormation `already-pinned`). OPEN: a retired formation stays listed (no command
+      # removes it); nothing reads a listed formation's state.
+      - name: formations
+        type: List<weft.shared.FormationId>
     relations:
       - name: cloud
         kind: references
         target: weft.infrastructure.Cloud
         cardinality: one
         via: cloud_id
+      - name: formations
+        kind: references
+        target: weft.architecture.Formation
+        cardinality: many
+        via: formations
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: zones
         kind: references
         target: weft.infrastructure.Zone
@@ -131,7 +118,7 @@ entities:
   # design § Step 2 "ClusterNodePool": a dedicated pool of an account cluster (machine type or
   # resource class, min, max, zone). Requesting one emits an event; a binding makes weft-control
   # create the infrastructure NodePool (sketch § 14 line 596, edge form).
-  # `account_id` is copied from the cluster at create (the input is tied to it), so a caller tie
+  # `scope_id` is copied from the cluster at create (the input is tied to it), so a caller tie
   # reads the pool row itself.
   # OPEN: machine type or resource class (design § Step 2 names both)? Taken: the provider's
   # machine type as text, as weft.infrastructure.NodePool holds it (sketch line 453).
@@ -150,8 +137,8 @@ entities:
     fields:
       - name: cluster_id
         type: weft.shared.ClusterId
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: name
         type: String
       - name: zone
@@ -178,9 +165,9 @@ entities:
         via: cluster_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: in_zone
         kind: references
         target: weft.infrastructure.Zone
@@ -202,175 +189,7 @@ entities:
         - {name: ready, from: [Requested], to: Ready}
         - {name: remove, from: [Requested, Ready], to: Removed}
 
-  # design § Step 2b "Topology (one per cluster, in weft.cluster)": the structure of a cluster's
-  # nodes, distinct from a formation's topology (sketch § "Topology as data").
-  # OPEN: the design gives a topology no lifecycle. Taken: Active, then Removed; a cluster has at
-  # most one Active topology, and a new kind is set by removing it and creating another.
-  # OPEN: a topology of the default cluster (shared pools, no account). Taken: none; topologies
-  # are an account's, like dedicated pools.
-  - name: weft.cluster.Topology
-    naming:
-      summary: The structure of one account cluster's nodes, of one kind, made of groups and the links between them.
-    identity:
-      name: topology_id
-      type: weft.shared.TopologyId
-    fields:
-      - name: cluster_id
-        type: weft.shared.ClusterId
-      - name: account_id
-        type: weft.shared.AccountId
-      - name: kind
-        type: weft.cluster.TopologyKind
-    relations:
-      - name: cluster
-        kind: references
-        target: weft.cluster.Cluster
-        cardinality: one
-        via: cluster_id
-      - name: account
-        kind: references
-        target: weft.accounts.Account
-        cardinality: one
-        via: account_id
-    lifecycle:
-      initial: Active
-      states:
-        - {name: Active, summary: Scheduling reads it.}
-        - {name: Removed, summary: Removed with its groups and links.}
-      terminal: [Removed]
-      transitions:
-        - {name: remove, from: [Active], to: Removed}
-
-  # design § Step 2b "TopologyGroup": "a set of nodes from one or more of the cluster's node pools
-  # (a rack, a zone, a GPU island), with its role in the kind".
-  # OPEN: may one pool sit in two groups of a topology? Taken: not refused.
-  - name: weft.cluster.TopologyGroup
-    naming:
-      summary: A group of a topology, the nodes of some of the cluster's dedicated pools, with its role in the topology's kind.
-    identity:
-      name: topology_group_id
-      type: weft.shared.TopologyGroupId
-    fields:
-      - name: topology_id
-        type: weft.shared.TopologyId
-      - name: cluster_id
-        type: weft.shared.ClusterId
-      - name: account_id
-        type: weft.shared.AccountId
-      - name: name
-        type: String
-      - name: node_pools
-        type: List<weft.shared.ClusterNodePoolId>
-      - name: role
-        type: weft.cluster.GroupRole
-      - name: position
-        type: Optional<Integer>
-        summary: The group's place in a Ring or Line, from 0.
-      - name: parent_group_id
-        type: Optional<weft.shared.TopologyGroupId>
-        summary: The parent group of a Child in a Tree.
-    relations:
-      - name: topology
-        kind: references
-        target: weft.cluster.Topology
-        cardinality: one
-        via: topology_id
-      - name: cluster
-        kind: references
-        target: weft.cluster.Cluster
-        cardinality: one
-        via: cluster_id
-      - name: account
-        kind: references
-        target: weft.accounts.Account
-        cardinality: one
-        via: account_id
-      - name: node_pools
-        kind: references
-        target: weft.cluster.ClusterNodePool
-        cardinality: many
-        via: node_pools
-      - name: parent
-        kind: references
-        target: weft.cluster.TopologyGroup
-        cardinality: one
-        via: parent_group_id
-    lifecycle:
-      initial: Active
-      states:
-        - {name: Active, summary: Part of its topology.}
-        - {name: Removed, summary: No longer part of its topology.}
-      terminal: [Removed]
-      transitions:
-        - {name: remove, from: [Active], to: Removed}
-
-  # design § Step 2b "TopologyLink": "two groups, bandwidth, latency, whether traffic may cross
-  # it. Derived from the kind for Star/Ring/Mesh/Tree/Line; declared for Custom." Only declared
-  # links are rows; a derived link is computed from the groups and their roles.
-  # OPEN: bandwidth and latency of a derived link. Taken: what the nodes observe (not modelled
-  # here), and every derived link may be crossed.
-  # OPEN: units. Taken: bandwidth in megabits per second, latency in microseconds.
-  - name: weft.cluster.TopologyLink
-    naming:
-      summary: A declared link between two groups of a Custom topology, with its bandwidth, latency and whether traffic may cross it.
-    identity:
-      name: topology_link_id
-      type: weft.shared.TopologyLinkId
-    fields:
-      - name: topology_id
-        type: weft.shared.TopologyId
-      - name: account_id
-        type: weft.shared.AccountId
-      - name: from_group_id
-        type: weft.shared.TopologyGroupId
-      - name: to_group_id
-        type: weft.shared.TopologyGroupId
-      - name: bandwidth_mbps
-        type: Integer
-      - name: latency_us
-        type: Integer
-      - name: crossable
-        type: Boolean
-    invariants:
-      - bandwidth_mbps > 0
-      - latency_us >= 0
-    relations:
-      - name: topology
-        kind: references
-        target: weft.cluster.Topology
-        cardinality: one
-        via: topology_id
-      - name: account
-        kind: references
-        target: weft.accounts.Account
-        cardinality: one
-        via: account_id
-      - name: from_group
-        kind: references
-        target: weft.cluster.TopologyGroup
-        cardinality: one
-        via: from_group_id
-      - name: to_group
-        kind: references
-        target: weft.cluster.TopologyGroup
-        cardinality: one
-        via: to_group_id
-    lifecycle:
-      initial: Declared
-      states:
-        - {name: Declared, summary: Scheduling reads it.}
-        - {name: Removed, summary: No longer part of its topology.}
-      terminal: [Removed]
-      transitions:
-        - {name: remove, from: [Declared], to: Removed}
-
 errors:
-  # hardening pass 1 D3: also answers for a row of another account, and for the default cluster
-  # to a tenant, so a foreign row and a missing one answer the same.
-  - name: weft.cluster.NotFound
-    summary: The addressed cluster or pool does not exist in the account the request acts in, and nothing changed.
-  - name: weft.cluster.StateConflict
-    summary: The addressed record is not in a state this command acts from, and nothing changed.
   - name: weft.cluster.ClusterNameTaken
     summary: The account already has a cluster of this name that is not deleted.
   - name: weft.cluster.DefaultClusterExists
@@ -393,23 +212,10 @@ errors:
     summary: The pool's nodes would exceed the quota of the account or of an account above it.
   - name: weft.cluster.UnknownNodePool
     summary: The infrastructure node pool does not exist, or is not in the pool's zone.
-  - name: weft.cluster.TopologyExists
-    summary: The cluster already has a topology that is not removed.
-  - name: weft.cluster.RoleNotInKind
-    summary: The group's role, position or parent does not fit the kind of its topology.
-  - name: weft.cluster.HubExists
-    summary: The star topology already has a hub group.
   - name: weft.cluster.UnknownParentGroup
     summary: The parent group does not exist in the topology, or is removed.
-  - name: weft.cluster.PoolNotInCluster
-    summary: A node pool the group names is not a pool of the topology's cluster, or is removed.
-  - name: weft.cluster.LinksDerived
-    summary: The topology's kind derives its links; only a Custom topology declares them.
-  - name: weft.cluster.UnknownGroup
-    summary: A group the link names does not exist in the topology, or is removed.
-  - name: weft.cluster.InvalidLink
-    summary: The link joins a group to itself, or its bandwidth is not positive or its latency negative.
-
+  - name: weft.cluster.FormationAlreadyPinned
+    summary: The formation already runs in a cluster, and nothing changed.
 events:
   - name: weft.cluster.DefaultClusterCreated
     fields:
@@ -423,7 +229,7 @@ events:
     fields:
       - {name: cluster_id, type: weft.shared.ClusterId}
       - {name: cloud_id, type: weft.shared.CloudId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: String}
       - {name: control_plane, type: weft.cluster.ControlPlaneMode}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
@@ -439,13 +245,18 @@ events:
     fields:
       - {name: cluster_id, type: weft.shared.ClusterId}
 
+  - name: weft.cluster.FormationPinned
+    fields:
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: formation_id, type: weft.shared.FormationId}
+
   # Carries every input of weft.infrastructure.CreateNodePool (sketch § 14 line 596: "The event
   # carries every field the command's input needs").
   - name: weft.cluster.ClusterNodePoolRequested
     fields:
       - {name: cluster_node_pool_id, type: weft.shared.ClusterNodePoolId}
       - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: String}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: machine_type, type: String}
@@ -465,48 +276,6 @@ events:
       - {name: cluster_node_pool_id, type: weft.shared.ClusterNodePoolId}
       - {name: cluster_id, type: weft.shared.ClusterId}
       - {name: node_pool_id, type: Optional<weft.shared.NodePoolId>}
-
-  - name: weft.cluster.ClusterTopologyCreated
-    fields:
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: kind, type: weft.cluster.TopologyKind}
-
-  - name: weft.cluster.ClusterTopologyRemoved
-    fields:
-      - {name: topology_id, type: weft.shared.TopologyId}
-
-  - name: weft.cluster.TopologyGroupAdded
-    fields:
-      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: name, type: String}
-      - {name: node_pools, type: List<weft.shared.ClusterNodePoolId>}
-      - {name: role, type: weft.cluster.GroupRole}
-      - {name: position, type: Optional<Integer>}
-      - {name: parent_group_id, type: Optional<weft.shared.TopologyGroupId>}
-
-  - name: weft.cluster.TopologyGroupRemoved
-    fields:
-      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
-
-  - name: weft.cluster.TopologyLinkDeclared
-    fields:
-      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: from_group_id, type: weft.shared.TopologyGroupId}
-      - {name: to_group_id, type: weft.shared.TopologyGroupId}
-      - {name: bandwidth_mbps, type: Integer}
-      - {name: latency_us, type: Integer}
-      - {name: crossable, type: Boolean}
-
-  - name: weft.cluster.TopologyLinkRemoved
-    fields:
-      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
 
 commands:
   # design § Step 2 "The default cluster": one per cloud, created by the ClusterOperator, shared.
@@ -548,7 +317,7 @@ commands:
           where:
             all:
               - cloud_id == input.cloud_id
-              - not defined(account_id)
+              - not defined(scope_id)
               - state != Deleted
           exists: true
         error: weft.cluster.DefaultClusterExists
@@ -561,6 +330,7 @@ commands:
           control_plane: Shared
           min_isolation: input.min_isolation
           zones: input.zones
+          formations: []
         emits: [weft.cluster.DefaultClusterCreated]
         payload:
           weft.cluster.DefaultClusterCreated:
@@ -575,7 +345,7 @@ commands:
     naming:
       display: Create a cluster
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: cloud_id, type: weft.shared.CloudId}
       - {name: name, type: String}
       - {name: control_plane, type: weft.cluster.ControlPlaneMode}
@@ -584,8 +354,8 @@ commands:
     outcomes:
       # hardening pass 1 D3: the cluster is created only in the account the request acts in.
       - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.cluster.NotFound
+        when: scope_id != caller.scope_id
+        error: weft.topology.NotFound
       - name: dedicated-control-plane
         when: control_plane == Dedicated
         error: weft.cluster.DedicatedControlPlaneUnavailable
@@ -614,8 +384,8 @@ commands:
           entity: weft.cluster.Cluster
           where:
             all:
-              - defined(account_id)
-              - account_id == input.account_id
+              - defined(scope_id)
+              - scope_id == input.scope_id
               - name == input.name
               - state != Deleted
           exists: true
@@ -625,17 +395,18 @@ commands:
         instance: cluster_id
         sets:
           cloud_id: input.cloud_id
-          account_id: input.account_id
+          scope_id: input.scope_id
           name: input.name
           control_plane: input.control_plane
           min_isolation: input.min_isolation
           zones: input.zones
+          formations: []
         emits: [weft.cluster.ClusterCreated]
         payload:
           weft.cluster.ClusterCreated:
             cluster_id: {generated: true}
             cloud_id: input.cloud_id
-            account_id: input.account_id
+            scope_id: input.scope_id
             name: input.name
             control_plane: input.control_plane
             min_isolation: input.min_isolation
@@ -660,19 +431,19 @@ commands:
         error: weft.cluster.NoZones
       - name: no-such-cluster
         unknown_instance: true
-        error: weft.cluster.NotFound
+        error: weft.topology.NotFound
       # hardening pass 1 D3: another account's cluster, and the default cluster, answer like a
       # missing one, before its state or zones.
       - name: not-callers-account
         when_subject:
           predicate:
             any:
-              - not defined(account_id)
-              - account_id != caller.account_id
-        error: weft.cluster.NotFound
+              - not defined(scope_id)
+              - scope_id != caller.scope_id
+        error: weft.topology.NotFound
       - name: cluster-deleted
         when_subject: {predicate: state == Deleted}
-        error: weft.cluster.StateConflict
+        error: weft.topology.StateConflict
       # ESS 0.99.2 tests a list of references for a missing row only, and a row-set guard is
       # refused beside the caller tie (ESS-COMMAND-009), so a retired zone or a zone of another
       # cloud is not refused here. OPEN: refuse them once ESS reads a list's rows; until then
@@ -693,12 +464,72 @@ commands:
             min_isolation: input.min_isolation
             zones: input.zones
 
+  # design § Step 3 and D-e A (story cloud-blocks-cluster-pinning): the account names the cluster
+  # its formation deploys into, once. The vendored weft.architecture.CreateFormation takes no
+  # cluster (cloudspec C2), so this is a command of its own; until it runs, PlaceInstance refuses
+  # every request of the formation (other-cluster, default deny). The default cluster (no account)
+  # takes every account's formations; another account's cluster and a deleted one answer as a
+  # missing one (as weft's CreateFormation did before the blocks were vendored).
+  # OPEN: moving a formation to another cluster. Taken: refused (`already-pinned`); a formation is
+  # fixed to its cluster, as it was fixed at creation before.
+  - name: weft.cluster.PinFormation
+    naming:
+      display: Run a formation in a cluster
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: cluster_id, type: weft.shared.ClusterId}
+      - {name: formation_id, type: weft.shared.FormationId}
+    outcomes:
+      # hardening pass 1 D3: the formation is pinned only in the account the request acts in.
+      - name: not-callers-account
+        when: scope_id != caller.scope_id
+        error: weft.topology.NotFound
+      - name: no-such-cluster
+        when_related: {via: input.cluster_id, exists: false}
+        error: weft.topology.NotFound
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.topology.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.topology.NotFound
+      # A related-row guard, not `when_subject`: ESS 0.99.2 refuses a subject guard beside the
+      # row-set guard `already-pinned` (unsupported_construct).
+      - name: cluster-foreign
+        when_related:
+          via: input.cluster_id
+          predicate:
+            any:
+              - {all: ["defined(scope_id)", "scope_id != input.scope_id"]}
+              - state == Deleted
+        error: weft.topology.NotFound
+      - name: formation-retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.topology.StateConflict
+      - name: already-pinned
+        when_related:
+          entity: weft.cluster.Cluster
+          where: {exists: {in: formations, as: f, that: "f == input.formation_id"}}
+          exists: true
+        error: weft.cluster.FormationAlreadyPinned
+      - name: pinned
+        updates: weft.cluster.Cluster
+        instance: cluster_id
+        sets:
+          formations: {append: input.formation_id}
+        emits: [weft.cluster.FormationPinned]
+        payload:
+          weft.cluster.FormationPinned:
+            cluster_id: input.cluster_id
+            formation_id: input.formation_id
+
   # design § Step 2 "Commands: DeleteCluster (refused while a formation runs in it; or drain
   # first)" and open question 4 (default: refuse).
-  # Formations are weft.formations (layer 4, above this one), so "a formation runs in it" is an
-  # external refusal. OPEN: step 3 may replace it by a counter on the cluster that
-  # weft.formations.CreateFormation and RetireFormation keep (sketch § 14 line 600: "the counter
-  # is stored and kept by the commands that create and end"); taken: external until then.
+  # "A formation runs in it" stays an external refusal: the cluster lists its formations
+  # (PinFormation), but a retired one stays listed and a guard over the listed formations' states
+  # nests a walk of weft.architecture.Formation rows in the subject's list. OPEN: a counter on the
+  # cluster (sketch § 14 line 600: "the counter is stored and kept by the commands that create and
+  # end") needs the vendored RetireFormation to keep it; taken: external.
   # Live pools of the cluster are this domain's rows, but a row-set guard over them is refused
   # beside the caller tie (ESS-COMMAND-009), so that check is external too. OPEN: delete the
   # pools with the cluster (an `affects:` on the outcome) instead of refusing.
@@ -710,16 +541,16 @@ commands:
     outcomes:
       - name: no-such-cluster
         unknown_instance: true
-        error: weft.cluster.NotFound
+        error: weft.topology.NotFound
       # hardening pass 1 D3: another account's cluster, and the default cluster, answer like a
       # missing one, before their state or use.
       - name: not-callers-account
         when_subject:
           predicate:
             any:
-              - not defined(account_id)
-              - account_id != caller.account_id
-        error: weft.cluster.NotFound
+              - not defined(scope_id)
+              - scope_id != caller.scope_id
+        error: weft.topology.NotFound
       - name: formations-run
         external: a formation of weft.formations that is not retired runs in the cluster
         error: weft.cluster.ClusterInUse
@@ -735,7 +566,7 @@ commands:
             cluster_id: input.cluster_id
       - name: wrong-state
         wrong_state: true
-        error: weft.cluster.StateConflict
+        error: weft.topology.StateConflict
 
   # design § Step 2 "ClusterNodePool" and "Commands: AddClusterNodePool". Emits the event the
   # binding turns into weft.infrastructure.CreateNodePool.
@@ -743,7 +574,7 @@ commands:
     naming:
       display: Add a node pool to a cluster
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: cluster_id, type: weft.shared.ClusterId}
       - {name: name, type: String}
       - {name: zone, type: weft.shared.ZoneName}
@@ -754,8 +585,8 @@ commands:
     outcomes:
       # hardening pass 1 D3: the pool is added only in the account the request acts in.
       - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.cluster.NotFound
+        when: scope_id != caller.scope_id
+        error: weft.topology.NotFound
       - name: negative-size
         when: min_size < 0
         error: weft.cluster.InvalidPoolSize
@@ -764,7 +595,7 @@ commands:
         error: weft.cluster.InvalidPoolSize
       - name: no-such-cluster
         when_related: {via: input.cluster_id, exists: false}
-        error: weft.cluster.NotFound
+        error: weft.topology.NotFound
       # ESS: existence checks answer before every other related-row check (docs/hardening/pass-1.md
       # "What changed"), so an unknown zone answers before the cluster's account is checked; the
       # zone is operator data and discloses nothing of another account.
@@ -779,12 +610,12 @@ commands:
           via: input.cluster_id
           predicate:
             any:
-              - not defined(account_id)
-              - account_id != input.account_id
-        error: weft.cluster.NotFound
+              - not defined(scope_id)
+              - scope_id != input.scope_id
+        error: weft.topology.NotFound
       - name: cluster-not-active
         when_related: {via: input.cluster_id, predicate: state != Active}
-        error: weft.cluster.StateConflict
+        error: weft.topology.StateConflict
       - name: zone-not-in-cluster
         when_related:
           via: input.cluster_id
@@ -805,7 +636,7 @@ commands:
         instance: cluster_node_pool_id
         sets:
           cluster_id: input.cluster_id
-          account_id: input.account_id
+          scope_id: input.scope_id
           name: input.name
           zone: input.zone
           machine_type: input.machine_type
@@ -817,7 +648,7 @@ commands:
           weft.cluster.ClusterNodePoolRequested:
             cluster_node_pool_id: {generated: true}
             cluster_id: input.cluster_id
-            account_id: input.account_id
+            scope_id: input.scope_id
             name: input.name
             zone: input.zone
             machine_type: input.machine_type
@@ -828,10 +659,14 @@ commands:
   # design § Step 2 "ClusterNodePool": weft-control records the infrastructure NodePool it made
   # for the pool (ControlPlane, after weft.infrastructure.NodePoolCreated).
   # Hardening pass 4 (2026-11-26): the binding cluster-create-node-pool carries the cluster pool
-  # into the infrastructure pool (`requested_for`), and this command is the ControlPlane's level
-  # step over UnlinkedClusterNodePools joined with weft.infrastructure.TenantNodePools
+  # into the infrastructure pool, and this command is the ControlPlane's level step over
+  # UnlinkedClusterNodePools joined with weft.infrastructure.TenantNodePools
   # (ess/components.yaml). `made-for-another-pool` refuses an infrastructure pool made for another
   # cluster pool, so one infrastructure pool is never recorded for two cluster pools.
+  # D-e A (story cloud-blocks-cluster-pinning): the vendored NodePool has no `requested_for`
+  # (cloudspec C2), so the binding names the infrastructure pool by the cluster pool's id (its text
+  # form, conversion in ess/components.yaml), and the pool's `name` is what `requested_for` was.
+  # The user's pool name stays on the ClusterNodePool.
   # A pool removed while Requested is RecordRemovedClusterNodePool's (below).
   - name: weft.cluster.RecordClusterNodePoolReady
     naming:
@@ -842,12 +677,12 @@ commands:
     outcomes:
       - name: no-such-pool
         unknown_instance: true
-        error: weft.cluster.NotFound
-      # hardening pass 1 D10 (defense in depth): weft-control sets caller.account_id to the
+        error: weft.topology.NotFound
+      # hardening pass 1 D10 (defense in depth): weft-control sets caller.scope_id to the
       # account of the row it acts on.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.cluster.NotFound
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.topology.NotFound
       - name: unknown-node-pool
         when_related: {via: input.node_pool_id, exists: false}
         error: weft.cluster.UnknownNodePool
@@ -857,14 +692,9 @@ commands:
       - name: node-pool-deleted
         when_related: {via: input.node_pool_id, predicate: state != Active}
         error: weft.cluster.UnknownNodePool
-      # An operator's own pool has no `requested_for`: `not defined` first (gap 25).
+      # An operator's own pool carries a name of the operator's, never a cluster pool's id.
       - name: made-for-another-pool
-        when_related:
-          via: input.node_pool_id
-          predicate:
-            any:
-              - not defined(requested_for)
-              - requested_for != input.cluster_node_pool_id
+        when_related: {via: input.node_pool_id, predicate: name != input.cluster_node_pool_id}
         error: weft.cluster.UnknownNodePool
       - name: ready
         moves: weft.cluster.ClusterNodePool.ready
@@ -878,7 +708,7 @@ commands:
             node_pool_id: input.node_pool_id
       - name: wrong-state
         wrong_state: true
-        error: weft.cluster.StateConflict
+        error: weft.topology.StateConflict
 
   # design § Step 2 "Commands: RemoveClusterNodePool", hardening pass 4: a pool removed while
   # Requested still gets its infrastructure pool (cluster-create-node-pool has run), and
@@ -896,14 +726,14 @@ commands:
     outcomes:
       - name: no-such-pool
         unknown_instance: true
-        error: weft.cluster.NotFound
+        error: weft.topology.NotFound
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.cluster.NotFound
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.topology.NotFound
       # Only a pool removed before its infrastructure pool was recorded.
       - name: not-unlinked
         when_subject: {predicate: {any: [state != Removed, defined(node_pool_id)]}}
-        error: weft.cluster.StateConflict
+        error: weft.topology.StateConflict
       - name: unknown-node-pool
         when_related: {via: input.node_pool_id, exists: false}
         error: weft.cluster.UnknownNodePool
@@ -911,12 +741,7 @@ commands:
         when_related: {via: input.node_pool_id, predicate: state != Active}
         error: weft.cluster.UnknownNodePool
       - name: made-for-another-pool
-        when_related:
-          via: input.node_pool_id
-          predicate:
-            any:
-              - not defined(requested_for)
-              - requested_for != input.cluster_node_pool_id
+        when_related: {via: input.node_pool_id, predicate: name != input.cluster_node_pool_id}
         error: weft.cluster.UnknownNodePool
       - name: recorded
         updates: weft.cluster.ClusterNodePool
@@ -940,11 +765,11 @@ commands:
     outcomes:
       - name: no-such-pool
         unknown_instance: true
-        error: weft.cluster.NotFound
+        error: weft.topology.NotFound
       # hardening pass 1 D3: another account's pool answers like a missing one, before its state.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.cluster.NotFound
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.topology.NotFound
       - name: removed
         moves: weft.cluster.ClusterNodePool.remove
         instance: cluster_node_pool_id
@@ -956,368 +781,7 @@ commands:
             node_pool_id: {subject: node_pool_id}
       - name: wrong-state
         wrong_state: true
-        error: weft.cluster.StateConflict
-
-  # design § Step 2b "Topology (one per cluster)": set a cluster's topology, of one kind.
-  - name: weft.cluster.CreateClusterTopology
-    naming:
-      display: Set a cluster's topology
-    input:
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: kind, type: weft.cluster.TopologyKind}
-    outcomes:
-      # hardening pass 1 D3: the topology is set only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.cluster.NotFound
-      - name: no-such-cluster
-        when_related: {via: input.cluster_id, exists: false}
-        error: weft.cluster.NotFound
-      # hardening pass 1 disclosure: another account's cluster, and the default cluster, answer
-      # like a missing one, before its state.
-      - name: cluster-foreign
-        when_related:
-          via: input.cluster_id
-          predicate:
-            any:
-              - not defined(account_id)
-              - account_id != input.account_id
-        error: weft.cluster.NotFound
-      - name: cluster-not-active
-        when_related: {via: input.cluster_id, predicate: state != Active}
-        error: weft.cluster.StateConflict
-      - name: topology-exists
-        when_related:
-          entity: weft.cluster.Topology
-          where:
-            all:
-              - cluster_id == input.cluster_id
-              - state == Active
-          exists: true
-        error: weft.cluster.TopologyExists
-      - name: created
-        creates: weft.cluster.Topology
-        instance: topology_id
-        sets:
-          cluster_id: input.cluster_id
-          account_id: input.account_id
-          kind: input.kind
-        emits: [weft.cluster.ClusterTopologyCreated]
-        payload:
-          weft.cluster.ClusterTopologyCreated:
-            topology_id: {generated: true}
-            cluster_id: input.cluster_id
-            account_id: input.account_id
-            kind: input.kind
-
-  # design § Step 2b "Topology": a new kind is set by removing the topology and creating
-  # another (see the OPEN on Topology). Its groups and declared links go with it.
-  - name: weft.cluster.RemoveClusterTopology
-    naming:
-      display: Remove a cluster's topology
-    input:
-      - {name: topology_id, type: weft.shared.TopologyId}
-    outcomes:
-      - name: no-such-topology
-        unknown_instance: true
-        error: weft.cluster.NotFound
-      # hardening pass 1 D3: another account's topology answers like a missing one.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.cluster.NotFound
-      - name: removed
-        moves: weft.cluster.Topology.remove
-        instance: topology_id
-        affects:
-          - entity: weft.cluster.TopologyGroup
-            where:
-              all:
-                - topology_id == input.topology_id
-                - state == Active
-            moves: weft.cluster.TopologyGroup.remove
-          - entity: weft.cluster.TopologyLink
-            where:
-              all:
-                - topology_id == input.topology_id
-                - state == Declared
-            moves: weft.cluster.TopologyLink.remove
-        emits: [weft.cluster.ClusterTopologyRemoved]
-        payload:
-          weft.cluster.ClusterTopologyRemoved:
-            topology_id: input.topology_id
-      - name: wrong-state
-        wrong_state: true
-        error: weft.cluster.StateConflict
-
-  # design § Step 2b "TopologyGroup": a set of nodes from the cluster's pools, with its role in
-  # the kind.
-  # OPEN: a pool id that names no pool at all is not refused: ESS 0.99.2 tests a list of
-  # references only for a missing row and only on a command that reads no other related row.
-  # A named pool of another cluster (so also of another account) or a removed one is refused.
-  - name: weft.cluster.AddTopologyGroup
-    naming:
-      display: Add a group to a topology
-    input:
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: name, type: String}
-      - {name: node_pools, type: List<weft.shared.ClusterNodePoolId>}
-      - {name: role, type: weft.cluster.GroupRole}
-      - {name: position, type: Optional<Integer>}
-      - {name: parent_group_id, type: Optional<weft.shared.TopologyGroupId>}
-    outcomes:
-      # hardening pass 1 D3: the group is added only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.cluster.NotFound
-      # A Child names its parent; no other role does.
-      - name: child-without-parent
-        when:
-          all:
-            - role == Child
-            - not defined(parent_group_id)
-        error: weft.cluster.RoleNotInKind
-      - name: parent-without-child
-        when:
-          all:
-            - role != Child
-            - defined(parent_group_id)
-        error: weft.cluster.RoleNotInKind
-      - name: negative-position
-        when: position < 0
-        error: weft.cluster.RoleNotInKind
-      - name: no-such-topology
-        when_related: {via: input.topology_id, exists: false}
-        error: weft.cluster.NotFound
-      # hardening pass 1 disclosure: another account's topology, or one of another cluster,
-      # answers like a missing one, before its state, kind or groups.
-      - name: topology-foreign
-        when_related:
-          via: input.topology_id
-          predicate:
-            any:
-              - account_id != input.account_id
-              - cluster_id != input.cluster_id
-        error: weft.cluster.NotFound
-      - name: topology-removed
-        when_related: {via: input.topology_id, predicate: state != Active}
-        error: weft.cluster.StateConflict
-      # The roles of each kind (see weft.cluster.GroupRole); Ring and Line need a position.
-      - name: role-not-in-kind
-        when_related:
-          via: input.topology_id
-          predicate:
-            any:
-              - all:
-                  - kind == Star
-                  - any: [input.role == Root, input.role == Child, input.role == Member]
-              - all:
-                  - kind == Tree
-                  - any: [input.role == Hub, input.role == Spoke, input.role == Member]
-              - all:
-                  - {kind: {in: [Ring, Line, Mesh, Custom]}}
-                  - input.role != Member
-              - all:
-                  - {kind: {in: [Ring, Line]}}
-                  - not defined(input.position)
-        error: weft.cluster.RoleNotInKind
-      - name: pool-not-in-cluster
-        when_related:
-          entity: weft.cluster.ClusterNodePool
-          where:
-            all:
-              - exists: {in: input.node_pools, as: p, that: cluster_node_pool_id == p}
-              - any:
-                  - cluster_id != input.cluster_id
-                  - state == Removed
-          exists: true
-        error: weft.cluster.PoolNotInCluster
-      # design § Step 2b: "the hub of a star", one per star.
-      - name: hub-exists
-        when: role == Hub
-        when_related:
-          entity: weft.cluster.TopologyGroup
-          where:
-            all:
-              - topology_id == input.topology_id
-              - role == Hub
-              - state == Active
-          exists: true
-        error: weft.cluster.HubExists
-      - name: added
-        creates: weft.cluster.TopologyGroup
-        instance: topology_group_id
-        sets:
-          topology_id: input.topology_id
-          cluster_id: input.cluster_id
-          account_id: input.account_id
-          name: input.name
-          node_pools: input.node_pools
-          role: input.role
-          position: input.position
-          parent_group_id: input.parent_group_id
-        emits: [weft.cluster.TopologyGroupAdded]
-        payload:
-          weft.cluster.TopologyGroupAdded:
-            topology_group_id: {generated: true}
-            topology_id: input.topology_id
-            cluster_id: input.cluster_id
-            account_id: input.account_id
-            name: input.name
-            node_pools: input.node_pools
-            role: input.role
-            position: input.position
-            parent_group_id: input.parent_group_id
-
-  # design § Step 2b "TopologyGroup". Declared links that name the group go with it.
-  # OPEN: removing a group that is the parent of other groups, or the hub of a star. Taken: not
-  # refused (a row-set guard beside the caller tie is ESS-COMMAND-009); the children keep a
-  # removed parent and scheduling treats them as roots.
-  - name: weft.cluster.RemoveTopologyGroup
-    naming:
-      display: Remove a group from a topology
-    input:
-      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
-    outcomes:
-      - name: no-such-group
-        unknown_instance: true
-        error: weft.cluster.NotFound
-      # hardening pass 1 D3: another account's group answers like a missing one.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.cluster.NotFound
-      - name: removed
-        moves: weft.cluster.TopologyGroup.remove
-        instance: topology_group_id
-        affects:
-          - entity: weft.cluster.TopologyLink
-            where:
-              all:
-                - state == Declared
-                - any:
-                    - from_group_id == input.topology_group_id
-                    - to_group_id == input.topology_group_id
-            moves: weft.cluster.TopologyLink.remove
-        emits: [weft.cluster.TopologyGroupRemoved]
-        payload:
-          weft.cluster.TopologyGroupRemoved:
-            topology_group_id: input.topology_group_id
-      - name: wrong-state
-        wrong_state: true
-        error: weft.cluster.StateConflict
-
-  # design § Step 2b "TopologyLink ... declared for Custom".
-  # OPEN: may two links join the same two groups? Taken: not refused.
-  - name: weft.cluster.DeclareTopologyLink
-    naming:
-      display: Declare a link of a custom topology
-    input:
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: from_group_id, type: weft.shared.TopologyGroupId}
-      - {name: to_group_id, type: weft.shared.TopologyGroupId}
-      - {name: bandwidth_mbps, type: Integer}
-      - {name: latency_us, type: Integer}
-      - {name: crossable, type: Boolean}
-    outcomes:
-      # hardening pass 1 D3: the link is declared only in the account the request acts in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.cluster.NotFound
-      - name: same-group
-        when: from_group_id == input.to_group_id
-        error: weft.cluster.InvalidLink
-      - name: invalid-bandwidth
-        when: bandwidth_mbps <= 0
-        error: weft.cluster.InvalidLink
-      - name: invalid-latency
-        when: latency_us < 0
-        error: weft.cluster.InvalidLink
-      - name: no-such-topology
-        when_related: {via: input.topology_id, exists: false}
-        error: weft.cluster.NotFound
-      - name: no-such-from-group
-        when_related: {via: input.from_group_id, exists: false}
-        error: weft.cluster.UnknownGroup
-      - name: no-such-to-group
-        when_related: {via: input.to_group_id, exists: false}
-        error: weft.cluster.UnknownGroup
-      # hardening pass 1 disclosure: another account's topology answers like a missing one,
-      # before its kind or groups.
-      - name: topology-foreign
-        when_related: {via: input.topology_id, predicate: account_id != input.account_id}
-        error: weft.cluster.NotFound
-      - name: topology-removed
-        when_related: {via: input.topology_id, predicate: state != Active}
-        error: weft.cluster.StateConflict
-      - name: links-derived
-        when_related: {via: input.topology_id, predicate: kind != Custom}
-        error: weft.cluster.LinksDerived
-      - name: from-group-elsewhere
-        when_related:
-          via: input.from_group_id
-          predicate:
-            any:
-              - topology_id != input.topology_id
-              - state != Active
-        error: weft.cluster.UnknownGroup
-      - name: to-group-elsewhere
-        when_related:
-          via: input.to_group_id
-          predicate:
-            any:
-              - topology_id != input.topology_id
-              - state != Active
-        error: weft.cluster.UnknownGroup
-      - name: declared
-        creates: weft.cluster.TopologyLink
-        instance: topology_link_id
-        sets:
-          topology_id: input.topology_id
-          account_id: input.account_id
-          from_group_id: input.from_group_id
-          to_group_id: input.to_group_id
-          bandwidth_mbps: input.bandwidth_mbps
-          latency_us: input.latency_us
-          crossable: input.crossable
-        emits: [weft.cluster.TopologyLinkDeclared]
-        payload:
-          weft.cluster.TopologyLinkDeclared:
-            topology_link_id: {generated: true}
-            topology_id: input.topology_id
-            account_id: input.account_id
-            from_group_id: input.from_group_id
-            to_group_id: input.to_group_id
-            bandwidth_mbps: input.bandwidth_mbps
-            latency_us: input.latency_us
-            crossable: input.crossable
-
-  # design § Step 2b "TopologyLink".
-  - name: weft.cluster.RemoveTopologyLink
-    naming:
-      display: Remove a link of a custom topology
-    input:
-      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
-    outcomes:
-      - name: no-such-link
-        unknown_instance: true
-        error: weft.cluster.NotFound
-      # hardening pass 1 D3: another account's link answers like a missing one.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.cluster.NotFound
-      - name: removed
-        moves: weft.cluster.TopologyLink.remove
-        instance: topology_link_id
-        emits: [weft.cluster.TopologyLinkRemoved]
-        payload:
-          weft.cluster.TopologyLinkRemoved:
-            topology_link_id: input.topology_link_id
-      - name: wrong-state
-        wrong_state: true
-        error: weft.cluster.StateConflict
+        error: weft.topology.StateConflict
 
 views:
   # design § Step 2 "views ... Clusters": every cluster of every cloud, unfiltered, every field and
@@ -1328,28 +792,30 @@ views:
     fields:
       - {name: cluster_id, type: weft.shared.ClusterId}
       - {name: cloud_id, type: weft.shared.CloudId}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: name, type: String}
       - {name: control_plane, type: weft.cluster.ControlPlaneMode}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
       - {name: zones, type: List<weft.shared.ZoneName>}
+      - {name: formations, type: List<weft.shared.FormationId>}
       - {name: state, type: weft.cluster.Cluster.State}
 
   # design § Step 2 "views ClustersOfAccount": the clusters an account may deploy into, its own
-  # and every default cluster ("every account may deploy into it").
+  # and every default cluster ("every account may deploy into it"). `formations` is not shown: a
+  # default cluster lists the formations of every account.
   - name: weft.cluster.ClustersOfAccount
     source: weft.cluster.Cluster
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     filter:
       any:
-        - account_id == param.account_id
-        - not defined(account_id)
+        - scope_id == param.scope_id
+        - not defined(scope_id)
     fields:
       - {name: cluster_id, type: weft.shared.ClusterId}
       - {name: cloud_id, type: weft.shared.CloudId}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: name, type: String}
       - {name: control_plane, type: weft.cluster.ControlPlaneMode}
       - {name: min_isolation, type: weft.shared.IsolationLevel}
@@ -1361,12 +827,12 @@ views:
     source: weft.cluster.ClusterNodePool
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: cluster_node_pool_id, type: weft.shared.ClusterNodePoolId}
       - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: String}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: machine_type, type: String}
@@ -1379,7 +845,8 @@ views:
   # design § Step 2 "ClusterNodePool", hardening pass 4: gap view of the ControlPlane's level step
   # RecordClusterNodePoolReady (ess/components.yaml): the pools whose infrastructure pool is not
   # recorded yet, Requested or removed while Requested. The ControlPlane joins it with
-  # weft.infrastructure.TenantNodePools on cluster_node_pool_id == requested_for.
+  # weft.infrastructure.TenantNodePools on the pool's `name`, the text of cluster_node_pool_id
+  # (D-e A, RecordClusterNodePoolReady).
   # OPEN: a pool whose infrastructure pool was never made (cluster-create-node-pool dropped
   # unknown-zone or zone-retired) stays in this view; weft.cluster would add
   # `ClusterNodePoolRefused` (the OPEN at that binding).
@@ -1392,7 +859,7 @@ views:
         - any: [state == Requested, state == Removed]
     fields:
       - {name: cluster_node_pool_id, type: weft.shared.ClusterNodePoolId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: zone, type: weft.shared.ZoneName}
       - {name: state, type: weft.cluster.ClusterNodePool.State}
 
@@ -1407,56 +874,5 @@ views:
     fields:
       - {name: cluster_node_pool_id, type: weft.shared.ClusterNodePoolId}
       - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: node_pool_id, type: Optional<weft.shared.NodePoolId>}
-
-  # design § Step 2b "Topology": the topologies of an account's clusters.
-  - name: weft.cluster.Topologies
-    source: weft.cluster.Topology
-    consistency: read_your_writes
-    params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
-    fields:
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: kind, type: weft.cluster.TopologyKind}
-      - {name: state, type: weft.cluster.Topology.State}
-
-  # design § Step 2b "TopologyGroup": the groups of an account's topologies.
-  - name: weft.cluster.TopologyGroups
-    source: weft.cluster.TopologyGroup
-    consistency: read_your_writes
-    params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
-    fields:
-      - {name: topology_group_id, type: weft.shared.TopologyGroupId}
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: cluster_id, type: weft.shared.ClusterId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: name, type: String}
-      - {name: node_pools, type: List<weft.shared.ClusterNodePoolId>}
-      - {name: role, type: weft.cluster.GroupRole}
-      - {name: position, type: Optional<Integer>}
-      - {name: parent_group_id, type: Optional<weft.shared.TopologyGroupId>}
-      - {name: state, type: weft.cluster.TopologyGroup.State}
-
-  # design § Step 2b "TopologyLink": the declared links of an account's topologies.
-  - name: weft.cluster.TopologyLinks
-    source: weft.cluster.TopologyLink
-    consistency: read_your_writes
-    params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
-    fields:
-      - {name: topology_link_id, type: weft.shared.TopologyLinkId}
-      - {name: topology_id, type: weft.shared.TopologyId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: from_group_id, type: weft.shared.TopologyGroupId}
-      - {name: to_group_id, type: weft.shared.TopologyGroupId}
-      - {name: bandwidth_mbps, type: Integer}
-      - {name: latency_us, type: Integer}
-      - {name: crossable, type: Boolean}
-      - {name: state, type: weft.cluster.TopologyLink.State}

@@ -18,7 +18,7 @@ implements it.
 
 | Part | Where | Status |
 |---|---|---|
-| The domain model: 23 domains in 10 layers | [`ess/`](https://github.com/beyond10x/weft/tree/main/ess) | Exists, valid |
+| The domain model: 28 domains in 10 layers of weft's own files over cloudspec's vendored blocks | [`ess/`](https://github.com/beyond10x/weft/tree/main/ess) | Exists, valid |
 | Components and reconciliation bindings: `weft-api`, `weft-control`, `weft-node`, `weft-edge` | [`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml) | Exists, valid |
 | The node channel and the exec channel | [`protocols/`](https://github.com/beyond10x/weft/tree/main/protocols) | Exists |
 | cloudspec-sim: explores and simulates the specification in memory; a tool of cloudspec at a pinned revision | [`crates/cloudspec-sim`](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim) | Exists |

@@ -1,18 +1,18 @@
-//! `weft.workloads.DefineService` (`PLAN.md` § Obligations, `ess/4-applications/workloads.yaml`), in
+//! `weft.workloads.DefineService` (`PLAN.md` § Obligations, `ess/cloud/5-workloads/workloads.yaml`), in
 //! the selection precedence of its contract:
 //!
-//! 1. the input guards in declaration order: `not-callers-account` (a caller acting in no
-//!    account counts as another account's), `bad-bounds`, `sleep-needs-policy`,
+//! 1. the input guards in declaration order: `not-callers-scope` (a caller acting in no
+//!    scope counts as another scope's), `bad-bounds`, `sleep-needs-policy`,
 //!    `policy-needs-min-zero`;
 //! 2. `no-workload`;
-//! 3. the predicates in declaration order: `workload-of-other-account`, `workload-retired`,
+//! 3. the predicates in declaration order: `workload-of-other-scope`, `workload-retired`,
 //!    `not-a-service`, `exists` (a service of the workload, in any state);
 //! 4. the external branch `over-quota` of the outcome group `quota`, decided from the rows of
 //!    the same store ([`crate::quota::exceeded_alone`]): the claims of `replicas` instances of
-//!    the workload alone would take the account, or an account above it, past a quota. What the
-//!    account's live instances hold does not count; `CreateInstance` asks for each replica. It
+//!    the workload alone would take the scope's quota, or a quota above it, past its limit. What the
+//!    scope's live instances hold does not count; `CreateInstance` asks for each replica. It
 //!    is answered before `defined`, the branch the contract takes "otherwise" (its default);
-//! 5. `defined`: an `Awake` service in the workload's account, none of its replicas running yet.
+//! 5. `defined`: an `Awake` service in the workload's scope, none of its replicas running yet.
 
 use weft_types::behaviour::{Context, ServiceStorage, WorkloadStorage};
 use weft_types::obligation::UnmetObligation;
@@ -34,8 +34,8 @@ impl DefineServiceBehavior for Ports {
         &mut self,
         input: DefineService,
     ) -> Result<DefineServiceOutcome, UnmetObligation> {
-        if Context::caller_account_id(self).as_ref() != Some(&input.account_id) {
-            return Ok(DefineServiceOutcome::NotCallersAccount {
+        if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
+            return Ok(DefineServiceOutcome::NotCallersScope {
                 error: WorkloadNotFound,
             });
         }
@@ -64,8 +64,8 @@ impl DefineServiceBehavior for Ports {
                 error: WorkloadNotFound,
             });
         };
-        if workload.data.account_id != input.account_id {
-            return Ok(DefineServiceOutcome::WorkloadOfOtherAccount {
+        if workload.data.scope_id != input.scope_id {
+            return Ok(DefineServiceOutcome::WorkloadOfOtherScope {
                 error: WorkloadNotFound,
             });
         }
@@ -88,7 +88,7 @@ impl DefineServiceBehavior for Ports {
             });
         }
         let claims = quota::times(&workload.data.claims, input.replicas);
-        if quota::exceeded_alone(self, &workload.data.account_id, &claims) {
+        if quota::exceeded_alone(self, &workload.data.scope_id, &claims) {
             return Ok(DefineServiceOutcome::OverQuota {
                 error: QuotaExceeded,
             });
@@ -107,7 +107,7 @@ impl DefineServiceBehavior for Ports {
                 data: ServiceData {
                     service_id,
                     workload_id: input.workload_id,
-                    account_id: workload.data.account_id,
+                    scope_id: workload.data.scope_id,
                     replicas: input.replicas,
                     running_replicas: 0,
                     backoff_until: None,

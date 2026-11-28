@@ -1,0 +1,4 @@
+domain: weft.topology
+entities:
+  Region:
+    key: region_id

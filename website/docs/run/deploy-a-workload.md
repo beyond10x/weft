@@ -57,8 +57,8 @@ weft account create acme/research/gpu-lab --quota gpu=4
 
 ## What a deploy does (specified)
 
-The steps behind `weft deploy` are specified in `weft.deployments` and `weft.formations` and can be
-explored with cloudspec-sim today:
+The steps behind `weft deploy` are specified in `weft.deployments` and `weft.architecture` and can
+be explored with cloudspec-sim today:
 
 1. The document is a **deployment source**. cloudspec's inbound translator turns it into a
    cloudspec architecture, which weft takes as a **formation revision**, and a coverage report:

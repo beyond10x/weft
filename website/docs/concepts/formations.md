@@ -5,8 +5,19 @@ status: decided
 ---
 
 A **formation** is the unit a user deploys: a set of components that belong together, the calls
-allowed between them, and which of them the outside can reach. Domain: `weft.formations`
-([`ess/4-applications/formations.yaml`](https://github.com/beyond10x/weft/blob/main/ess/4-applications/formations.yaml)).
+allowed between them, and which of them the outside can reach. Domains:
+
+- `weft.architecture`, from cloudspec's blocks
+  ([`ess/cloud/9-composition/architecture.yaml`](https://github.com/beyond10x/weft/blob/main/ess/cloud/9-composition/architecture.yaml),
+  vendored): the formation, its revisions, components, links, config, environments and scale
+  settings.
+- `weft.edge`, from cloudspec's blocks
+  ([`ess/cloud/7-edge/edge.yaml`](https://github.com/beyond10x/weft/blob/main/ess/cloud/7-edge/edge.yaml),
+  vendored): endpoints, routes and their certificates; weft's own file of the domain adds the
+  ready backends of each route and the requests held while a sleeping service wakes.
+- `weft.formations`, weft's own
+  ([`ess/4-applications/formations.yaml`](https://github.com/beyond10x/weft/blob/main/ess/4-applications/formations.yaml)):
+  exports.
 
 :::info[Specified, not built]
 This page describes the specification. No running weft deploys a formation yet.
@@ -16,7 +27,7 @@ This page describes the specification. No running weft deploys a formation yet.
 
 | Element | What it is |
 |---|---|
-| Formation | Named, in one account. Owns a private network, a secret scope and a quota slice. States: `Active`, `Retired`. |
+| Formation | Named, in one scope (an account opens one). Owns a private network, a secret scope and a quota slice. States: `Active`, `Retired`. Placed nowhere until it is pinned to a cluster (`weft.cluster.PinFormation`). |
 | Formation revision | An immutable snapshot of the formation's document. Every change is a new revision. |
 | Component | One workload of the formation ([workloads](workloads.md)). |
 | Link | An allowed call from one component to another, on one protocol and port. Components without a link cannot reach each other. |

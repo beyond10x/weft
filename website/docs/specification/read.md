@@ -11,8 +11,9 @@ repository. It is the source every planned implementation is held to.
 | Path | What |
 |---|---|
 | `ess/ess-inputs.yaml` | The list of files that form the system, and the `ess` version it requires (0.99.2). |
-| `ess/system.yaml` | The system `weft`, version `v1`, and its 23 domains. |
-| `ess/<n>-<layer>/<domain>.yaml` | One domain per file, one directory per [layer](layers.md). |
+| `ess/system.yaml` | The system `weft`, version `v1`, and its 28 domains. |
+| `ess/<n>-<layer>/<domain>.yaml` | weft's own domain files: one file per domain, one directory per [layer](layers.md). |
+| `ess/cloud/<n>-<layer>/<domain>.yaml` | cloudspec's blocks, vendored and never edited by hand (`task vendor-update`, `ess/cloud/cloud.lock`). A domain may be split over a vendored file and one of weft's own. |
 | `ess/9-actors/actors.yaml` | Every actor and the commands and views it may use. No other file declares actors. |
 | `ess/components.yaml` | The four components, which domains each owns, and the reconciliation bindings. |
 | `protocols/node-channel.yaml` | The session between `weft-control` and `weft-node` (`ess-protospec/1`). |
@@ -66,9 +67,10 @@ An entity has an identity, fields, relations and a lifecycle. From `ess/2-tenanc
         to: Closed
 ```
 
-Every entity identifier, such as `weft.shared.TenantId`, is declared in
-`ess/0-foundation/shared.yaml`. A domain refers to another domain's entity through that identifier
-and declares the relation on its own entity.
+Every entity identifier, such as `weft.shared.TenantId`, is declared in `weft.shared`:
+`ess/0-foundation/shared.yaml`, or `ess/cloud/0-protocols/shared.yaml` for the identifiers of
+cloudspec's blocks. A domain refers to another domain's entity through that identifier and
+declares the relation on its own entity.
 
 ## A command
 
@@ -121,8 +123,8 @@ and publishes all its events:
 
 | Component | Domains |
 |---|---|
-| `weft-api` | `access`, `accounts`, `artifacts`, `formations` |
-| `weft-control` | `infrastructure`, `inventory`, `cluster`, `resources`, `workloads`, `claims`, `scheduling`, `nodes`, `identity`, `secrets`, `observability`, `deployments`, `pipelines`, `catalog`, `metering` |
+| `weft-api` | `access`, `accounts`, `scope`, `artifacts`, `architecture`, `formations` |
+| `weft-control` | `infrastructure`, `inventory`, `topology`, `cluster`, `resources`, `workloads`, `claims`, `scheduling`, `nodes`, `identity`, `secrets`, `observability`, `limits`, `deployments`, `pipelines`, `services`, `catalog`, `metering` |
 | `weft-node` | `node` |
 | `weft-edge` | `edge` |
 

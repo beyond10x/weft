@@ -192,13 +192,13 @@ entities:
         type: Uuid
       - name: tenant_id
         type: weft.shared.TenantId
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       # Line 477 "Usage rolls up the account tree": the accounts from the tenant's top-level
-      # account down to `account_id`, both included, as the tree stood when the record was
+      # account down to `scope_id`, both included, as the tree stood when the record was
       # written. The roll-up view reads it.
       - name: account_path
-        type: List<weft.shared.AccountId>
+        type: List<weft.shared.ScopeId>
       # Absent for usage of a service instance or volume held by the account itself
       # (line 533 `ServiceInstance` "in an account or a formation").
       - name: formation_id
@@ -264,17 +264,17 @@ entities:
         via: price_id
       # A usage record is a fact about what was used; it outlives every entity it names.
       - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
-      - {name: path_accounts, kind: references, target: weft.accounts.Account, cardinality: many, via: account_path}
-      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: path_accounts, kind: references, target: weft.scope.Scope, cardinality: many, via: account_path}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: resource_class_entry, kind: references, target: weft.inventory.ResourceClass, cardinality: one, via: resource_class}
       - {name: instance, kind: references, target: weft.workloads.Instance, cardinality: one, via: instance_id}
       - {name: node, kind: references, target: weft.infrastructure.Node, cardinality: one, via: node_id}
       - {name: assignment, kind: references, target: weft.nodes.Assignment, cardinality: one, via: assignment_id}
       - {name: volume, kind: references, target: weft.resources.Volume, cardinality: one, via: volume_id}
-      - {name: endpoint, kind: references, target: weft.formations.Endpoint, cardinality: one, via: endpoint_id}
-      - {name: service_instance, kind: references, target: weft.catalog.ServiceInstance, cardinality: one, via: service_instance_id}
-      - {name: offering, kind: references, target: weft.catalog.Offering, cardinality: one, via: offering_id}
+      - {name: endpoint, kind: references, target: weft.edge.Endpoint, cardinality: one, via: endpoint_id}
+      - {name: service_instance, kind: references, target: weft.services.ServiceInstance, cardinality: one, via: service_instance_id}
+      - {name: offering, kind: references, target: weft.services.Offering, cardinality: one, via: offering_id}
       - {name: product, kind: references, target: weft.catalog.Product, cardinality: one, via: product_id}
     invariants:
       - amount >= 0
@@ -361,49 +361,13 @@ entities:
   # that formation. Every limit on the account path of a unit of work applies to it; the
   # strictest decides.
   # Each limit `references` its account and formation (integration pass, 2026-11-26).
-  # That formation_id lies in account_id is checked by the Set commands (hardening pass 1 W5).
+  # That formation_id lies in scope_id is checked by the Set commands (hardening pass 1 W5).
   # UNMAPPED: that component is a component of that formation is `formations`' record; no guard
   # checks it.
   # OPEN: may an admin of an account change or remove a limit that a TenantOwner or the admin of
   # a parent account set on it (a widening from below)? Taken: no rule here; the actor blocks of
   # the integration pass decide, and the smallest safe answer is that only the level that set a
   # limit, or one above it, changes or removes it.
-
-  # Line 405 `deadline`; line 243 "`Invocation`: one call, one result, a deadline". The longest a
-  # unit of work (an invocation, a job run, a session) in the scope may run.
-  # OPEN: which shapes a deadline applies to. Taken: invocations, jobs and sessions; a service,
-  # a box or a daemon has no end and is not admitted against a deadline.
-  - name: weft.metering.Deadline
-    naming:
-      summary: The longest a unit of work in a scope may run before it is stopped.
-    identity:
-      name: deadline_id
-      type: weft.shared.DeadlineId
-    fields:
-      - name: account_id
-        type: weft.shared.AccountId
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
-      - name: component
-        type: Optional<weft.shared.ComponentName>
-      - name: max_seconds
-        type: Integer
-      - name: set_at
-        type: Timestamp
-    relations:
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
-      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
-    invariants:
-      - max_seconds >= 1
-      - any: ["not defined(component)", "defined(formation_id)"]
-    lifecycle:
-      initial: Active
-      states: [Active, Removed]
-      terminal: [Removed]
-      transitions:
-        - name: remove
-          from: [Active]
-          to: Removed
 
   # Line 405 `budget`; caller's "Budget (money or resource-seconds; when spent, a named refusal for
   # new work and a stop signal for running work)". `spent` grows with each charge; `remaining` is
@@ -419,8 +383,8 @@ entities:
       name: budget_id
       type: weft.shared.BudgetId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: formation_id
         type: Optional<weft.shared.FormationId>
       - name: measure
@@ -438,8 +402,8 @@ entities:
       - name: set_at
         type: Timestamp
     relations:
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
-      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
     invariants:
       - amount > 0
       - spent >= 0
@@ -460,89 +424,6 @@ entities:
           summary: The amount was raised above what is spent; new work is admitted again.
         - name: remove
           from: [Active, Exhausted]
-          to: Removed
-
-  # Line 405 `concurrency`: how many units of work of the scope run at once. The Scheduler
-  # acquires one unit before it places new work and releases it when the work ends.
-  # OPEN: a counter can leak when a release is lost (a node gone). Taken: a counter; the
-  # Scheduler releases for every instance it sees end, gone nodes' included. A lease per holder
-  # is the alternative.
-  # OPEN: is lowering max_concurrent below in_use a stop of running work? Taken: no; new work
-  # waits until in_use is below the new maximum.
-  - name: weft.metering.Concurrency
-    naming:
-      summary: The number of units of work a scope may run at once, and how many run.
-    identity:
-      name: concurrency_id
-      type: weft.shared.ConcurrencyId
-    fields:
-      - name: account_id
-        type: weft.shared.AccountId
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
-      - name: component
-        type: Optional<weft.shared.ComponentName>
-      - name: max_concurrent
-        type: Integer
-      - name: in_use
-        type: Integer
-      - name: set_at
-        type: Timestamp
-    relations:
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
-      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
-    invariants:
-      - max_concurrent >= 1
-      - in_use >= 0
-      - any: ["not defined(component)", "defined(formation_id)"]
-    lifecycle:
-      initial: Active
-      states: [Active, Removed]
-      terminal: [Removed]
-      transitions:
-        - name: remove
-          from: [Active]
-          to: Removed
-
-  # Line 405 `rate`: how many requests per window the scope's endpoints or components take.
-  # UNMAPPED: a rate is enforced per request in the data plane (weft-edge for public endpoints,
-  # the link filter between components, line 62); a request over the rate is refused there, not
-  # by a command of this domain. Metering holds the limit; the refusal belongs to the data
-  # plane's protocol.
-  # OPEN: is a rate per caller, per endpoint, or per scope as a whole? Taken: per scope as a whole.
-  - name: weft.metering.Rate
-    naming:
-      summary: The number of requests a scope takes per window.
-    identity:
-      name: rate_id
-      type: weft.shared.RateId
-    fields:
-      - name: account_id
-        type: weft.shared.AccountId
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
-      - name: component
-        type: Optional<weft.shared.ComponentName>
-      - name: max_requests
-        type: Integer
-      - name: window_seconds
-        type: Integer
-      - name: set_at
-        type: Timestamp
-    relations:
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
-      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
-    invariants:
-      - max_requests >= 1
-      - window_seconds >= 1
-      - any: ["not defined(component)", "defined(formation_id)"]
-    lifecycle:
-      initial: Active
-      states: [Active, Removed]
-      terminal: [Removed]
-      transitions:
-        - name: remove
-          from: [Active]
           to: Removed
 
   # "Pricing models" (lines 494-502). A model is immutable: a change of terms is a new model and
@@ -597,8 +478,8 @@ entities:
     fields:
       - name: target_kind
         type: weft.metering.AssignmentTarget
-      - name: account_id
-        type: Optional<weft.shared.AccountId>
+      - name: scope_id
+        type: Optional<weft.shared.ScopeId>
       - name: formation_id
         type: Optional<weft.shared.FormationId>
       - name: product_id
@@ -617,12 +498,12 @@ entities:
         target: weft.metering.PricingModel
         cardinality: one
         via: pricing_model_id
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
-      - {name: formation, kind: references, target: weft.formations.Formation, cardinality: one, via: formation_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: product, kind: references, target: weft.catalog.Product, cardinality: one, via: product_id}
       - {name: offering_plan, kind: references, target: weft.catalog.OfferingPlan, cardinality: one, via: offering_plan_id}
     invariants:
-      - any: [target_kind != account, "defined(account_id)"]
+      - any: [target_kind != account, "defined(scope_id)"]
       - any: [target_kind != formation, "defined(formation_id)"]
       - any: [target_kind != product, "defined(product_id)"]
       - any: [target_kind != offering-plan, "defined(offering_plan_id)"]
@@ -656,8 +537,8 @@ entities:
     fields:
       - name: tenant_id
         type: weft.shared.TenantId
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: period
         type: weft.metering.BillingPeriod
       - name: period_start
@@ -674,7 +555,7 @@ entities:
         type: Timestamp
     relations:
       - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: account_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
     invariants:
       - period_end > period_start
       - total >= 0
@@ -684,8 +565,6 @@ entities:
       terminal: [Issued]
 
 errors:
-  - name: weft.metering.NotFound
-    summary: The addressed record does not exist, and nothing changed.
   - name: weft.metering.StateConflict
     summary: The addressed record is not in a state this command acts from, and nothing changed.
 
@@ -737,12 +616,6 @@ errors:
     summary: >-
       A unit the usage names (formation, instance, volume, endpoint, service instance) is not the
       charged account's, or the account is not the tenant's, and nothing was recorded.
-  - name: weft.metering.InvalidLimit
-    summary: A limit's value is 1 or more, and nothing changed.
-  - name: weft.metering.ComponentWithoutFormation
-    summary: A limit scoped to a component names the formation of that component, and nothing changed.
-  - name: weft.metering.LimitRemoved
-    summary: The limit was removed, and nothing changed.
   - name: weft.metering.InvalidBudget
     summary: A budget's amount is more than zero, and nothing changed.
   - name: weft.metering.MeterRequired
@@ -751,18 +624,8 @@ errors:
     summary: A budget in money counts every meter and names none, and nothing was set.
   - name: weft.metering.NotASecondsMeter
     summary: A budget in resource-seconds counts a meter measured in seconds, and nothing was set.
-  - name: weft.metering.ConcurrencySpent
-    summary: Every unit of the scope's concurrency is in use, so no new work starts.
-    fields:
-      - name: max_concurrent
-        type: Integer
-  - name: weft.metering.NothingAcquired
-    summary: No unit of the concurrency is in use, so none is released.
   - name: weft.metering.BudgetExhausted
     summary: A budget of the work's scope is spent, so no new work starts there.
-  - name: weft.metering.DeadlineTooLong
-    summary: The work asks to run longer than a deadline of its scope allows, so it does not start.
-
   - name: weft.metering.InvalidPricingModelName
     summary: A pricing model's name has 1 to 63 characters, and nothing was defined.
   - name: weft.metering.PricingModelNameTaken
@@ -804,24 +667,10 @@ events:
   - name: weft.metering.PriceListPublished
     fields:
       - {name: price_list_id, type: weft.shared.PriceListId}
-  - name: weft.metering.DeadlineSet
-    fields:
-      - {name: deadline_id, type: weft.shared.DeadlineId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_seconds, type: Integer}
-  - name: weft.metering.DeadlineChanged
-    fields:
-      - {name: deadline_id, type: weft.shared.DeadlineId}
-      - {name: max_seconds, type: Integer}
-  - name: weft.metering.DeadlineRemoved
-    fields:
-      - {name: deadline_id, type: weft.shared.DeadlineId}
   - name: weft.metering.BudgetSet
     fields:
       - {name: budget_id, type: weft.shared.BudgetId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: measure, type: weft.metering.BudgetMeasure}
       - {name: meter, type: Optional<weft.metering.Meter>}
@@ -836,7 +685,7 @@ events:
   - name: weft.metering.BudgetSpent
     fields:
       - {name: budget_id, type: weft.shared.BudgetId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
   - name: weft.metering.BudgetReplenished
     fields:
@@ -849,44 +698,6 @@ events:
   - name: weft.metering.BudgetRemoved
     fields:
       - {name: budget_id, type: weft.shared.BudgetId}
-  - name: weft.metering.ConcurrencySet
-    fields:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_concurrent, type: Integer}
-  - name: weft.metering.ConcurrencyChanged
-    fields:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: max_concurrent, type: Integer}
-  - name: weft.metering.ConcurrencyRemoved
-    fields:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-  - name: weft.metering.ConcurrencyAcquired
-    fields:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: instance_id, type: weft.shared.InstanceId}
-  - name: weft.metering.ConcurrencyReleased
-    fields:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: instance_id, type: weft.shared.InstanceId}
-  - name: weft.metering.RateSet
-    fields:
-      - {name: rate_id, type: weft.shared.RateId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_requests, type: Integer}
-      - {name: window_seconds, type: Integer}
-  - name: weft.metering.RateChanged
-    fields:
-      - {name: rate_id, type: weft.shared.RateId}
-      - {name: max_requests, type: Integer}
-      - {name: window_seconds, type: Integer}
-  - name: weft.metering.RateRemoved
-    fields:
-      - {name: rate_id, type: weft.shared.RateId}
   - name: weft.metering.PricingModelDefined
     fields:
       - {name: pricing_model_id, type: weft.shared.PricingModelId}
@@ -900,7 +711,7 @@ events:
     fields:
       - {name: pricing_assignment_id, type: weft.shared.PricingAssignmentId}
       - {name: target_kind, type: weft.metering.AssignmentTarget}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: product_id, type: Optional<weft.shared.ProductId>}
       - {name: offering_plan_id, type: Optional<weft.shared.OfferingPlanId>}
@@ -912,7 +723,7 @@ events:
     fields:
       - {name: statement_id, type: weft.shared.StatementId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: period_start, type: Timestamp}
       - {name: period_end, type: Timestamp}
       - {name: currency, type: weft.metering.Currency}
@@ -921,7 +732,7 @@ events:
     fields:
       - {name: usage_record_id, type: weft.shared.UsageRecordId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: meter, type: weft.metering.Meter}
       - {name: qualifier, type: weft.metering.MeterQualifier}
@@ -981,7 +792,7 @@ commands:
         error: weft.metering.NegativePrice
       - name: no-such-price-list
         when_related: {via: input.price_list_id, exists: false}
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: not-draft
         when_related: {via: input.price_list_id, predicate: state != Draft}
         error: weft.metering.PriceListNotDraft
@@ -1024,14 +835,14 @@ commands:
     outcomes:
       - name: no-such-price
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: not-in-list
         when_subject:
           predicate: price_list_id != input.price_list_id
         error: weft.metering.PriceNotInList
       - name: no-such-price-list
         when_related: {via: input.price_list_id, exists: false}
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: not-draft
         when_related: {via: input.price_list_id, predicate: state != Draft}
         error: weft.metering.PriceListNotDraft
@@ -1054,7 +865,7 @@ commands:
     outcomes:
       - name: no-such-price-list
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: empty
         when_related:
           entity: weft.metering.Price
@@ -1082,7 +893,7 @@ commands:
   # plane aggregates"; line 469 `UsageReported`, line 470 "the agent reports what it observed".
   # Append-only: this is the only command that writes a record. Issued by weft-control
   # (ControlPlane) for each aggregate of what nodes reported.
-  # UNMAPPED: tenant_id, account_id, account_path, formation_id, product_id and the service
+  # UNMAPPED: tenant_id, scope_id, account_path, formation_id, product_id and the service
   # instance's offering_id are inputs here. A node is not trusted to name them: weft-control
   # fills them from the instance's record (`workloads`), the service instance (`catalog`) and the
   # account tree (`accounts`); only the meter, qualifier, amount, period and what was measured
@@ -1106,8 +917,8 @@ commands:
       - {name: period_start, type: Timestamp}
       - {name: period_end, type: Timestamp}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: account_path, type: List<weft.shared.AccountId>}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: account_path, type: List<weft.shared.ScopeId>}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: resource_class, type: Optional<weft.shared.ResourceClassName>}
       - {name: instance_id, type: Optional<weft.shared.InstanceId>}
@@ -1140,7 +951,7 @@ commands:
       - name: account-not-in-path
         when:
           not:
-            exists: {in: account_path, as: a, that: a == account_id}
+            exists: {in: account_path, as: a, that: a == scope_id}
         error: weft.metering.AccountNotInPath
       - name: offering-without-service-instance
         when:
@@ -1162,10 +973,10 @@ commands:
         error: weft.metering.InstanceNotOnNode
       - name: no-such-price-list
         when_related: {via: input.price_list_id, exists: false}
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: no-such-price
         when_related: {via: input.price_id, exists: false}
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: no-such-assignment
         when_related: {via: input.assignment_id, exists: false}
         error: weft.metering.InstanceNotOnNode
@@ -1204,13 +1015,13 @@ commands:
       - name: account-of-another-tenant
         when_related:
           entity: weft.accounts.Account
-          where: {all: [account_id == input.account_id, tenant_id != input.tenant_id]}
+          where: {all: [scope_id == input.scope_id, tenant_id != input.tenant_id]}
           exists: true
         error: weft.metering.UnitOfAnotherAccount
       - name: formation-of-another-account
         when_related:
-          entity: weft.formations.Formation
-          where: {all: [formation_id == input.formation_id, account_id != input.account_id]}
+          entity: weft.architecture.Formation
+          where: {all: [formation_id == input.formation_id, scope_id != input.scope_id]}
           exists: true
         error: weft.metering.UnitOfAnotherAccount
       # Usage of the components a service instance runs as (line 541) names an instance of the
@@ -1224,20 +1035,20 @@ commands:
           where:
             all:
               - instance_id == input.instance_id
-              - account_id != input.account_id
+              - scope_id != input.scope_id
               - not defined(input.service_instance_id)
           exists: true
         error: weft.metering.UnitOfAnotherAccount
       - name: volume-of-another-account
         when_related:
           entity: weft.resources.Volume
-          where: {all: [volume_id == input.volume_id, account_id != input.account_id]}
+          where: {all: [volume_id == input.volume_id, scope_id != input.scope_id]}
           exists: true
         error: weft.metering.UnitOfAnotherAccount
       # An endpoint lies in one formation; usage of it names that formation.
       - name: endpoint-of-another-formation
         when_related:
-          entity: weft.formations.Endpoint
+          entity: weft.edge.Endpoint
           where:
             all:
               - endpoint_id == input.endpoint_id
@@ -1246,8 +1057,8 @@ commands:
         error: weft.metering.UnitOfAnotherAccount
       - name: service-instance-of-another-account
         when_related:
-          entity: weft.catalog.ServiceInstance
-          where: {all: [service_instance_id == input.service_instance_id, account_id != input.account_id]}
+          entity: weft.services.ServiceInstance
+          where: {all: [service_instance_id == input.service_instance_id, scope_id != input.scope_id]}
           exists: true
         error: weft.metering.UnitOfAnotherAccount
       - name: recorded
@@ -1256,7 +1067,7 @@ commands:
         sets:
           report_id: input.report_id
           tenant_id: input.tenant_id
-          account_id: input.account_id
+          scope_id: input.scope_id
           account_path: input.account_path
           formation_id: input.formation_id
           meter: input.meter
@@ -1282,7 +1093,7 @@ commands:
           weft.metering.UsageRecorded:
             usage_record_id: {generated: true}
             tenant_id: input.tenant_id
-            account_id: input.account_id
+            scope_id: input.scope_id
             formation_id: input.formation_id
             meter: input.meter
             qualifier: input.qualifier
@@ -1290,121 +1101,12 @@ commands:
             period_start: input.period_start
             period_end: input.period_end
 
-  # Line 405 `deadline`.
-  - name: weft.metering.SetDeadline
-    naming:
-      display: Set a deadline
-    input:
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_seconds, type: Integer}
-    outcomes:
-      # hardening pass 1 D3: the limit's account is the account the request acts in; another
-      # account answers as not found.
-      - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.metering.NotFound
-      - name: invalid-limit
-        when: max_seconds < 1
-        error: weft.metering.InvalidLimit
-      - name: component-without-formation
-        when:
-          all: ["defined(component)", "not defined(formation_id)"]
-        error: weft.metering.ComponentWithoutFormation
-      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
-      # formation of another account answers like a missing one, so its existence is not disclosed.
-      - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.metering.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
-        error: weft.metering.NotFound
-      - name: set
-        creates: weft.metering.Deadline
-        instance: deadline_id
-        sets:
-          account_id: input.account_id
-          formation_id: input.formation_id
-          component: input.component
-          max_seconds: input.max_seconds
-          set_at: {generated: true}
-        emits: [weft.metering.DeadlineSet]
-        payload:
-          weft.metering.DeadlineSet:
-            deadline_id: {generated: true}
-            account_id: input.account_id
-            formation_id: input.formation_id
-            component: input.component
-            max_seconds: input.max_seconds
-
-  # Line 405 `deadline`. Work already running keeps the deadline it was admitted with.
-  # OPEN: does a shorter deadline stop running work that is past it. Taken: no; it applies to work
-  # admitted after the change.
-  - name: weft.metering.ChangeDeadline
-    naming:
-      display: Change a deadline
-    input:
-      - {name: deadline_id, type: weft.shared.DeadlineId}
-      - {name: max_seconds, type: Integer}
-    outcomes:
-      - name: invalid-limit
-        when: max_seconds < 1
-        error: weft.metering.InvalidLimit
-      - name: no-such-deadline
-        unknown_instance: true
-        error: weft.metering.NotFound
-      # hardening pass 1 D3: a limit of another account than the one the request acts in
-      # answers as not found, before any state of it is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
-      - name: removed
-        when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
-      - name: changed
-        updates: weft.metering.Deadline
-        instance: deadline_id
-        sets:
-          max_seconds: input.max_seconds
-        emits: [weft.metering.DeadlineChanged]
-        payload:
-          weft.metering.DeadlineChanged:
-            deadline_id: input.deadline_id
-            max_seconds: input.max_seconds
-
-  # Line 405 `deadline`.
-  - name: weft.metering.RemoveDeadline
-    naming:
-      display: Remove a deadline
-    input:
-      - {name: deadline_id, type: weft.shared.DeadlineId}
-    outcomes:
-      - name: no-such-deadline
-        unknown_instance: true
-        error: weft.metering.NotFound
-      # hardening pass 1 D3: a limit of another account than the one the request acts in
-      # answers as not found, before any state of it is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
-      - name: removed
-        moves: weft.metering.Deadline.remove
-        instance: deadline_id
-        emits: [weft.metering.DeadlineRemoved]
-        payload:
-          weft.metering.DeadlineRemoved:
-            deadline_id: input.deadline_id
-      - name: wrong-state
-        wrong_state: true
-        error: weft.metering.LimitRemoved
-
   # Line 405 `budget`.
   - name: weft.metering.SetBudget
     naming:
       display: Set a budget
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: measure, type: weft.metering.BudgetMeasure}
       - {name: meter, type: Optional<weft.metering.Meter>}
@@ -1413,8 +1115,8 @@ commands:
       # hardening pass 1 D3: the budget's account is the account the request acts in; another
       # account answers as not found.
       - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.metering.NotFound
+        when: scope_id != caller.scope_id
+        error: weft.limits.NotFound
       - name: invalid-budget
         when: amount <= 0
         error: weft.metering.InvalidBudget
@@ -1436,15 +1138,15 @@ commands:
       # formation of another account answers like a missing one, so its existence is not disclosed.
       - name: formation-missing
         when_related: {via: input.formation_id, exists: false}
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
-        error: weft.metering.NotFound
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.limits.NotFound
       - name: set
         creates: weft.metering.Budget
         instance: budget_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           formation_id: input.formation_id
           measure: input.measure
           meter: input.meter
@@ -1456,7 +1158,7 @@ commands:
         payload:
           weft.metering.BudgetSet:
             budget_id: {generated: true}
-            account_id: input.account_id
+            scope_id: input.scope_id
             formation_id: input.formation_id
             measure: input.measure
             meter: input.meter
@@ -1484,16 +1186,16 @@ commands:
         error: weft.metering.NegativeAmount
       - name: no-such-budget
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: removed
         when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
+        error: weft.limits.LimitRemoved
       # UNMAPPED: a `when_related: {via: input.usage_record_id, exists: false}` refusal is refused
       # here as ESS-COMMAND-004: the precedence order answers the held-state branch `spent` before
       # a related row's existence, so a charge naming no record would still spend the budget. The
       # record id is kept for the audit trail only. Open question for ESS.
       # UNMAPPED (hardening pass 1, metering.yaml:1383): the guard that the record lies in the
-      # budget's scope (a `when_related` row set over UsageRecord with `subject.account_id` on its
+      # budget's scope (a `when_related` row set over UsageRecord with `subject.scope_id` on its
       # account_path) is refused as ESS-COMMAND-009 (ess 0.99.2): a row-set selection beside the
       # `when_subject` guards above is one related row kind too many in this cut.
       - name: spent
@@ -1513,7 +1215,7 @@ commands:
             amount: input.amount
           weft.metering.BudgetSpent:
             budget_id: input.budget_id
-            account_id: {subject: account_id}
+            scope_id: {subject: scope_id}
             formation_id: {subject: formation_id}
       - name: charged
         updates: weft.metering.Budget
@@ -1542,15 +1244,15 @@ commands:
         error: weft.metering.InvalidBudget
       - name: no-such-budget
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       # hardening pass 1 D3: a limit of another account than the one the request acts in
       # answers as not found, before any state of it is told.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
       - name: removed
         when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
+        error: weft.limits.LimitRemoved
       - name: replenished
         when_subject:
           predicate:
@@ -1581,7 +1283,7 @@ commands:
             amount: input.amount
           weft.metering.BudgetSpent:
             budget_id: input.budget_id
-            account_id: {subject: account_id}
+            scope_id: {subject: scope_id}
             formation_id: {subject: formation_id}
       - name: changed
         updates: weft.metering.Budget
@@ -1604,12 +1306,12 @@ commands:
     outcomes:
       - name: no-such-budget
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       # hardening pass 1 D3: a limit of another account than the one the request acts in
       # answers as not found, before any state of it is told.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
       - name: removed
         moves: weft.metering.Budget.remove
         instance: budget_id
@@ -1619,343 +1321,7 @@ commands:
             budget_id: input.budget_id
       - name: wrong-state
         wrong_state: true
-        error: weft.metering.LimitRemoved
-
-  # Line 405 `concurrency`.
-  - name: weft.metering.SetConcurrency
-    naming:
-      display: Set a concurrency limit
-    input:
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_concurrent, type: Integer}
-    outcomes:
-      # hardening pass 1 D3: the limit's account is the account the request acts in; another
-      # account answers as not found.
-      - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.metering.NotFound
-      - name: invalid-limit
-        when: max_concurrent < 1
-        error: weft.metering.InvalidLimit
-      - name: component-without-formation
-        when:
-          all: ["defined(component)", "not defined(formation_id)"]
-        error: weft.metering.ComponentWithoutFormation
-      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
-      # formation of another account answers like a missing one, so its existence is not disclosed.
-      - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.metering.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
-        error: weft.metering.NotFound
-      - name: set
-        creates: weft.metering.Concurrency
-        instance: concurrency_id
-        sets:
-          account_id: input.account_id
-          formation_id: input.formation_id
-          component: input.component
-          max_concurrent: input.max_concurrent
-          in_use: 0
-          set_at: {generated: true}
-        emits: [weft.metering.ConcurrencySet]
-        payload:
-          weft.metering.ConcurrencySet:
-            concurrency_id: {generated: true}
-            account_id: input.account_id
-            formation_id: input.formation_id
-            component: input.component
-            max_concurrent: input.max_concurrent
-
-  # Line 405 `concurrency`.
-  - name: weft.metering.ChangeConcurrency
-    naming:
-      display: Change a concurrency limit
-    input:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: max_concurrent, type: Integer}
-    outcomes:
-      - name: invalid-limit
-        when: max_concurrent < 1
-        error: weft.metering.InvalidLimit
-      - name: no-such-concurrency
-        unknown_instance: true
-        error: weft.metering.NotFound
-      # hardening pass 1 D3: a limit of another account than the one the request acts in
-      # answers as not found, before any state of it is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
-      - name: removed
-        when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
-      - name: changed
-        updates: weft.metering.Concurrency
-        instance: concurrency_id
-        sets:
-          max_concurrent: input.max_concurrent
-        emits: [weft.metering.ConcurrencyChanged]
-        payload:
-          weft.metering.ConcurrencyChanged:
-            concurrency_id: input.concurrency_id
-            max_concurrent: input.max_concurrent
-
-  # Line 405 `concurrency`.
-  - name: weft.metering.RemoveConcurrency
-    naming:
-      display: Remove a concurrency limit
-    input:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-    outcomes:
-      - name: no-such-concurrency
-        unknown_instance: true
-        error: weft.metering.NotFound
-      # hardening pass 1 D3: a limit of another account than the one the request acts in
-      # answers as not found, before any state of it is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
-      - name: removed
-        moves: weft.metering.Concurrency.remove
-        instance: concurrency_id
-        emits: [weft.metering.ConcurrencyRemoved]
-        payload:
-          weft.metering.ConcurrencyRemoved:
-            concurrency_id: input.concurrency_id
-      - name: wrong-state
-        wrong_state: true
-        error: weft.metering.LimitRemoved
-
-  # Line 405 `concurrency` consumed; line 113 (Scheduler places instances). One unit per
-  # instance, acquired on every concurrency limit of the work's scope before it is placed; a
-  # refusal is the named refusal of new work.
-  # OPEN: the Scheduler acquires on several limits (one per level of the tree) one by one; a
-  # refusal after an earlier acquire must release that one. Taken: the Scheduler releases; no
-  # transaction across limits here.
-  # UNMAPPED (hardening pass 1, metering.yaml:1610): that the instance lies in the limit's scope
-  # is not checked here or in ReleaseConcurrency. The scope is an account and everything below
-  # it, and Instance carries its own account_id only (no account path, no formation), so a guard
-  # cannot tell a sub-account's instance from another tenant's.
-  - name: weft.metering.AcquireConcurrency
-    naming:
-      display: Acquire a unit of concurrency
-    input:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: instance_id, type: weft.shared.InstanceId}
-    outcomes:
-      - name: no-such-concurrency
-        unknown_instance: true
-        error: weft.metering.NotFound
-      - name: removed
-        when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
-      - name: spent
-        when_subject: {predicate: in_use >= max_concurrent}
-        error: weft.metering.ConcurrencySpent
-        payload:
-          weft.metering.ConcurrencySpent: {max_concurrent: {subject: max_concurrent}}
-      - name: acquired
-        updates: weft.metering.Concurrency
-        instance: concurrency_id
-        sets:
-          in_use: {increment: 1}
-        emits: [weft.metering.ConcurrencyAcquired]
-        payload:
-          weft.metering.ConcurrencyAcquired:
-            concurrency_id: input.concurrency_id
-            instance_id: input.instance_id
-
-  # Line 405 `concurrency`: the unit comes back when the work ends. A removed limit takes no
-  # release.
-  - name: weft.metering.ReleaseConcurrency
-    naming:
-      display: Release a unit of concurrency
-    input:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: instance_id, type: weft.shared.InstanceId}
-    outcomes:
-      - name: no-such-concurrency
-        unknown_instance: true
-        error: weft.metering.NotFound
-      - name: removed
-        when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
-      - name: nothing-acquired
-        when_subject: {predicate: in_use <= 0}
-        error: weft.metering.NothingAcquired
-      - name: released
-        updates: weft.metering.Concurrency
-        instance: concurrency_id
-        sets:
-          in_use: {expr: "subject.in_use - 1"}
-        emits: [weft.metering.ConcurrencyReleased]
-        payload:
-          weft.metering.ConcurrencyReleased:
-            concurrency_id: input.concurrency_id
-            instance_id: input.instance_id
-
-  # Line 405 `rate`.
-  - name: weft.metering.SetRate
-    naming:
-      display: Set a rate limit
-    input:
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_requests, type: Integer}
-      - {name: window_seconds, type: Integer}
-    outcomes:
-      # hardening pass 1 D3: the limit's account is the account the request acts in; another
-      # account answers as not found.
-      - name: not-callers-account
-        when: account_id != caller.account_id
-        error: weft.metering.NotFound
-      - name: invalid-requests
-        when: max_requests < 1
-        error: weft.metering.InvalidLimit
-      - name: invalid-window
-        when: window_seconds < 1
-        error: weft.metering.InvalidLimit
-      - name: component-without-formation
-        when:
-          all: ["defined(component)", "not defined(formation_id)"]
-        error: weft.metering.ComponentWithoutFormation
-      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
-      # formation of another account answers like a missing one, so its existence is not disclosed.
-      - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.metering.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: account_id != input.account_id}
-        error: weft.metering.NotFound
-      - name: set
-        creates: weft.metering.Rate
-        instance: rate_id
-        sets:
-          account_id: input.account_id
-          formation_id: input.formation_id
-          component: input.component
-          max_requests: input.max_requests
-          window_seconds: input.window_seconds
-          set_at: {generated: true}
-        emits: [weft.metering.RateSet]
-        payload:
-          weft.metering.RateSet:
-            rate_id: {generated: true}
-            account_id: input.account_id
-            formation_id: input.formation_id
-            component: input.component
-            max_requests: input.max_requests
-            window_seconds: input.window_seconds
-
-  # Line 405 `rate`.
-  - name: weft.metering.ChangeRate
-    naming:
-      display: Change a rate limit
-    input:
-      - {name: rate_id, type: weft.shared.RateId}
-      - {name: max_requests, type: Integer}
-      - {name: window_seconds, type: Integer}
-    outcomes:
-      - name: invalid-requests
-        when: max_requests < 1
-        error: weft.metering.InvalidLimit
-      - name: invalid-window
-        when: window_seconds < 1
-        error: weft.metering.InvalidLimit
-      - name: no-such-rate
-        unknown_instance: true
-        error: weft.metering.NotFound
-      # hardening pass 1 D3: a limit of another account than the one the request acts in
-      # answers as not found, before any state of it is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
-      - name: removed
-        when_subject: {predicate: state == Removed}
-        error: weft.metering.LimitRemoved
-      - name: changed
-        updates: weft.metering.Rate
-        instance: rate_id
-        sets:
-          max_requests: input.max_requests
-          window_seconds: input.window_seconds
-        emits: [weft.metering.RateChanged]
-        payload:
-          weft.metering.RateChanged:
-            rate_id: input.rate_id
-            max_requests: input.max_requests
-            window_seconds: input.window_seconds
-
-  # Line 405 `rate`.
-  - name: weft.metering.RemoveRate
-    naming:
-      display: Remove a rate limit
-    input:
-      - {name: rate_id, type: weft.shared.RateId}
-    outcomes:
-      - name: no-such-rate
-        unknown_instance: true
-        error: weft.metering.NotFound
-      # hardening pass 1 D3: a limit of another account than the one the request acts in
-      # answers as not found, before any state of it is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
-        error: weft.metering.NotFound
-      - name: removed
-        moves: weft.metering.Rate.remove
-        instance: rate_id
-        emits: [weft.metering.RateRemoved]
-        payload:
-          weft.metering.RateRemoved:
-            rate_id: input.rate_id
-      - name: wrong-state
-        wrong_state: true
-        error: weft.metering.LimitRemoved
-
-  # Line 405 Limits, caller's "when spent, a named refusal for new work": the Scheduler asks before
-  # it places new work (line 113). Refused while a budget on the work's account path (or of its
-  # formation) is spent, or while a deadline there is shorter than the work asks for. Admits
-  # otherwise and changes nothing; concurrency is acquired with AcquireConcurrency.
-  # OPEN: a deadline limit and work that names no deadline of its own. Taken: max_seconds is the
-  # run time the work asks for (its shape's deadline); work with no end (a service) sends 0 and
-  # is not refused by a deadline; workloads then stops nothing by it.
-  - name: weft.metering.AdmitWork
-    naming:
-      display: Admit new work against the limits
-    input:
-      - {name: account_path, type: List<weft.shared.AccountId>}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
-      - {name: max_seconds, type: Integer}
-    outcomes:
-      - name: budget-spent
-        when_related:
-          entity: weft.metering.Budget
-          where:
-            all:
-              - state == Exhausted
-              - exists: {in: input.account_path, as: a, that: account_id == a}
-              - any: ["not defined(formation_id)", formation_id == input.formation_id]
-          exists: true
-        error: weft.metering.BudgetExhausted
-      - name: deadline-too-long
-        when_related:
-          entity: weft.metering.Deadline
-          where:
-            all:
-              - state == Active
-              - exists: {in: input.account_path, as: a, that: account_id == a}
-              - any: ["not defined(formation_id)", formation_id == input.formation_id]
-              - any: ["not defined(component)", component == input.component]
-              - max_seconds < input.max_seconds
-          exists: true
-        error: weft.metering.DeadlineTooLong
-      - name: admitted
-        accepts: nothing
+        error: weft.limits.LimitRemoved
 
   # "Pricing models" (lines 494-502); line 102 (ClusterOperator: price lists).
   - name: weft.metering.DefinePricingModel
@@ -2004,7 +1370,7 @@ commands:
     outcomes:
       - name: no-such-pricing-model
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: in-use
         when_related:
           entity: weft.metering.PricingAssignment
@@ -2035,7 +1401,7 @@ commands:
       display: Assign a pricing model
     input:
       - {name: target_kind, type: weft.metering.AssignmentTarget}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: product_id, type: Optional<weft.shared.ProductId>}
       - {name: offering_plan_id, type: Optional<weft.shared.OfferingPlanId>}
@@ -2045,29 +1411,29 @@ commands:
         when:
           all:
             - target_kind == account
-            - any: ["not defined(account_id)", "defined(formation_id)", "defined(product_id)", "defined(offering_plan_id)"]
+            - any: ["not defined(scope_id)", "defined(formation_id)", "defined(product_id)", "defined(offering_plan_id)"]
         error: weft.metering.TargetMismatch
       - name: formation-target-mismatch
         when:
           all:
             - target_kind == formation
-            - any: ["not defined(formation_id)", "defined(account_id)", "defined(product_id)", "defined(offering_plan_id)"]
+            - any: ["not defined(formation_id)", "defined(scope_id)", "defined(product_id)", "defined(offering_plan_id)"]
         error: weft.metering.TargetMismatch
       - name: product-target-mismatch
         when:
           all:
             - target_kind == product
-            - any: ["not defined(product_id)", "defined(account_id)", "defined(formation_id)", "defined(offering_plan_id)"]
+            - any: ["not defined(product_id)", "defined(scope_id)", "defined(formation_id)", "defined(offering_plan_id)"]
         error: weft.metering.TargetMismatch
       - name: offering-plan-target-mismatch
         when:
           all:
             - target_kind == offering-plan
-            - any: ["not defined(offering_plan_id)", "defined(account_id)", "defined(formation_id)", "defined(product_id)"]
+            - any: ["not defined(offering_plan_id)", "defined(scope_id)", "defined(formation_id)", "defined(product_id)"]
         error: weft.metering.TargetMismatch
       - name: no-such-pricing-model
         when_related: {via: input.pricing_model_id, exists: false}
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: pricing-model-retired
         when_related: {via: input.pricing_model_id, predicate: state == Retired}
         error: weft.metering.PricingModelNotActive
@@ -2078,7 +1444,7 @@ commands:
           entity: weft.metering.PricingAssignment
           where:
             all:
-              - account_id == input.account_id
+              - scope_id == input.scope_id
               - state == Active
               - target_kind == account
               - input.target_kind == account
@@ -2122,7 +1488,7 @@ commands:
         instance: pricing_assignment_id
         sets:
           target_kind: input.target_kind
-          account_id: input.account_id
+          scope_id: input.scope_id
           formation_id: input.formation_id
           product_id: input.product_id
           offering_plan_id: input.offering_plan_id
@@ -2133,7 +1499,7 @@ commands:
           weft.metering.PricingAssigned:
             pricing_assignment_id: {generated: true}
             target_kind: input.target_kind
-            account_id: input.account_id
+            scope_id: input.scope_id
             formation_id: input.formation_id
             product_id: input.product_id
             offering_plan_id: input.offering_plan_id
@@ -2148,7 +1514,7 @@ commands:
     outcomes:
       - name: no-such-assignment
         unknown_instance: true
-        error: weft.metering.NotFound
+        error: weft.limits.NotFound
       - name: ended
         moves: weft.metering.PricingAssignment.end
         instance: pricing_assignment_id
@@ -2170,7 +1536,7 @@ commands:
       display: Issue a statement
     input:
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: period, type: weft.metering.BillingPeriod}
       - {name: period_start, type: Timestamp}
       - {name: period_end, type: Timestamp}
@@ -2196,7 +1562,7 @@ commands:
           entity: weft.metering.Statement
           where:
             all:
-              - account_id == input.account_id
+              - scope_id == input.scope_id
               - period_start == input.period_start
           exists: true
         error: weft.metering.StatementExists
@@ -2205,7 +1571,7 @@ commands:
         instance: statement_id
         sets:
           tenant_id: input.tenant_id
-          account_id: input.account_id
+          scope_id: input.scope_id
           period: input.period
           period_start: input.period_start
           period_end: input.period_end
@@ -2218,7 +1584,7 @@ commands:
           weft.metering.StatementIssued:
             statement_id: {generated: true}
             tenant_id: input.tenant_id
-            account_id: input.account_id
+            scope_id: input.scope_id
             period_start: input.period_start
             period_end: input.period_end
             currency: input.currency
@@ -2230,13 +1596,13 @@ views:
     source: weft.metering.UsageRecord
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: usage_record_id, type: weft.shared.UsageRecordId}
       - {name: report_id, type: Uuid}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: meter, type: weft.metering.Meter}
       - {name: qualifier, type: weft.metering.MeterQualifier}
@@ -2267,12 +1633,12 @@ views:
     source: weft.metering.UsageRecord
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: from, type: Timestamp}
       - {name: to, type: Timestamp}
     filter:
       all:
-        - exists: {in: account_path, as: a, that: a == param.account_id}
+        - exists: {in: account_path, as: a, that: a == param.scope_id}
         - period_start >= param.from
         - period_end <= param.to
     group_by: [meter, qualifier]
@@ -2340,12 +1706,12 @@ views:
     source: weft.metering.UsageRecord
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: from, type: Timestamp}
       - {name: to, type: Timestamp}
     filter:
       all:
-        - exists: {in: account_path, as: a, that: a == param.account_id}
+        - exists: {in: account_path, as: a, that: a == param.scope_id}
         - period_start >= param.from
         - period_end <= param.to
     group_by: [meter, qualifier]
@@ -2410,33 +1776,16 @@ views:
       - {name: unit_price, type: Decimal}
       - {name: state, type: weft.metering.Price.State}
 
-  # Line 405 `deadline`: the deadlines set on one account itself (its formations and components
-  # included); the limits on the accounts above it apply as well.
-  - name: weft.metering.Deadlines
-    source: weft.metering.Deadline
-    consistency: read_your_writes
-    params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
-    fields:
-      - {name: deadline_id, type: weft.shared.DeadlineId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_seconds, type: Integer}
-      - {name: set_at, type: Timestamp}
-      - {name: state, type: weft.metering.Deadline.State}
-
   # Line 405 `budget`, with what is spent and what remains.
   - name: weft.metering.Budgets
     source: weft.metering.Budget
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: budget_id, type: weft.shared.BudgetId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: measure, type: weft.metering.BudgetMeasure}
       - {name: meter, type: Optional<weft.metering.Meter>}
@@ -2445,40 +1794,6 @@ views:
       - {name: remaining, type: Decimal}
       - {name: set_at, type: Timestamp}
       - {name: state, type: weft.metering.Budget.State}
-
-  # Line 405 `concurrency`, with how many units are in use.
-  - name: weft.metering.Concurrencies
-    source: weft.metering.Concurrency
-    consistency: read_your_writes
-    params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
-    fields:
-      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_concurrent, type: Integer}
-      - {name: in_use, type: Integer}
-      - {name: set_at, type: Timestamp}
-      - {name: state, type: weft.metering.Concurrency.State}
-
-  # Line 405 `rate`. weft-edge and the link filter read it to enforce the rate.
-  - name: weft.metering.Rates
-    source: weft.metering.Rate
-    consistency: read_your_writes
-    params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
-    fields:
-      - {name: rate_id, type: weft.shared.RateId}
-      - {name: account_id, type: weft.shared.AccountId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
-      - {name: component, type: Optional<weft.shared.ComponentName>}
-      - {name: max_requests, type: Integer}
-      - {name: window_seconds, type: Integer}
-      - {name: set_at, type: Timestamp}
-      - {name: state, type: weft.metering.Rate.State}
 
   # "Pricing models" (lines 494-502), every model with its terms.
   - name: weft.metering.PricingModels
@@ -2500,7 +1815,7 @@ views:
     fields:
       - {name: pricing_assignment_id, type: weft.shared.PricingAssignmentId}
       - {name: target_kind, type: weft.metering.AssignmentTarget}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: product_id, type: Optional<weft.shared.ProductId>}
       - {name: offering_plan_id, type: Optional<weft.shared.OfferingPlanId>}
@@ -2514,12 +1829,12 @@ views:
     source: weft.metering.Statement
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: statement_id, type: weft.shared.StatementId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: period, type: weft.metering.BillingPeriod}
       - {name: period_start, type: Timestamp}
       - {name: period_end, type: Timestamp}

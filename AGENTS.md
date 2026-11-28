@@ -31,22 +31,30 @@ none is written before the specification of what it implements.
   writes `target/generated/`, cached by the digest of its sources. Crates use it through path dependencies, so a cargo
   command in the root workspace fails with "failed to read
   `.../target/generated/crates/<crate>/Cargo.toml`" until `tools/synth.sh` has run once;
-  `task test` runs it first. A slot build node never receives the build directory (git-ignored paths are
+  `task test` runs it first. A slot build node never receives the build directory (cargo build directories are
   not synced), so a node job that runs cargo runs the hook in the same job:
   `slot sh -c 'tools/test-setup.d/10-generated.sh && cargo …'`, or a `task` target that runs it.
   Read a job's exit code from slot itself: a `| tail` or `; echo` after it reports its own code.
 - `ess/`: the ESS domain model. `system.yaml`, `ess-inputs.yaml`, `components.yaml`,
   `<layer>/<name>.yaml` (one bounded context per file, one directory per layer, `docs/layers.md`).
-  A domain names only domains of its own or a lower layer. Between domains it declares the
-  relation (`references`), from the integration pass on (2026-11-26).
+  Every file under `ess/cloud/` is vendored (§ Vendored blocks): all of it is one layer below
+  layer 0, and only `task vendor-update` changes it. A file of weft's own names only its own
+  layer, a lower one or the vendored layer; a vendored file names no file of weft's own. A domain
+  may be split over a vendored file and one of weft's own (`weft.workloads`); the layer check
+  takes each file's part of the domain on its own. Between domains a file declares the relation
+  (`references`), from the integration pass on (2026-11-26).
 - `protocols/node-channel.yaml`: session between `weft-control` and `weft-node`, `ess-protospec/1`.
 - `protocols/exec-channel.yaml`: exec, attach, logs and port forward into an instance,
   `ess-protospec/1`.
-- `tools/check-domain.sh <name>`: validates one domain with `weft.shared` only; fails for a domain with relations to other domains (use check-overlay).
+- `tools/check-domain.sh <name>`: validates one domain with `weft.shared`, the vendored files,
+  the actors' grants of their commands and the conversions of `ess/components.yaml`; fails for a
+  domain with relations to another domain of weft's own files (use check-overlay).
 - `tools/check-overlay.sh`: validates the whole system from a frozen snapshot with only named
-  files from the working tree, for parallel edits (`--freeze` takes the snapshot).
-- `tools/check-layers.sh [--graph]`: fails on a reference to a higher layer (`task layers`).
-- `tools/gen-domain-map.sh [--block]`: the domain map of `ess/` (layers, domains, references) as a Mermaid block; `tools/check.d/30-domain-map.sh` in `task check` fails when the block between the `domain-map` markers of `website/docs/specification/layers.md` differs from it; `tools/check.d/31-domain-map-selftest.sh` runs `tools/test-domain-map.sh` (every awk found, bad markers, checks 2 and 3 on fixture trees).
+  files from the working tree, for parallel edits (`--freeze` takes the snapshot, the vendored
+  files with it); refuses a vendored path (under `ess/cloud/`).
+- `tools/check-layers.sh [--graph]`: fails on a reference to a higher layer, and on a vendored
+  file that refers to a file of weft's own (`task layers`).
+- `tools/gen-domain-map.sh [--block]`: the domain map of `ess/` (layers, domains, references) as a Mermaid block; `tools/check.d/30-domain-map.sh` in `task check` fails when the block between the `domain-map` markers of `website/docs/specification/layers.md` differs from it; `tools/check.d/31-domain-map-selftest.sh` runs `tools/test-domain-map.sh` (every awk found, bad markers, checks 2 and 3 on fixture trees, the layer rule of `tools/check-layers.sh` on probe files).
 - `tools/check-stamped-time.sh [--inventory | --negative]`: fails when a command with a
   `weft.shared.StampedAt` input is granted outside `tools/stamped-time-actors` (`task stamped-time`).
 - `tools/check-spec-diff.sh [--acknowledge | --negative]`: classifies the change of `ess/` since
@@ -116,11 +124,13 @@ none is written before the specification of what it implements.
 ## Rules for the specification
 
 - One domain file has one owner at a time. A session that writes `ess/<layer>/<name>.yaml` edits
-  no other domain file.
-- `ess/0-foundation/shared.yaml` holds every entity identifier and the value types more than one domain
-  uses. A domain refers to another domain's entity through its identifier there, as a field, and
-  declares the relation (`references`) on its own entity; the target is in its own or a lower
-  layer (`tools/check-layers.sh`).
+  no other domain file. No session edits a file under `ess/cloud/`: only `task vendor-update`
+  changes them.
+- `ess/0-foundation/shared.yaml` holds every entity identifier and the value types more than one
+  domain of weft's own files uses; the vendored ones are in `ess/cloud/0-protocols/shared.yaml`.
+  A domain refers to another domain's entity through its identifier, as a field, and declares the
+  relation (`references`) on its own entity; the target is in its own or a lower layer, or in the
+  vendored layer (`tools/check-layers.sh`).
 - Actors live only in `ess/9-actors/actors.yaml` (domain `weft.actors`); no other domain file has
   an `actors:` block. Components and bindings (the reconciliation loops, sketch § 14) live only in
   `ess/components.yaml`.
@@ -138,6 +148,28 @@ none is written before the specification of what it implements.
   slot hook refuses a bare `task check`). `tools/check-domain.sh` calls `ess` directly and runs
   without `slot`.
 - No Python in anything committed (`~/beyond10x/AGENTS.md`). Tools are POSIX sh or Rust.
+
+## Vendored blocks
+
+The domain files under `ess/cloud/` are a copy of cloudspec's blocks at the commit `CLOUDSPEC_REV`
+of `Taskfile.yml`, made by cloudspec's vendor script (`vendor.sh`, renaming `cloud.` to `weft.`),
+with its lock `ess/cloud/cloud.lock` (format `cloudspec-vendor/2`). The copy leaves out the
+blocks' actors file and their `components.yaml` (decision D-a of epic `cloud-blocks`): weft keeps
+its own actors and components.
+
+- Never edit a file under `ess/cloud/`. Change cloudspec, then `task vendor-update REV=<commit>`:
+  it fetches cloudspec at that commit into the build directory, copies the blocks with the
+  excludes of D-a, removes files the new lock no longer lists and sets `CLOUDSPEC_REV`. A new
+  file of the copy is added to `ess/ess-inputs.yaml` by hand.
+- `tools/check-vendor-lock.sh` checks the copy offline (no git, no network) in `task check`
+  (`tools/check.d/15-vendor-lock.sh`, after its self-test `tools/test-vendor-lock.sh` on
+  `tools/fixtures/vendor-lock/`): format, system `weft`, commit equal to `CLOUDSPEC_REV`, the
+  excludes of D-a, the digest of every listed file, no unlisted YAML under `ess/cloud/`, every
+  listed file in `ess/ess-inputs.yaml`.
+- `tools/slow.d/20-vendor-fresh.sh` (task `slow`, and the CI job `vendor-fresh` of
+  `.github/workflows/gate.yml` when `ess/cloud/` or `CLOUDSPEC_REV` changed) fetches cloudspec at
+  the pin and runs its `vendor.sh --check`: a fresh copy from source gives the same bytes. It
+  fetches from GitHub, so it is never part of `task check`.
 
 ## Gates and bot commits
 

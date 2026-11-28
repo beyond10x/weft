@@ -53,14 +53,17 @@
 # component owns them.
 
 # Hardening pass 4 (2026-11-26): binding cluster-create-node-pool carries the cluster pool's id into
-# the infrastructure pool it creates (`requested_for`), the one crossing below.
+# the infrastructure pool it creates, the one crossing below. D-e A (story
+# cloud-blocks-cluster-pinning): the vendored CreateNodePool takes no `requested_for` (cloudspec
+# C2), so the id is the pool's `name`.
 conversions:
   - from: weft.shared.ClusterNodePoolId
-    to: Optional<Uuid>
+    to: String
     because: >-
-      weft.infrastructure (layer 1) names no identifier of weft.cluster (layer 3), so it keeps the
-      cluster pool a pool was made for as an opaque Uuid; only weft.cluster reads it back, to refuse
-      an infrastructure pool made for another cluster pool.
+      weft.infrastructure (layer 1, vendored) names no identifier of weft.cluster (layer 3), so the
+      infrastructure pool made for a cluster pool is named by the cluster pool's id, its text form;
+      only weft.cluster reads it back, to refuse an infrastructure pool made for another cluster
+      pool.
   # Hardening pass 5: a stamped instant is stored as a plain one. No conversion runs the other way
   # (tools/check-stamped-time.sh refuses one), so only a stamped value reaches a stamped input.
   - from: weft.shared.StampedAt
@@ -74,19 +77,32 @@ conversions:
     because: >-
       As above, for a row field that is empty until weft-control first stamps it
       (identity.TrustDomain.rotation_ends_at, workloads.Schedule.last_fired_at).
+  # D-d A: binding account-opens-scope names an account's scope by the account's id.
+  - from: weft.shared.AccountId
+    to: String
+    because: >-
+      A scope's name is unique among open scopes and an account's name only among its siblings,
+      so the scope an account opens is named by the account's id, its text form; nothing reads it
+      back as an id.
 
 components:
   # Line 72: "the user API (management plane)". Line 95: the CLI and CI reach it over HTTP.
   - component: weft-api
     summary: >-
       The user API: logins, API tokens and the authorization of every management call; tenants,
-      accounts and principals; formations; the artifacts an account registers.
+      accounts and principals, and the scope each account opens; formations; the artifacts an
+      account registers.
+    # Story cloud-blocks-policies: the vendored domains go where weft's copies were. Architecture
+    # holds what weft.formations held (formations keeps only exports); scope sits beside
+    # accounts, whose AccountCreated opens a scope (binding account-opens-scope).
     owns:
       domains:
         - weft.access
         - weft.accounts
+        - weft.architecture
         - weft.artifacts
         - weft.formations
+        - weft.scope
     accepts:
       commands:
         - weft.access.CreateFederationRule
@@ -125,46 +141,46 @@ components:
         - weft.accounts.GrantTopQuota
         - weft.accounts.LowerTopQuota
         - weft.accounts.RaiseTopQuota
+        - weft.accounts.RecordAccountScope
         - weft.accounts.ReleaseQuota
         - weft.accounts.RevokeRole
         - weft.accounts.RevokeTenantOwner
         # commands of weft.artifacts
         - weft.artifacts.RegisterArtifact
         - weft.artifacts.RevokeArtifact
-        # commands of weft.formations
-        - weft.formations.AddComponent
-        - weft.formations.AddEndpoint
-        - weft.formations.AddLink
-        - weft.formations.AddRoute
-        - weft.formations.AddToBorder
-        - weft.formations.ChangeConfig
-        - weft.formations.ChangeConfigOverride
-        - weft.formations.ChangeScale
-        - weft.formations.CommitRevision
-        - weft.formations.CreateConfig
-        - weft.formations.CreateEnvironment
-        - weft.formations.CreatePreviewEnvironment
-        - weft.formations.ExpirePreviewEnvironment
+        # commands of weft.scope
+        - weft.scope.CloseScope
+        - weft.scope.OpenScope
+        # commands of weft.architecture and weft.formations
+        - weft.architecture.AddComponent
+        - weft.architecture.AddLink
+        - weft.architecture.AddToBorder
+        - weft.architecture.ChangeConfig
+        - weft.architecture.ChangeConfigOverride
+        - weft.architecture.ChangeScale
+        - weft.architecture.CommitRevision
+        - weft.architecture.CreateConfig
+        - weft.architecture.CreateEnvironment
+        - weft.architecture.CreatePreviewEnvironment
+        - weft.architecture.ExpirePreviewEnvironment
         - weft.formations.CreateExport
-        - weft.formations.CreateFormation
-        - weft.formations.MountConfig
-        - weft.formations.RemoveComponent
-        - weft.formations.RemoveConfig
-        - weft.formations.RemoveConfigOverride
-        - weft.formations.RemoveEndpoint
-        - weft.formations.RemoveFromBorder
-        - weft.formations.RemoveLink
-        - weft.formations.RemoveRoute
-        - weft.formations.RemoveScale
-        - weft.formations.RetireEnvironment
-        - weft.formations.RetireFormation
+        - weft.architecture.CreateFormation
+        - weft.architecture.MountConfig
+        - weft.architecture.RemoveComponent
+        - weft.architecture.RemoveConfig
+        - weft.architecture.RemoveConfigOverride
+        - weft.architecture.RemoveFromBorder
+        - weft.architecture.RemoveLink
+        - weft.architecture.RemoveScale
+        - weft.architecture.RetireEnvironment
+        - weft.architecture.RetireFormation
         - weft.formations.RevokeAccountExports
         - weft.formations.RevokeExport
-        - weft.formations.SetConfigOverride
-        - weft.formations.SetEnvironmentQuota
-        - weft.formations.SetFormationQuota
-        - weft.formations.SetScale
-        - weft.formations.UnmountConfig
+        - weft.architecture.SetConfigOverride
+        - weft.architecture.SetEnvironmentQuota
+        - weft.architecture.SetFormationQuota
+        - weft.architecture.SetScale
+        - weft.architecture.UnmountConfig
     publishes:
       events:
         - weft.access.FederatedTokenExchanged
@@ -189,6 +205,7 @@ components:
         # events of weft.accounts
         - weft.accounts.AccountClosed
         - weft.accounts.AccountCreated
+        - weft.accounts.AccountScopeRecorded
         - weft.accounts.PrincipalAdded
         - weft.accounts.PrincipalDisabled
         - weft.accounts.QuotaAllocated
@@ -206,38 +223,37 @@ components:
         # events of weft.artifacts
         - weft.artifacts.ArtifactRegistered
         - weft.artifacts.ArtifactRevoked
-        # events of weft.formations
+        # events of weft.scope
+        - weft.scope.ScopeClosed
+        - weft.scope.ScopeOpened
+        # events of weft.architecture and weft.formations
         - weft.formations.AccountExportsRevoked
-        - weft.formations.ComponentAdded
-        - weft.formations.ComponentBordered
-        - weft.formations.ComponentRemoved
-        - weft.formations.ComponentUnbordered
-        - weft.formations.ConfigChanged
-        - weft.formations.ConfigCreated
-        - weft.formations.ConfigMounted
-        - weft.formations.ConfigOverrideChanged
-        - weft.formations.ConfigOverrideRemoved
-        - weft.formations.ConfigOverrideSet
-        - weft.formations.ConfigRemoved
-        - weft.formations.ConfigUnmounted
-        - weft.formations.EndpointAdded
-        - weft.formations.EndpointRemoved
-        - weft.formations.EnvironmentCreated
-        - weft.formations.EnvironmentQuotaSet
-        - weft.formations.EnvironmentRetired
+        - weft.architecture.ComponentAdded
+        - weft.architecture.ComponentBordered
+        - weft.architecture.ComponentRemoved
+        - weft.architecture.ComponentUnbordered
+        - weft.architecture.ConfigChanged
+        - weft.architecture.ConfigCreated
+        - weft.architecture.ConfigMounted
+        - weft.architecture.ConfigOverrideChanged
+        - weft.architecture.ConfigOverrideRemoved
+        - weft.architecture.ConfigOverrideSet
+        - weft.architecture.ConfigRemoved
+        - weft.architecture.ConfigUnmounted
+        - weft.architecture.EnvironmentCreated
+        - weft.architecture.EnvironmentQuotaSet
+        - weft.architecture.EnvironmentRetired
         - weft.formations.ExportCreated
         - weft.formations.ExportRevoked
-        - weft.formations.FormationCreated
-        - weft.formations.FormationQuotaSet
-        - weft.formations.FormationRetired
-        - weft.formations.LinkAdded
-        - weft.formations.LinkRemoved
-        - weft.formations.RevisionCommitted
-        - weft.formations.RouteAdded
-        - weft.formations.RouteRemoved
-        - weft.formations.ScaleChanged
-        - weft.formations.ScaleRemoved
-        - weft.formations.ScaleSet
+        - weft.architecture.FormationCreated
+        - weft.architecture.FormationQuotaSet
+        - weft.architecture.FormationRetired
+        - weft.architecture.LinkAdded
+        - weft.architecture.LinkRemoved
+        - weft.architecture.RevisionCommitted
+        - weft.architecture.ScaleChanged
+        - weft.architecture.ScaleRemoved
+        - weft.architecture.ScaleSet
     reached_by: network
 
   # Line 73: "scheduler, translators, identity issuer, secret delivery"; line 63: "state store ...
@@ -247,9 +263,14 @@ components:
       The control plane: the cluster and its inventory, tenant storage, workloads and their
       instances, claims, scheduling, the record of each node session, workload identity, secret
       custody and delivery, telemetry, deployments and releases, the catalog and metering.
+    # Story cloud-blocks-policies: the vendored topology, limits and services hold what weft's
+    # cluster, metering and catalog held, whose commands weft-control accepted already.
     owns:
       domains:
         - weft.cluster
+        - weft.limits
+        - weft.services
+        - weft.topology
         - weft.pipelines
         - weft.infrastructure
         - weft.inventory
@@ -271,18 +292,19 @@ components:
     accepts:
       commands:
         - weft.cluster.AddClusterNodePool
-        - weft.cluster.AddTopologyGroup
+        - weft.topology.AddTopologyGroup
         - weft.cluster.CreateCluster
-        - weft.cluster.CreateClusterTopology
+        - weft.topology.CreateTopology
         - weft.cluster.CreateDefaultCluster
-        - weft.cluster.DeclareTopologyLink
+        - weft.topology.DeclareTopologyLink
         - weft.cluster.DeleteCluster
+        - weft.cluster.PinFormation
         - weft.cluster.RecordClusterNodePoolReady
         - weft.cluster.RecordRemovedClusterNodePool
         - weft.cluster.RemoveClusterNodePool
-        - weft.cluster.RemoveClusterTopology
-        - weft.cluster.RemoveTopologyGroup
-        - weft.cluster.RemoveTopologyLink
+        - weft.topology.RemoveTopology
+        - weft.topology.RemoveTopologyGroup
+        - weft.topology.RemoveTopologyLink
         - weft.cluster.SetClusterPolicy
         - weft.pipelines.AddDeployGate
         - weft.pipelines.ApproveGateCheck
@@ -308,38 +330,38 @@ components:
         - weft.pipelines.TimeOutRunnerJob
         # commands of weft.catalog
         - weft.catalog.AddOfferingPlan
-        - weft.catalog.BackupServiceInstance
-        - weft.catalog.BindService
-        - weft.catalog.ChangeServicePlan
-        - weft.catalog.CheckServiceAccess
-        - weft.catalog.DeprovisionServiceInstance
+        - weft.services.BackupServiceInstance
+        - weft.services.BindService
+        - weft.services.ChangeServicePlan
+        - weft.services.CheckServiceAccess
+        - weft.services.DeprovisionServiceInstance
         - weft.catalog.InstallProduct
-        - weft.catalog.MoveServiceInstanceEngine
-        - weft.catalog.ProvisionServiceInstance
-        - weft.catalog.PublishOffering
+        - weft.services.MoveServiceInstanceEngine
+        - weft.services.ProvisionServiceInstance
+        - weft.services.PublishOffering
         - weft.catalog.PublishProduct
         - weft.catalog.PublishProductVersion
         - weft.catalog.RegisterEngine
         - weft.catalog.RegisterPublisher
-        - weft.catalog.ReportBackupCompleted
-        - weft.catalog.ReportBackupFailed
+        - weft.services.ReportBackupCompleted
+        - weft.services.ReportBackupFailed
         - weft.catalog.ReportInstallationFailed
         - weft.catalog.ReportInstallationInstalled
         - weft.catalog.ReportInstallationUninstalled
-        - weft.catalog.ReportRestoreCompleted
-        - weft.catalog.ReportRestoreFailed
-        - weft.catalog.ReportServiceInstanceDegraded
-        - weft.catalog.ReportServiceInstanceGone
-        - weft.catalog.ReportServiceInstanceReady
-        - weft.catalog.RestoreServiceInstance
+        - weft.services.ReportRestoreCompleted
+        - weft.services.ReportRestoreFailed
+        - weft.services.ReportServiceInstanceDegraded
+        - weft.services.ReportServiceInstanceGone
+        - weft.services.ReportServiceInstanceReady
+        - weft.services.RestoreServiceInstance
         - weft.catalog.RetireEngine
-        - weft.catalog.RetireOffering
+        - weft.services.RetireOffering
         - weft.catalog.RetireOfferingPlan
         - weft.catalog.RetirePublisher
         - weft.catalog.SetInstallationSleepPolicy
-        - weft.catalog.SetServiceSleepPolicy
-        - weft.catalog.SwapOfferingEngine
-        - weft.catalog.UnbindService
+        - weft.services.SetServiceSleepPolicy
+        - weft.services.SwapOfferingEngine
+        - weft.services.UnbindService
         - weft.catalog.UninstallProduct
         - weft.catalog.UpgradeInstallation
         - weft.catalog.WithdrawProduct
@@ -353,6 +375,7 @@ components:
         - weft.claims.ReleaseClaim
         - weft.claims.ReleaseClaimBindings
         # commands of weft.infrastructure
+        - weft.infrastructure.ConfigureCloud
         - weft.infrastructure.CordonNode
         - weft.infrastructure.CreateCloud
         - weft.infrastructure.CreateNodePool
@@ -425,13 +448,13 @@ components:
         - weft.inventory.ResetDevice
         - weft.inventory.RetireResourceClass
         # commands of weft.metering
-        - weft.metering.AcquireConcurrency
-        - weft.metering.AdmitWork
+        - weft.limits.AcquireConcurrency
+        - weft.limits.AdmitWork
         - weft.metering.AssignPricing
         - weft.metering.ChangeBudget
-        - weft.metering.ChangeConcurrency
-        - weft.metering.ChangeDeadline
-        - weft.metering.ChangeRate
+        - weft.limits.ChangeConcurrency
+        - weft.limits.ChangeDeadline
+        - weft.limits.ChangeRate
         - weft.metering.ChargeBudget
         - weft.metering.CreatePriceList
         - weft.metering.DefinePricingModel
@@ -439,18 +462,18 @@ components:
         - weft.metering.IssueStatement
         - weft.metering.PublishPriceList
         - weft.metering.RecordUsage
-        - weft.metering.ReleaseConcurrency
+        - weft.limits.ReleaseConcurrency
         - weft.metering.RemoveBudget
-        - weft.metering.RemoveConcurrency
-        - weft.metering.RemoveDeadline
+        - weft.limits.RemoveConcurrency
+        - weft.limits.RemoveDeadline
         - weft.metering.RemovePrice
-        - weft.metering.RemoveRate
+        - weft.limits.RemoveRate
         - weft.metering.RetirePricingModel
         - weft.metering.SetBudget
-        - weft.metering.SetConcurrency
-        - weft.metering.SetDeadline
+        - weft.limits.SetConcurrency
+        - weft.limits.SetDeadline
         - weft.metering.SetPrice
-        - weft.metering.SetRate
+        - weft.limits.SetRate
         # commands of weft.nodes
         - weft.nodes.Assign
         - weft.nodes.Attach
@@ -483,7 +506,7 @@ components:
         - weft.observability.ConfigureBucketSink
         - weft.observability.ConfigureTelemetrySink
         - weft.observability.CreateAlertRule
-        - weft.observability.DeleteAccountAlertRules
+        - weft.observability.DeleteScopeAlertRules
         - weft.observability.DeleteAlertRule
         - weft.observability.ExpireLogStream
         - weft.observability.FireAlert
@@ -493,9 +516,9 @@ components:
         - weft.observability.RecordSinkFailing
         - weft.observability.RegisterInstanceSeries
         - weft.observability.RegisterNodeSeries
-        - weft.observability.RemoveAccountNotificationTargets
-        - weft.observability.RemoveAccountTelemetryPolicies
-        - weft.observability.RemoveAccountTelemetrySinks
+        - weft.observability.RemoveScopeNotificationTargets
+        - weft.observability.RemoveScopeTelemetryPolicies
+        - weft.observability.RemoveScopeTelemetrySinks
         - weft.observability.RemoveNotificationTarget
         - weft.observability.RemoveTelemetryPolicy
         - weft.observability.RemoveTelemetrySink
@@ -607,7 +630,7 @@ components:
         - weft.workloads.RestoreSnapshot
         - weft.workloads.ResumeInstance
         - weft.workloads.ResumeSchedule
-        - weft.workloads.RetireAccountServices
+        - weft.workloads.RetireScopeServices
         - weft.workloads.RetireRuntime
         - weft.workloads.RetireWorkload
         - weft.workloads.RetryTask
@@ -636,13 +659,14 @@ components:
         - weft.cluster.ClusterNodePoolRemoved
         - weft.cluster.ClusterNodePoolRequested
         - weft.cluster.ClusterPolicySet
-        - weft.cluster.ClusterTopologyCreated
-        - weft.cluster.ClusterTopologyRemoved
+        - weft.cluster.FormationPinned
+        - weft.topology.TopologyCreated
+        - weft.topology.TopologyRemoved
         - weft.cluster.DefaultClusterCreated
-        - weft.cluster.TopologyGroupAdded
-        - weft.cluster.TopologyGroupRemoved
-        - weft.cluster.TopologyLinkDeclared
-        - weft.cluster.TopologyLinkRemoved
+        - weft.topology.TopologyGroupAdded
+        - weft.topology.TopologyGroupRemoved
+        - weft.topology.TopologyLinkDeclared
+        - weft.topology.TopologyLinkRemoved
         - weft.pipelines.BuildCacheAttached
         - weft.pipelines.BuildCacheCreated
         - weft.pipelines.BuildCacheEvicted
@@ -661,9 +685,9 @@ components:
         - weft.pipelines.RunnerPoolCreated
         - weft.pipelines.RunnerPoolRetired
         # events of weft.catalog
-        - weft.catalog.BackupCompleted
-        - weft.catalog.BackupFailed
-        - weft.catalog.BackupStarted
+        - weft.services.BackupCompleted
+        - weft.services.BackupFailed
+        - weft.services.BackupStarted
         - weft.catalog.EngineRegistered
         - weft.catalog.EngineRetired
         - weft.catalog.InstallationFailed
@@ -673,9 +697,9 @@ components:
         - weft.catalog.InstallationUninstalled
         - weft.catalog.InstallationUninstalling
         - weft.catalog.InstallationUpgrading
-        - weft.catalog.OfferingEngineSwapped
-        - weft.catalog.OfferingPublished
-        - weft.catalog.OfferingRetired
+        - weft.services.OfferingEngineSwapped
+        - weft.services.OfferingPublished
+        - weft.services.OfferingRetired
         - weft.catalog.PlanAdded
         - weft.catalog.PlanRetired
         - weft.catalog.ProductPublished
@@ -684,19 +708,19 @@ components:
         - weft.catalog.ProductWithdrawn
         - weft.catalog.PublisherRegistered
         - weft.catalog.PublisherRetired
-        - weft.catalog.RestoreCompleted
-        - weft.catalog.RestoreFailed
-        - weft.catalog.RestoreStarted
-        - weft.catalog.ServiceBound
-        - weft.catalog.ServiceInstanceDegraded
-        - weft.catalog.ServiceInstanceDeprovisioning
-        - weft.catalog.ServiceInstanceEngineMoved
-        - weft.catalog.ServiceInstanceGone
-        - weft.catalog.ServiceInstanceProvisioning
-        - weft.catalog.ServiceInstanceReady
-        - weft.catalog.ServiceInstanceUpdating
-        - weft.catalog.ServiceSleepPolicySet
-        - weft.catalog.ServiceUnbound
+        - weft.services.RestoreCompleted
+        - weft.services.RestoreFailed
+        - weft.services.RestoreStarted
+        - weft.services.ServiceBound
+        - weft.services.ServiceInstanceDegraded
+        - weft.services.ServiceInstanceDeprovisioning
+        - weft.services.ServiceInstanceEngineMoved
+        - weft.services.ServiceInstanceGone
+        - weft.services.ServiceInstanceProvisioning
+        - weft.services.ServiceInstanceReady
+        - weft.services.ServiceInstanceUpdating
+        - weft.services.ServiceSleepPolicySet
+        - weft.services.ServiceUnbound
         # events of weft.claims
         - weft.claims.BindingReleased
         - weft.claims.BindingReserved
@@ -705,6 +729,7 @@ components:
         - weft.claims.ClaimDeclared
         - weft.claims.ClaimReleased
         # events of weft.cluster
+        - weft.infrastructure.CloudConfigured
         - weft.infrastructure.CloudCreated
         - weft.infrastructure.CloudPolicySet
         - weft.infrastructure.ControlPlaneScaled
@@ -784,14 +809,14 @@ components:
         - weft.metering.BudgetReplenished
         - weft.metering.BudgetSet
         - weft.metering.BudgetSpent
-        - weft.metering.ConcurrencyAcquired
-        - weft.metering.ConcurrencyChanged
-        - weft.metering.ConcurrencyReleased
-        - weft.metering.ConcurrencyRemoved
-        - weft.metering.ConcurrencySet
-        - weft.metering.DeadlineChanged
-        - weft.metering.DeadlineRemoved
-        - weft.metering.DeadlineSet
+        - weft.limits.ConcurrencyAcquired
+        - weft.limits.ConcurrencyChanged
+        - weft.limits.ConcurrencyReleased
+        - weft.limits.ConcurrencyRemoved
+        - weft.limits.ConcurrencySet
+        - weft.limits.DeadlineChanged
+        - weft.limits.DeadlineRemoved
+        - weft.limits.DeadlineSet
         - weft.metering.PriceListCreated
         - weft.metering.PriceListPublished
         - weft.metering.PriceRemoved
@@ -800,9 +825,9 @@ components:
         - weft.metering.PricingAssignmentEnded
         - weft.metering.PricingModelDefined
         - weft.metering.PricingModelRetired
-        - weft.metering.RateChanged
-        - weft.metering.RateRemoved
-        - weft.metering.RateSet
+        - weft.limits.RateChanged
+        - weft.limits.RateRemoved
+        - weft.limits.RateSet
         - weft.metering.StatementIssued
         - weft.metering.UsageRecorded
         # events of weft.nodes
@@ -827,10 +852,10 @@ components:
         - weft.nodes.NodeSessionSuperseded
         - weft.nodes.UsageReportRecorded
         # events of weft.observability
-        - weft.observability.AccountAlertRulesDeleted
-        - weft.observability.AccountNotificationTargetsRemoved
-        - weft.observability.AccountTelemetryPoliciesRemoved
-        - weft.observability.AccountTelemetrySinksRemoved
+        - weft.observability.ScopeAlertRulesDeleted
+        - weft.observability.ScopeNotificationTargetsRemoved
+        - weft.observability.ScopeTelemetryPoliciesRemoved
+        - weft.observability.ScopeTelemetrySinksRemoved
         - weft.observability.AlertFired
         - weft.observability.AlertNotificationFailed
         - weft.observability.AlertNotified
@@ -898,7 +923,7 @@ components:
         - weft.secrets.SecretVersionDisabled
         # events of weft.workloads
         - weft.workloads.AccountInstancesStopped
-        - weft.workloads.AccountServicesRetired
+        - weft.workloads.ScopeServicesRetired
         - weft.workloads.AliveCheckFailed
         - weft.workloads.BoxCordoned
         - weft.workloads.BoxCreated
@@ -1030,10 +1055,15 @@ components:
         - weft.node.SecretRequested
 
   # Line 75: "the gateway in front of public endpoints (data plane)"; line 67: "traffic to
-  # endpoints". Acts as EdgeGateway. Accepts no user command: its rows change through the bindings
-  # below (formations route and endpoint events, workloads readiness events, its own
-  # BackendSetChanged) and EdgeGateway's own commands.
+  # endpoints". Acts as EdgeGateway. Its rows change through the bindings below (its own route and
+  # endpoint events, workloads readiness events, its own BackendSetChanged) and EdgeGateway's own
+  # commands.
   # Publishes: WakeRequested (r8-edge-wake, R8) and BackendSetChanged (r8-edge-forward).
+  # Story cloud-blocks-vendor and -policies: the vendored weft.edge holds the routes and endpoints
+  # weft.formations held, so their user commands (AddRoute, RemoveRoute, AddEndpoint,
+  # RemoveEndpoint) are accepted and their events published here. OPEN: this component is not
+  # reached by network, so those four user commands have no HTTP surface; weft-api would forward
+  # them (the OPEN of D1 at the top), or weft-edge would be `reached_by: network`.
   # OPEN: the public traffic it serves is no command of the model, so the component is reached in
   # process here; a request is the EdgeGateway's HoldRequest only when its service sleeps.
   - component: weft-edge
@@ -1046,6 +1076,10 @@ components:
     accepts:
       commands:
         - weft.edge.DropRouteHeldRequests
+        - weft.edge.RemoveRoute
+        - weft.edge.RemoveEndpoint
+        - weft.edge.AddRoute
+        - weft.edge.AddEndpoint
         - weft.edge.ForwardHeldRequests
         - weft.edge.HoldRequest
         - weft.edge.MissHeldRequest
@@ -1066,9 +1100,13 @@ components:
         - weft.edge.CertificateRenewed
         - weft.edge.CertificateRequested
         - weft.edge.CertificateRetired
+        - weft.edge.EndpointAdded
+        - weft.edge.EndpointRemoved
         - weft.edge.HeldRequestDropped
         - weft.edge.HeldRequestForwarded
         - weft.edge.HeldRequestMissed
+        - weft.edge.RouteAdded
+        - weft.edge.RouteRemoved
         - weft.edge.WakeRequested
 
 # Reconciliation loops, § 14 lines 584-618, in the four forms of lines 594-606 (edge, level, time,
@@ -1224,7 +1262,8 @@ bindings:
       # workload-retired: harmless; a retired workload takes no new instance, and its service is
       # retired with it or replaced by the new revision's.
       drop: [replica-live, workload-retired]
-      # over-quota is transient (a quota raised or freed admits it). no-workload, no-service and
+      # CreateInstance has no over-quota (the blocks took it out of the outcome group quota;
+      # PlaceInstance admits by quota). no-workload, no-service and
       # the foreign-* refusals cannot follow (RequestReplica read the service, which names the
       # workload); no-job, no-invocation, no-box, no-session and no-warm-pool read inputs this
       # binding leaves absent. A transport failure is retried.
@@ -1246,7 +1285,7 @@ bindings:
       command: weft.scheduling.SubmitSchedulingRequest
     mapping:
       instance_id: event.instance_id
-      account_id: event.account_id
+      scope_id: event.scope_id
       formation_id: event.formation_id
       claims: event.claims
       min_isolation: event.minimum_isolation
@@ -1254,16 +1293,18 @@ bindings:
       priority: event.priority
     delivery: at_least_once
     on_failure:
-      # already-requested: harmless; a repeated delivery of this InstanceCreated.
+      # already-requested: harmless; a repeated delivery of this InstanceCreated (the vendored
+      # SubmitSchedulingRequest keeps this refusal).
       drop: [already-requested]
       # unknown-priority and retired-priority are retried until the operator defines the class
       # (cluster.DefinePriorityClass); the workload references it (workloads.yaml
       # Workload.priority_class) but DefineWorkload does not check it (OPEN there). OPEN: no-claims (a workload defined with no claim) is not
       # transient and has no escalation event: scheduling.yaml would add
       # `SchedulingRequestRefused(instance_id, reason)`, or workloads.DefineWorkload would refuse
-      # an empty claim list. unknown-account cannot follow (the workload names an existing
-      # account); unknown-gang, gang-closed and gang-of-other-tenant read a gang_id this binding
-      # leaves absent. A transport failure is retried.
+      # an empty claim list. unknown-scope, unknown-formation and formation-of-other-scope cannot
+      # follow (the instance names its workload's scope and formation); unknown-gang, gang-closed
+      # and gang-of-other-scope read a gang_id this binding leaves absent. A transport failure is
+      # retried.
       retry: {except: [already-requested]}
   # The Scheduler's choice of a node (scheduling.PlaceInstance) is a decision, not a reaction; it
   # stays a command the Scheduler runs for each pending request. R1 continues at R4.
@@ -1436,14 +1477,20 @@ bindings:
       backoff: event.restart
     delivery: at_least_once
     on_failure: &replica-ended-failure
-      # already-counted: harmless; a repeated delivery, the instance is already counted out.
-      drop: [already-counted]
-      # no-such-service, no-instance, other-service and instance-live cannot follow (the event is
-      # the end of this service's instance). OPEN: count-empty (the count is already 0) means the
-      # count drifted from the live instances; it is not transient and workloads.yaml has no
-      # escalation event (it would add `ReplicaCountDrifted(service_id)`). A transport failure is
-      # retried.
-      retry: {except: [already-counted]}
+      # count-empty: harmless; the service's count is already 0, so there is nothing to count
+      # out, and a retry would wait for a later replica to raise the count and then lower it for
+      # this one. The vendored RecordReplicaEnded refuses only no-such-service and count-empty: it
+      # cut already-counted, no-instance, other-service and instance-live (cloudspec D7 A, the
+      # instance is weft's run-time record).
+      # OPEN: without already-counted a repeated delivery while the count is above 0 lowers it a
+      # second time; the count then stays one below the live replicas, and the level step on
+      # ServicesBelowScale keeps one replica more than the scale. weft keeps the mark
+      # (Instance.replica_counted_out), but no refusal of the vendored command reads it; cloudspec
+      # would add `already-counted` back, or weft would refuse a repeat before the command runs.
+      drop: [count-empty]
+      # no-such-service cannot follow (the event names this service's instance). A transport
+      # failure is retried.
+      retry: {except: [count-empty]}
 
   # Edge 3 for a failure: every failure backs off, so a replica whose artifact the node rejected
   # does not loop without a wait (docs/open-questions.md "workloads loops", decided).
@@ -1569,6 +1616,60 @@ bindings:
   # taken), so R5 relies on ReleaseBinding having wiped the devices first (claims.yaml).
 
   # ---------------------------------------------------------------------------------------------
+  # D-d A: an account of the multi-tenant example maps to one cloudspec scope. A created account
+  # opens its scope; OpenScope answers the scope's id, which the control plane records on the
+  # account with accounts.RecordAccountScope (a binding carries no response back).
+  - id: account-opens-scope
+    summary: Open the scope of an account just created.
+    when:
+      event: weft.accounts.AccountCreated
+    invoke:
+      command: weft.scope.OpenScope
+    mapping:
+      name: event.account_id
+    delivery: at_least_once
+    on_failure:
+      # name-taken: harmless; a repeated delivery of this AccountCreated, whose first delivery
+      # opened the scope (the name is the account's id, conversion above).
+      drop: [name-taken]
+      # A transport failure is retried.
+      retry: {except: [name-taken]}
+
+  # D-d A: a sub-account maps to a scope of its own, as a top-level account does.
+  - id: sub-account-opens-scope
+    summary: Open the scope of a sub-account just created.
+    when:
+      event: weft.accounts.SubAccountCreated
+    invoke:
+      command: weft.scope.OpenScope
+    mapping:
+      name: event.account_id
+    delivery: at_least_once
+    on_failure:
+      # name-taken: harmless; a repeated delivery of this SubAccountCreated.
+      drop: [name-taken]
+      # A transport failure is retried.
+      retry: {except: [name-taken]}
+
+  # D-d A: a closed account's scope closes. The R6 commands below refuse while the scope is open
+  # and are retried, so they act once this binding ran.
+  - id: account-closes-scope
+    summary: Close the scope of a closed account.
+    when:
+      event: weft.accounts.AccountClosed
+    invoke:
+      command: weft.scope.CloseScope
+    mapping:
+      scope_id: event.scope_id
+    delivery: at_least_once
+    on_failure:
+      # wrong-state: harmless; a repeated delivery, the scope is closed already.
+      drop: [wrong-state]
+      # no-such-scope cannot follow: CloseAccount checked the scope recorded on the account. A
+      # transport failure is retried.
+      retry: {except: [wrong-state]}
+
+  # ---------------------------------------------------------------------------------------------
   # R6 (line 590): account closed -> its exports revoked, tokens expired, instances stopped. Many
   # rows: one command per domain and entity moves every matching row (ESS-COMMAND-009), each
   # invoked by one binding on accounts.AccountClosed (docs/open-questions.md "account close",
@@ -1583,7 +1684,7 @@ bindings:
     invoke:
       command: weft.formations.RevokeAccountExports
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1594,7 +1695,7 @@ bindings:
     invoke:
       command: weft.access.RevokeAccountApiTokens
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1608,7 +1709,7 @@ bindings:
     invoke:
       command: weft.workloads.StopAccountInstances
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1619,9 +1720,9 @@ bindings:
     when:
       event: weft.accounts.AccountClosed
     invoke:
-      command: weft.workloads.RetireAccountServices
+      command: weft.workloads.RetireScopeServices
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1647,9 +1748,9 @@ bindings:
     when:
       event: weft.accounts.AccountClosed
     invoke:
-      command: weft.observability.DeleteAccountAlertRules
+      command: weft.observability.DeleteScopeAlertRules
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1658,9 +1759,9 @@ bindings:
     when:
       event: weft.accounts.AccountClosed
     invoke:
-      command: weft.observability.RemoveAccountTelemetryPolicies
+      command: weft.observability.RemoveScopeTelemetryPolicies
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1672,9 +1773,9 @@ bindings:
     when:
       event: weft.accounts.AccountClosed
     invoke:
-      command: weft.observability.RemoveAccountTelemetrySinks
+      command: weft.observability.RemoveScopeTelemetrySinks
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1685,9 +1786,9 @@ bindings:
     when:
       event: weft.accounts.AccountClosed
     invoke:
-      command: weft.observability.RemoveAccountNotificationTargets
+      command: weft.observability.RemoveScopeNotificationTargets
     mapping:
-      account_id: event.account_id
+      scope_id: event.scope_id
     delivery: at_least_once
     on_failure: retry
 
@@ -1900,7 +2001,7 @@ bindings:
   # Hardening pass 4 (2026-11-26), the lifecycle as loops (level steps of the ControlPlane, read
   # and invoke granted in ess/9-actors/actors.yaml):
   #   ready   cluster.UnlinkedClusterNodePools joined with infrastructure.TenantNodePools on
-  #           cluster_node_pool_id == requested_for -> cluster.RecordClusterNodePoolReady (a
+  #           cluster_node_pool_id == name    -> cluster.RecordClusterNodePoolReady (a
   #           Requested row) or cluster.RecordRemovedClusterNodePool (a row removed while
   #           Requested, so its pool is deleted too)
   #   drain   cluster.RemovedClusterNodePools     -> infrastructure.DrainNodePool
@@ -1910,8 +2011,8 @@ bindings:
   #   delete  infrastructure.DrainingNodePools    -> infrastructure.DeleteNodePool (pool-has-nodes
   #                                                  until the nodes step is done)
   # Each view empties when its step succeeds, so the loop converges (sim/experiments/
-  # cluster-pool-lifecycle.yaml). No edge records Ready: NodePoolCreated carries requested_for
-  # now, so one could; the level step alone is taken.
+  # cluster-pool-lifecycle.yaml). No edge records Ready: NodePoolCreated carries the cluster pool
+  # as the pool's `name` (D-e A), so one could; the level step alone is taken.
   # OPEN: RemoveNode answers not-empty while an instance is still assigned to the draining node
   # (`external:`); nothing here moves those instances, R3's lease end does (line 470).
   - id: cluster-create-node-pool
@@ -1920,21 +2021,25 @@ bindings:
       event: weft.cluster.ClusterNodePoolRequested
     invoke:
       command: weft.infrastructure.CreateNodePool
+    # D-e A: the pool is named by the cluster pool's id (conversion above), which
+    # cluster.RecordClusterNodePoolReady reads back; the user's name stays on the cluster pool.
     mapping:
-      name: event.name
+      name: event.cluster_node_pool_id
       zone: event.zone
       machine_type: event.machine_type
       image: event.image
       min_size: event.min_size
       max_size: event.max_size
-      requested_for: event.cluster_node_pool_id
     delivery: at_least_once
     on_failure:
       # negative-size and min-above-max cannot follow: weft.cluster.AddClusterNodePool refuses
       # them. OPEN: unknown-zone and zone-retired (the zone retired between the request and this
       # step) have no escalation event; weft.cluster would add `ClusterNodePoolRefused`.
-      drop: [unknown-zone, zone-retired, negative-size, min-above-max, already-requested]
-      retry: {except: [unknown-zone, zone-retired, negative-size, min-above-max, already-requested]}
+      # OPEN: the vendored CreateNodePool has no `already-requested` (cloudspec C2), so a second
+      # delivery of one event makes a second pool of the same name; RecordClusterNodePoolReady
+      # records one, and nothing drains the other yet.
+      drop: [unknown-zone, zone-retired, negative-size, min-above-max]
+      retry: {except: [unknown-zone, zone-retired, negative-size, min-above-max]}
   - id: cluster-delete-node-pool
     summary: Delete the infrastructure node pool of a removed dedicated pool.
     when:
@@ -2214,7 +2319,7 @@ bindings:
   - id: edge-drop-held-on-route-removed
     summary: Answer the requests held on a removed route by name.
     when:
-      event: weft.formations.RouteRemoved
+      event: weft.edge.RouteRemoved
     invoke:
       command: weft.edge.DropRouteHeldRequests
     mapping:
@@ -2227,7 +2332,7 @@ bindings:
   - id: edge-request-certificate
     summary: Ask for the certificate of a public endpoint once it is added.
     when:
-      event: weft.formations.EndpointAdded
+      event: weft.edge.EndpointAdded
     invoke:
       command: weft.edge.RequestCertificate
     mapping:
@@ -2238,12 +2343,12 @@ bindings:
     on_failure:
       # already-requested: harmless; a repeated delivery. no-such-endpoint: harmless; the
       # endpoint was removed before the edge asked, and nothing is served for it.
-      drop: [already-requested, no-such-endpoint]
-      retry: {except: [already-requested, no-such-endpoint]}
+      drop: [no-such-endpoint]
+      retry: {except: [no-such-endpoint]}
   - id: edge-retire-certificates
     summary: Retire the certificate of a removed public endpoint.
     when:
-      event: weft.formations.EndpointRemoved
+      event: weft.edge.EndpointRemoved
     invoke:
       command: weft.edge.RetireEndpointCertificates
     mapping:

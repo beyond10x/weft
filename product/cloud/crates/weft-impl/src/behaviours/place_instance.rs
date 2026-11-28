@@ -6,7 +6,13 @@
 //! 2. the rows the input names, in declaration order: `no-such-request`, `no-such-node`,
 //!    `no-such-cluster`;
 //! 3. the present-related refusals and the row-set guards, in declaration order: `not-pending`,
-//!    `already-reserved`, `other-tenant`, `other-account`, `other-cluster`,
+//!    `already-reserved`, `other-account` (the request's scope is not the input's),
+//!    `other-tenant` (no account of the input's tenant holds the input's scope),
+//!    `instance-of-other-scope` (the request's instance is missing or of another scope; answers
+//!    `NotFound`), `other-formation`, `instance-of-other-formation` (the workload of the
+//!    request's instance is missing or of another formation; answers `NotFound`),
+//!    `other-cluster` (the cluster's `formations` do not list the formation:
+//!    a formation is placed only in the cluster `weft.cluster.PinFormation` pinned it to),
 //!    `binding-of-other-account`, `binding-on-other-node`, `below-microvm`, `below-user-kernel`,
 //!    `below-container`, `below-cluster-microvm`, `below-cluster-user-kernel`,
 //!    `below-cluster-container`, `outside-cluster-zones`, `outside-zones`, `shared-kernel`,
@@ -21,24 +27,24 @@
 //!      `holds` names) and minus the claims of the node's live bindings (`Reserved`,
 //!      `Active`) that neither one of those decisions nor this placement's input names, so no
 //!      claim is taken twice; a node with no observed capacity has none;
-//!    - `quota-exceeded`: the request's claims against what its account holds besides the
-//!      request's own instance, which `CreateInstance` already counted
-//!      ([`crate::quota::exceeded_besides`]);
+//!    - `quota-exceeded`: the request's claims against what its scope holds besides the
+//!      request's own instance ([`crate::quota::exceeded_besides`]); a `Pending` instance holds
+//!      quota only while a decision of it holds a node ([`crate::quota::holds_quota`]);
 //!    - `device-not-wiped`: a `Wiping` device of the node that a binding of the placement, on
 //!      that node, names;
 //! 5. `placed`, the branch the contract takes otherwise: a `Reserved` decision with the
-//!    request's instance, account, minimum isolation, formation, gang and priority, and
+//!    request's instance, scope, minimum isolation, formation, gang and priority, and
 //!    `InstancePlaced`.
 
 use std::collections::HashMap;
 
 use weft_types::behaviour::{
-    BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage, DeviceStorage,
-    NodeSessionStorage, NodeStorage, PlacementDecisionStorage, SchedulingRequestStorage,
-    TopologyGroupStorage, TopologyLinkStorage,
+    AccountStorage, BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage,
+    DeviceStorage, InstanceStorage, NodeSessionStorage, NodeStorage, PlacementDecisionStorage,
+    SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage, WorkloadStorage,
 };
 use weft_types::claims::BindingState;
-use weft_types::cluster::{ClusterNodePoolState, TopologyGroupState, TopologyLinkState};
+use weft_types::cluster::ClusterNodePoolState;
 use weft_types::infrastructure::NodeState;
 use weft_types::inventory::DeviceState;
 use weft_types::nodes::NodeSessionState;
@@ -54,6 +60,7 @@ use weft_types::scheduling::{
     ZoneMismatch,
 };
 use weft_types::shared::{BindingId, IsolationLevel, PlacementDecisionId};
+use weft_types::topology::{TopologyGroupState, TopologyLinkState};
 
 use crate::context::{instant, mint};
 use crate::{quota, Ports};
@@ -109,17 +116,43 @@ impl PlaceInstanceBehavior for Ports {
                 error: RequestReserved,
             });
         }
-        if request.data.tenant_id != input.tenant_id {
-            return Ok(PlaceInstanceOutcome::OtherTenant {
-                error: RequestMismatch,
-            });
-        }
-        if request.data.account_id != input.account_id {
+        if request.data.scope_id != input.scope_id {
             return Ok(PlaceInstanceOutcome::OtherAccount {
                 error: RequestMismatch,
             });
         }
-        if request.data.cluster_id != input.cluster_id {
+        // Deny by default: a scope that no account of the input's tenant holds is another
+        // tenant's.
+        if !AccountStorage::list(self).iter().any(|account| {
+            account.data.scope_id.as_ref() == Some(&input.scope_id)
+                && account.data.tenant_id == input.tenant_id
+        }) {
+            return Ok(PlaceInstanceOutcome::OtherTenant {
+                error: RequestMismatch,
+            });
+        }
+        // Deny by default: a request whose instance row is missing, or is another scope's, is
+        // answered as a missing request.
+        let instance = InstanceStorage::get(self, &request.data.instance_id)
+            .filter(|instance| instance.data.scope_id == input.scope_id);
+        let Some(instance) = instance else {
+            return Ok(PlaceInstanceOutcome::InstanceOfOtherScope { error: NotFound });
+        };
+        if request.data.formation_id != input.formation_id {
+            return Ok(PlaceInstanceOutcome::OtherFormation {
+                error: RequestMismatch,
+            });
+        }
+        // Deny by default: an instance whose workload row is missing, or is of another
+        // formation, is answered as a missing request.
+        if WorkloadStorage::get(self, &instance.data.workload_id)
+            .is_none_or(|workload| workload.data.formation_id != input.formation_id)
+        {
+            return Ok(PlaceInstanceOutcome::InstanceOfOtherFormation { error: NotFound });
+        }
+        // Deny by default: a formation the cluster does not list (one not pinned to it, by
+        // `weft.cluster.PinFormation`) is another cluster's.
+        if !cluster.data.formations.contains(&input.formation_id) {
             return Ok(PlaceInstanceOutcome::OtherCluster {
                 error: RequestMismatch,
             });
@@ -133,7 +166,7 @@ impl PlaceInstanceBehavior for Ports {
         if placed.iter().any(|binding| {
             !claims.iter().any(|claim| {
                 claim.data.claim_id == binding.data.claim_id
-                    && claim.data.account_id == input.account_id
+                    && claim.data.scope_id == input.scope_id
             })
         }) {
             return Ok(PlaceInstanceOutcome::BindingOfOtherAccount {
@@ -286,9 +319,8 @@ impl PlaceInstanceBehavior for Ports {
             if TopologyGroupStorage::list(self).iter().any(|row| {
                 &row.data.topology_group_id == group
                     && (row.state != TopologyGroupState::Active
-                        || row.data.cluster_id != input.cluster_id
                         || input
-                            .cluster_node_pool_id
+                            .node_pool_id
                             .as_ref()
                             .is_none_or(|pool| !row.data.node_pools.contains(pool)))
             }) {
@@ -368,7 +400,7 @@ impl PlaceInstanceBehavior for Ports {
         }
         if quota::exceeded_besides(
             self,
-            &request.data.account_id,
+            &request.data.scope_id,
             &request.data.claims,
             &request.data.instance_id,
         ) {
@@ -404,7 +436,7 @@ impl PlaceInstanceBehavior for Ports {
                     request_id: input.request_id.clone(),
                     instance_id: data.instance_id,
                     tenant_id: input.tenant_id,
-                    account_id: data.account_id,
+                    scope_id: data.scope_id,
                     node_id: input.node_id.clone(),
                     zone: input.zone,
                     formation_id: data.formation_id,

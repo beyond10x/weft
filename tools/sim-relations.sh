@@ -17,7 +17,7 @@ cd "$root"
 spec="${1:-ess}"
 sim="${CLOUDSPEC_SIM:-target/cloudspec-sim/bin/cloudspec-sim}"
 base=sim/experiments/full-setup.yaml
-acme=tenant_a,account_a,sub_a,quota_a,sub_quota_a,cluster_a,topology_a,formation_shop,formation_etl,rev_shop,rev_etl,env_shop,env_etl
+acme=tenant_a,account_a,sub_a,scope_a,sub_scope_a,quota_a,sub_quota_a,cluster_a,topology_a,formation_shop,formation_etl,rev_shop,rev_etl,env_shop,env_etl
 [ -x "$sim" ] || { echo "sim-relations: install cloudspec-sim first (task sim-install)" >&2; exit 2; }
 status=0
 run() {

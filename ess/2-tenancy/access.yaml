@@ -69,9 +69,11 @@ types:
 entities:
   # Lines 141-145: what access needs beside a cluster's AccessMode: for `federated`, its external
   # identity provider; for `single-user`, its implicit admin.
-  # Decided (integration 2026-11-26): the access mode is weft.infrastructure.Cloud's `access_mode`, set
-  # when the cluster is created and never changed; this row stores no copy of it and reads it
-  # through the `cluster` relation. The settings here are configured once, like the mode.
+  # Decided (integration 2026-11-26): the access mode is set once and never changed; this row
+  # stores no copy of it and reads it through the `cloud_runtime` relation. The settings here are
+  # configured once, like the mode. Since cloudspec's blocks were vendored (C3) the mode is on
+  # weft's weft.infrastructure.CloudRuntime, set by ConfigureCloud after CreateCloud, not on the
+  # Cloud (story cloud-blocks-runtime-fields, 2026-11-28).
   - name: weft.access.CloudAccess
     naming:
       summary: The identity provider or implicit admin of one cluster, by its access mode.
@@ -94,9 +96,10 @@ entities:
         type: Optional<weft.shared.PrincipalId>
     relations:
       # A cluster outlives its access settings' link; no command of this domain deletes a cluster.
-      - name: cluster
+      # The row it names holds the access mode; access is configured after the mode is set.
+      - name: cloud_runtime
         kind: references
-        target: weft.infrastructure.Cloud
+        target: weft.infrastructure.CloudRuntime
         cardinality: one
         via: cloud_id
       - name: implicit_admin
@@ -198,8 +201,8 @@ entities:
       name: api_token_id
       type: weft.shared.ApiTokenId
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: role
         type: weft.shared.Role
       # A label for people; not a credential.
@@ -216,9 +219,9 @@ entities:
     relations:
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: creator
         kind: references
         target: weft.accounts.Principal
@@ -269,8 +272,8 @@ entities:
       - name: command
         type: String
       # Absent for a call on the cluster itself (node pools, price lists: ClusterOperator).
-      - name: account_id
-        type: Optional<weft.shared.AccountId>
+      - name: scope_id
+        type: Optional<weft.shared.ScopeId>
       # The role that allowed the call; absent when refused.
       - name: role
         type: Optional<weft.shared.Role>
@@ -303,9 +306,9 @@ entities:
         via: principal_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
     lifecycle:
       initial: Recorded
       states: [Recorded]
@@ -368,8 +371,8 @@ entities:
     fields:
       - name: trusted_issuer_id
         type: weft.shared.TrustedIssuerId
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: role
         type: weft.shared.Role
       # Exactly as the forge names it; no wildcard (CreateFederationRule, wildcard-repository).
@@ -389,7 +392,7 @@ entities:
       # be true when this is set.
       - name: require_protected_ref
         type: Boolean
-      # UNMAPPED: "a rule for a production environment": weft.formations.Environment has no
+      # UNMAPPED: "a rule for a production environment": weft.architecture.Environment has no
       # production marker, and this layer may not name it. Taken: the rule's creator declares it,
       # and a production rule must require a protected ref.
       - name: production
@@ -416,9 +419,9 @@ entities:
         via: trusted_issuer_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: creator
         kind: references
         target: weft.accounts.Principal
@@ -461,8 +464,8 @@ entities:
         type: weft.shared.TrustedIssuerId
       - name: federation_rule_id
         type: weft.shared.FederationRuleId
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: role
         type: weft.shared.Role
       # The token's claims, as matched.
@@ -510,9 +513,9 @@ entities:
         via: federation_rule_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
     lifecycle:
       initial: Recorded
       states: [Recorded]
@@ -645,7 +648,7 @@ events:
   - name: weft.access.ApiTokenCreated
     fields:
       - {name: api_token_id, type: weft.shared.ApiTokenId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: created_by, type: weft.shared.PrincipalId}
       - {name: expires_at, type: Timestamp}
@@ -661,7 +664,7 @@ events:
   # One per RevokeAccountApiTokens; each token it revoked also gets its own ApiTokenRevoked.
   - name: weft.access.AccountApiTokensRevoked
     fields:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: revoked, type: Integer}
 
   - name: weft.access.CallAuthorized
@@ -684,7 +687,7 @@ events:
     fields:
       - {name: federation_rule_id, type: weft.shared.FederationRuleId}
       - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: repository, type: String}
       - {name: created_by, type: weft.shared.PrincipalId}
@@ -698,15 +701,16 @@ events:
     fields:
       - {name: federated_exchange_id, type: weft.shared.FederatedExchangeId}
       - {name: federation_rule_id, type: weft.shared.FederationRuleId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: repository, type: String}
       - {name: run_id, type: String}
 
 commands:
   # Lines 141-145, line 406. A ClusterOperator sets, once, what the cluster's access mode needs.
-  # The mode itself is weft.infrastructure.Cloud's `access_mode`, fixed when the cluster was created;
-  # that `single-user` needs the `local` placement is weft.cluster's guard at creation.
+  # The mode itself is weft.infrastructure.CloudRuntime's `access_mode`, set once by
+  # weft.infrastructure.ConfigureCloud; that `single-user` needs the `local` placement is
+  # ConfigureCloud's guard. A cloud with no CloudRuntime row is `no-such-cluster` here.
   - name: weft.access.ConfigureAccess
     naming:
       display: Configure a cluster's access settings
@@ -719,8 +723,9 @@ commands:
       - name: no-such-cluster
         when_related: {via: input.cloud_id, exists: false}
         error: weft.access.NotFound
-      # The mode is read from the weft.infrastructure.Cloud row the input names (`via:` resolves the
-      # CloudId to that entity here, since this command creates the ClusterAccess row). Until
+      # The mode is read from the weft.infrastructure.CloudRuntime row the input names (`via:`
+      # resolves the CloudId through CloudAccess's `cloud_runtime` relation, since this command
+      # creates the CloudAccess row; it read weft.infrastructure.Cloud until 2026-11-28). Until
       # 2026-11-26 these read Cluster by `entity:`/`where: cloud_id == input.cloud_id`, which
       # synthesis cannot arrange (CreateCluster mints the id), so no branch had a scenario.
       - name: provider-missing
@@ -785,7 +790,7 @@ commands:
           exists: false
         error: weft.access.AccessNotConfigured
       # Line 143: `single-user` has no login. The ClusterAccess row tells the mode: ConfigureAccess
-      # stores an implicit admin exactly when weft.infrastructure.Cloud's `access_mode` is SingleUser
+      # stores an implicit admin exactly when weft.infrastructure.CloudRuntime's `access_mode` is SingleUser
       # (admin-missing, admin-in-federated), and the mode and the row never change. A guard
       # reading Cluster by `entity:`/`where:` had no scenario (its identity is minted by
       # CreateCluster), and `when_related` cannot read through the `cluster` relation.
@@ -1023,7 +1028,7 @@ commands:
     naming:
       display: Create an API token
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: name, type: String}
       - {name: expires_at, type: Timestamp}
@@ -1046,12 +1051,12 @@ commands:
       # account answers as a missing one, so its existence is not disclosed. Declared before
       # account-unavailable: ESS answers an input guard before an external.
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.access.AccountUnavailable
       # The account tree and its state are weft.accounts' (lines 123-126).
       # OPEN: the fact is in weft, so the target is two stored guards in place of this external:
-      # `when_related: {via: input.account_id, exists: false}` and
-      # `{via: input.account_id, predicate: state == Closed}`, both AccountUnavailable. Kept
+      # `when_related: {via: input.scope_id, exists: false}` and
+      # `{via: input.scope_id, predicate: state == Closed}`, both AccountUnavailable. Kept
       # external (2026-11-26) because with them synthesis must arrange a weft.accounts.Account and
       # cannot yet (weft.accounts.CreateAccount reads its Tenant by `entity:`/`where:` over the
       # minted tenant_id), which cost every CreateApiToken scenario. Switch once it can.
@@ -1071,7 +1076,7 @@ commands:
         returns: true
         one_time_response: [secret]
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           role: input.role
           name: input.name
           created_by: {caller: principal_id}
@@ -1081,7 +1086,7 @@ commands:
         payload:
           weft.access.ApiTokenCreated:
             api_token_id: {response: api_token_id}
-            account_id: input.account_id
+            scope_id: input.scope_id
             role: input.role
             created_by: {caller: principal_id}
             expires_at: input.expires_at
@@ -1126,7 +1131,7 @@ commands:
       # hardening pass 1 D3: only a token of the account the request acts in is revoked; another
       # account's token answers as a missing one, before its state is disclosed.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.access.NotFound
       - name: revoked
         moves: weft.access.ApiToken.revoke
@@ -1141,7 +1146,7 @@ commands:
 
   # Sketch § 14 line 590, R6: "account closed -> its ... tokens expired". Line 146: a token is
   # scoped to one account. Every active API token of a closed account is ended at once, invoked by
-  # one binding on weft.accounts.AccountClosed (account_id). Many-rows form: `instances:` selects
+  # one binding on weft.accounts.AccountClosed (scope_id). Many-rows form: `instances:` selects
   # the rows. A repeated delivery finds no active token and revokes none.
   # OPEN: the sketch says "expired"; the tokens are moved by `revoke` instead. `expire` is the
   # time step (ExpireApiToken refuses NotYetExpired while expires_at lies ahead), and a token of
@@ -1154,27 +1159,27 @@ commands:
     naming:
       display: Revoke every API token of a closed account
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     outcomes:
       - name: no-such-account
-        when_related: {via: input.account_id, exists: false}
+        when_related: {via: input.scope_id, exists: false}
         error: weft.access.AccountNotClosed
       - name: account-open
-        when_related: {via: input.account_id, predicate: state != Closed}
+        when_related: {via: input.scope_id, predicate: state != Closed}
         error: weft.access.AccountNotClosed
       - name: revoked
         moves: weft.access.ApiToken.revoke
         instances:
           where:
             all:
-              - account_id == input.account_id
+              - scope_id == input.scope_id
               - state == Active
         emits:
           - weft.access.AccountApiTokensRevoked
           - {event: weft.access.ApiTokenRevoked, each: changed}
         payload:
           weft.access.AccountApiTokensRevoked:
-            account_id: input.account_id
+            scope_id: input.scope_id
             revoked: {count: changed}
           weft.access.ApiTokenRevoked:
             api_token_id: {changed: api_token_id}
@@ -1193,7 +1198,7 @@ commands:
       - {name: login_id, type: Optional<weft.shared.CliLoginId>}
       - {name: api_token_id, type: Optional<weft.shared.ApiTokenId>}
       - {name: command, type: String}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: role, type: Optional<weft.shared.Role>}
       - {name: verdict, type: weft.access.Verdict}
       - {name: reason, type: Optional<weft.access.RefusalReason>}
@@ -1226,13 +1231,13 @@ commands:
       # account (OutsideTokenAccount) or an unknown one, so only Allowed is tied.
       - name: token-of-other-account
         when:
-          all: [verdict == Allowed, defined(api_token_id), defined(account_id)]
+          all: [verdict == Allowed, defined(api_token_id), defined(scope_id)]
         when_related:
           entity: weft.access.ApiToken
           where:
             all:
               - api_token_id == input.api_token_id
-              - account_id != input.account_id
+              - scope_id != input.scope_id
           exists: true
         error: weft.access.CredentialMismatch
       # hardening pass 1 (finding access.yaml:1166): a known login is recorded only under its own
@@ -1260,7 +1265,7 @@ commands:
           login_id: input.login_id
           api_token_id: input.api_token_id
           command: input.command
-          account_id: input.account_id
+          scope_id: input.scope_id
           role: input.role
           verdict: input.verdict
           reason: input.reason
@@ -1393,7 +1398,7 @@ commands:
       display: Create a federation rule
     input:
       - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: repository, type: String}
       - {name: ref, type: String}
@@ -1437,7 +1442,7 @@ commands:
       # account answers as a missing one. Declared before the issuer and account checks: ESS
       # answers an input guard before a row read or an external.
       - name: not-callers-account
-        when: account_id != caller.account_id
+        when: scope_id != caller.scope_id
         error: weft.access.AccountUnavailable
       - name: no-such-issuer
         when_related: {via: input.trusted_issuer_id, exists: false}
@@ -1471,7 +1476,7 @@ commands:
         returns: true
         sets:
           trusted_issuer_id: input.trusted_issuer_id
-          account_id: input.account_id
+          scope_id: input.scope_id
           role: input.role
           repository: input.repository
           ref: input.ref
@@ -1489,7 +1494,7 @@ commands:
           weft.access.FederationRuleCreated:
             federation_rule_id: {response: federation_rule_id}
             trusted_issuer_id: input.trusted_issuer_id
-            account_id: input.account_id
+            scope_id: input.scope_id
             role: input.role
             repository: input.repository
             created_by: {caller: principal_id}
@@ -1507,7 +1512,7 @@ commands:
       # hardening pass 1 D3: only a rule of the account the request acts in is withdrawn; another
       # account's rule answers as a missing one, before its state is disclosed.
       - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.access.NotFound
       - name: withdrawn
         moves: weft.access.FederationRule.withdraw
@@ -1539,7 +1544,7 @@ commands:
     input:
       - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
       - {name: federation_rule_id, type: weft.shared.FederationRuleId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: issuer, type: String}
       - {name: audience, type: String}
@@ -1594,7 +1599,7 @@ commands:
           predicate:
             any:
               - trusted_issuer_id != input.trusted_issuer_id
-              - account_id != input.account_id
+              - scope_id != input.scope_id
               - role != input.role
               - repository != input.repository
         error: weft.access.NoMatchingRule
@@ -1638,7 +1643,7 @@ commands:
         sets:
           trusted_issuer_id: input.trusted_issuer_id
           federation_rule_id: input.federation_rule_id
-          account_id: input.account_id
+          scope_id: input.scope_id
           role: input.role
           subject: input.subject
           repository: input.repository
@@ -1659,7 +1664,7 @@ commands:
           weft.access.FederatedTokenExchanged:
             federated_exchange_id: {response: federated_exchange_id}
             federation_rule_id: input.federation_rule_id
-            account_id: input.account_id
+            scope_id: input.scope_id
             role: input.role
             repository: input.repository
             run_id: input.run_id
@@ -1668,7 +1673,7 @@ views:
   # Lines 141-145: the CLI reads a cluster's access mode to know whether `weft login` applies.
   # OPEN: may this be read without a credential (the CLI needs it before login)? Taken: yes; it
   # holds no secret. The implicit admin is left out of it. `mode` is read from
-  # weft.infrastructure.Cloud through the `cluster` relation; this row stores no copy.
+  # weft.infrastructure.CloudRuntime through the `cloud_runtime` relation; this row stores no copy.
   - name: weft.access.CloudAccessOf
     source: weft.access.CloudAccess
     consistency: read_your_writes
@@ -1702,11 +1707,11 @@ views:
     source: weft.access.ApiToken
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: api_token_id, type: weft.shared.ApiTokenId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: name, type: String}
       - {name: created_by, type: weft.shared.PrincipalId}
@@ -1719,12 +1724,12 @@ views:
     source: weft.access.AuthorizationDecision
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: from, type: Timestamp}
       - {name: to, type: Timestamp}
     filter:
       all:
-        - account_id == param.account_id
+        - scope_id == param.scope_id
         - decided_at >= param.from
         - decided_at < param.to
     fields: &audit-fields
@@ -1735,7 +1740,7 @@ views:
       - {name: login_id, type: Optional<weft.shared.CliLoginId>}
       - {name: api_token_id, type: Optional<weft.shared.ApiTokenId>}
       - {name: command, type: String}
-      - {name: account_id, type: Optional<weft.shared.AccountId>}
+      - {name: scope_id, type: Optional<weft.shared.ScopeId>}
       - {name: role, type: Optional<weft.shared.Role>}
       - {name: verdict, type: weft.access.Verdict}
       - {name: reason, type: Optional<weft.access.RefusalReason>}
@@ -1753,7 +1758,7 @@ views:
     filter:
       all:
         - cloud_id == param.cloud_id
-        - not defined(account_id)
+        - not defined(scope_id)
         - decided_at >= param.from
         - decided_at < param.to
     fields: *audit-fields
@@ -1780,12 +1785,12 @@ views:
     source: weft.access.FederationRule
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: federation_rule_id, type: weft.shared.FederationRuleId}
       - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: repository, type: String}
       - {name: ref, type: String}
@@ -1815,19 +1820,19 @@ views:
     source: weft.access.FederatedExchange
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: from, type: Timestamp}
       - {name: to, type: Timestamp}
     filter:
       all:
-        - account_id == param.account_id
+        - scope_id == param.scope_id
         - exchanged_at >= param.from
         - exchanged_at < param.to
     fields:
       - {name: federated_exchange_id, type: weft.shared.FederatedExchangeId}
       - {name: trusted_issuer_id, type: weft.shared.TrustedIssuerId}
       - {name: federation_rule_id, type: weft.shared.FederationRuleId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: role, type: weft.shared.Role}
       - {name: subject, type: String}
       - {name: repository, type: String}

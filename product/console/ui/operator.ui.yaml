@@ -141,6 +141,7 @@ pages:
     header:
       help: {text: "What weft-control still has to do: requests to place, nodes that went quiet, placements being preempted."}
       actions:
+        - {name: create_cloud, opens: create_cloud, label: New cloud}
         - {name: scale, opens: scale_control_plane, label: Scale control plane}
         - {name: policy, opens: cloud_policy, label: Cloud policy}
     layout:
@@ -149,6 +150,7 @@ pages:
           - [nodes, pools, tenants, pending]
           - [unschedulable, preempting, sessions_k, drains_k]
           - [clouds, clouds, clouds, clouds]
+          - [runtimes, runtimes, runtimes, runtimes]
           - [stuck, stuck, lost, lost]
           - [preemptions, preemptions, draining, draining]
         place:
@@ -161,6 +163,7 @@ pages:
           sessions_k: [node_sessions]
           drains_k: [scale_k]
           clouds: [clouds]
+          runtimes: [cloud_runtimes]
           stuck: [stuck]
           lost: [lost]
           preemptions: [preemptions]
@@ -182,18 +185,28 @@ pages:
         columns:
           - {field: name, label: Cloud}
           - {field: placement, as: badge, tone: info}
-          - {field: access_mode, label: Access}
-          - {field: control_plane, label: Control plane, as: map}
           - {field: policy, label: Policy, as: map}
           - {field: state, as: badge, tone_by: lifecycle}
-        states: {empty: {message: No cloud is created yet.}}
+        row_actions:
+          - {name: configure, opens: configure_cloud, label: Configure, visible: "row.state == Active"}
+        states: {empty: {message: No cloud is created yet., action: {name: create_cloud, opens: create_cloud, label: New cloud}}}
+      - name: cloud_runtimes
+        component: collection
+        title: Cloud access and control plane
+        reads: {view: weft.infrastructure.CloudRuntimes, key: cloud_id}
+        columns:
+          - {field: cloud_id, label: Cloud, label_from: {view: weft.infrastructure.Clouds, field: name, key: cloud_id}}
+          - {field: access_mode, label: Access}
+          - {field: control_plane, label: Control plane, as: map}
+          - {field: state, as: badge, tone_by: lifecycle}
+        states: {empty: {message: "No cloud is configured yet: configure a cloud after creating it."}}
       - name: stuck
         component: collection
         title: Unschedulable requests
         reads: {view: weft.scheduling.UnschedulableRequests, key: request_id}
         columns:
           - {field: instance_id, label: Instance}
-          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: scope_id, label: Scope, label_from: {view: weft.scope.Scopes, field: name, key: scope_id}}
           - {field: unschedulable_reason, label: Reason, as: badge, tone: danger}
           - {field: unschedulable_detail, label: Detail}
           - {field: requested_at, label: Requested, as: timestamp}
@@ -235,6 +248,26 @@ pages:
           - {name: open, navigate: {to: nodes.detail, params: {node_id: row.node_id}}, label: Open node}
         states: {empty: {message: No node is draining.}}
     overlays:
+      create_cloud:
+        kind: drawer
+        component: form
+        title: New cloud
+        does: weft.infrastructure.CreateCloud
+        fields:
+          - name
+          - {field: placement, as: choice, choice: {component: choice, options: weft.infrastructure.Placement}}
+          - {field: policy, label: Policy, as: json, help: {text: "The CloudPolicy record, for example {\"minimum_isolation\": \"Container\"}."}}
+        submit: {label: Create cloud}
+      configure_cloud:
+        kind: drawer
+        component: form
+        title: Configure a cloud
+        does: weft.infrastructure.ConfigureCloud
+        fields:
+          - {field: cloud_id, label: Cloud, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.Clouds}, value: cloud_id, label: name}}
+          - {field: access_mode, label: Access, as: choice, choice: {component: choice, options: weft.shared.AccessMode}, help: {text: "Who may use the cloud: one user, or the tenants of a federation."}}
+          - {field: control_plane, label: Control plane, as: json, help: {text: "The ControlPlaneSpec record, for example {\"replicas\": 3}."}}
+        submit: {label: Configure}
       scale_control_plane:
         kind: drawer
         component: form
@@ -618,7 +651,7 @@ pages:
       - name: filters
         component: filter_bar
         binds: [state.search]
-        search: {binds: state.search, placeholder: "Search instance, tenant or reason"}
+        search: {binds: state.search, placeholder: "Search instance, scope or reason"}
       - name: list
         component: collection
         reads: {view: weft.scheduling.SchedulingRequests, key: request_id, filter: row contains state.search}
@@ -626,7 +659,7 @@ pages:
         group_order: [Unschedulable, Pending, Placed, Withdrawn]
         columns:
           - {field: instance_id, label: Instance}
-          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: scope_id, label: Scope, label_from: {view: weft.scope.Scopes, field: name, key: scope_id}}
           - {field: priority}
           - {field: priority_value, label: Value, as: number}
           - {field: min_isolation, label: Isolation, as: badge, tone: info}
@@ -638,14 +671,14 @@ pages:
         expand:
           component: record
           reads: {view: weft.scheduling.SchedulingRequestDetail, params: {request_id: row.request_id}}
-          fields: [{field: unschedulable_detail, label: Why}, {field: gang_id, label: Gang}, {field: cluster_id, label: Cluster}, {field: formation_id, label: Formation}]
+          fields: [{field: unschedulable_detail, label: Why}, {field: gang_id, label: Gang}, {field: formation_id, label: Formation}]
       - name: gangs
         component: collection
         title: Gangs
         reads: {view: weft.scheduling.Gangs, key: gang_id}
         columns:
           - {field: gang_id, label: Gang}
-          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: job_id, label: Job}
           - {field: size, as: number}
           - {field: registered_at, label: Registered, as: timestamp}
           - {field: state, as: badge, tone_by: gang_state}
@@ -933,7 +966,7 @@ pages:
           - {field: document_ttl_seconds, label: Document TTL, as: duration, unit: s}
           - {field: state, as: badge, tone_by: lifecycle}
         row_actions:
-          - {name: rotate, does: weft.identity.RequestKeyRotation, bind: {trust_domain_id: row.trust_domain_id}, label: Rotate key, visible: "row.state == Active", confirm: {title: Rotate the signing key, confirm_label: Rotate}}
+          - {name: rotate, opens: rotate_key, label: Rotate key, visible: "row.state == Active"}
       - name: backends
         component: collection
         title: Secret backends
@@ -943,3 +976,12 @@ pages:
           - {field: kind, as: badge, tone: info}
           - {field: address}
           - {field: state, as: badge, tone_by: lifecycle}
+    overlays:
+      rotate_key:
+        kind: drawer
+        component: form
+        title: Rotate the signing key
+        does: weft.identity.RequestKeyRotation
+        fields:
+          - {field: new_signing_key_ref, label: New signing key, help: {text: The reference of the key that signs identity documents after the rotation.}}
+        submit: {label: Rotate}

@@ -26,11 +26,14 @@ naming:
 #
 # Caller attributes (hardening pass 1, D2 and D3; integrator, 2026-11-26). The tenant actors and
 # the control-plane actors that act for an account (ControlPlane, ReleaseController, Translator) declare `principal_id`, `tenant_id` and
-# `account_id`. `account_id` is the account the request acts in: weft-api sets it after it checks
+# `scope_id`. `scope_id` is the account the request acts in: weft-api sets it after it checks
 # that the principal holds a role on that account or on an ancestor (sketch line 140, "on an
 # account and below"); weft-control sets it to the account of the row it acts on. A guard compares
 # it with `==`/`!=` only (ESS caller values, `caller-values.md`). Commands that read none of them
 # are unchanged.
+# D-d A: `scope_id` is the cloudspec scope of that account; TenantOwner and AccountAdmin, which run
+# the account commands of weft.accounts, also declare `account_id`, the account itself, which
+# weft-api sets with `scope_id` from the same check.
 # OPEN: the owner may prefer the caller to carry the account tree; ESS compares a caller value only by
 # equality, so "the account the request acts in" is the form that can be checked.
 
@@ -46,6 +49,7 @@ actors:
       - weft.cluster.CreateDefaultCluster # integrator, 2026-11-26
       # cluster: every command except JoinNode and RecordNodeObservation.
       - weft.infrastructure.CreateCloud
+      - weft.infrastructure.ConfigureCloud
       - weft.infrastructure.SetCloudPolicy
       - weft.infrastructure.ScaleControlPlane
       - weft.infrastructure.DeclareZone
@@ -76,6 +80,9 @@ actors:
       - weft.accounts.RaiseTopQuota
       - weft.accounts.LowerTopQuota
       - weft.accounts.BindTenantOwner
+      # scope (cloudspec's blocks, D-d A): the operator runs scopes, as cloudspec's ClusterOperator.
+      - weft.scope.OpenScope
+      - weft.scope.CloseScope
       # access: Approve, Deny and Revoke of its own login only.
       - weft.access.ConfigureAccess
       - weft.access.ApproveLogin
@@ -102,9 +109,9 @@ actors:
       # catalog: engines, offerings, plans, publishers, products and versions.
       - weft.catalog.RegisterEngine
       - weft.catalog.RetireEngine
-      - weft.catalog.PublishOffering
-      - weft.catalog.RetireOffering
-      - weft.catalog.SwapOfferingEngine
+      - weft.services.PublishOffering
+      - weft.services.RetireOffering
+      - weft.services.SwapOfferingEngine
       - weft.catalog.AddOfferingPlan
       - weft.catalog.RetireOfferingPlan
       - weft.catalog.RegisterPublisher
@@ -113,7 +120,7 @@ actors:
       - weft.catalog.WithdrawProduct
       - weft.catalog.PublishProductVersion
       - weft.catalog.WithdrawProductVersion
-      - weft.catalog.MoveServiceInstanceEngine
+      - weft.services.MoveServiceInstanceEngine
       # metering
       - weft.metering.CreatePriceList
       - weft.metering.SetPrice
@@ -132,6 +139,7 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: account_id, type: weft.shared.AccountId}
     may:
       - weft.cluster.CreateCluster # integrator, 2026-11-26
@@ -139,12 +147,13 @@ actors:
       - weft.cluster.DeleteCluster # integrator, 2026-11-26
       - weft.cluster.AddClusterNodePool # integrator, 2026-11-26
       - weft.cluster.RemoveClusterNodePool # integrator, 2026-11-26
-      - weft.cluster.CreateClusterTopology # integrator, 2026-11-26
-      - weft.cluster.RemoveClusterTopology # integrator, 2026-11-26
-      - weft.cluster.AddTopologyGroup # integrator, 2026-11-26
-      - weft.cluster.RemoveTopologyGroup # integrator, 2026-11-26
-      - weft.cluster.DeclareTopologyLink # integrator, 2026-11-26
-      - weft.cluster.RemoveTopologyLink # integrator, 2026-11-26
+      - weft.cluster.PinFormation # D-e A, story cloud-blocks-cluster-pinning
+      - weft.topology.CreateTopology # integrator, 2026-11-26
+      - weft.topology.RemoveTopology # integrator, 2026-11-26
+      - weft.topology.AddTopologyGroup # integrator, 2026-11-26
+      - weft.topology.RemoveTopologyGroup # integrator, 2026-11-26
+      - weft.topology.DeclareTopologyLink # integrator, 2026-11-26
+      - weft.topology.RemoveTopologyLink # integrator, 2026-11-26
       - weft.access.RegisterTrustedIssuer # integrator, 2026-11-26
       - weft.access.WithdrawTrustedIssuer # integrator, 2026-11-26
       - weft.access.CreateFederationRule # integrator, 2026-11-26
@@ -193,8 +202,8 @@ actors:
       # artifacts (integrator default)
       - weft.artifacts.RevokeArtifact
       # formations
-      - weft.formations.SetFormationQuota
-      - weft.formations.SetEnvironmentQuota
+      - weft.architecture.SetFormationQuota
+      - weft.architecture.SetEnvironmentQuota
       - weft.formations.CreateExport
       - weft.formations.RevokeExport
       # identity
@@ -209,15 +218,15 @@ actors:
       - weft.secrets.DisableSecretVersion
       - weft.secrets.RevokeSecretGrant
       # metering
-      - weft.metering.SetDeadline
-      - weft.metering.ChangeDeadline
-      - weft.metering.RemoveDeadline
-      - weft.metering.SetConcurrency
-      - weft.metering.ChangeConcurrency
-      - weft.metering.RemoveConcurrency
-      - weft.metering.SetRate
-      - weft.metering.ChangeRate
-      - weft.metering.RemoveRate
+      - weft.limits.SetDeadline
+      - weft.limits.ChangeDeadline
+      - weft.limits.RemoveDeadline
+      - weft.limits.SetConcurrency
+      - weft.limits.ChangeConcurrency
+      - weft.limits.RemoveConcurrency
+      - weft.limits.SetRate
+      - weft.limits.ChangeRate
+      - weft.limits.RemoveRate
       - weft.metering.SetBudget
       - weft.metering.ChangeBudget
       - weft.metering.RemoveBudget
@@ -230,6 +239,7 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: account_id, type: weft.shared.AccountId}
     may:
       - weft.cluster.CreateCluster # integrator, 2026-11-26
@@ -237,13 +247,14 @@ actors:
       - weft.cluster.DeleteCluster # integrator, 2026-11-26
       - weft.cluster.AddClusterNodePool # integrator, 2026-11-26
       - weft.cluster.RemoveClusterNodePool # integrator, 2026-11-26
-      - weft.cluster.CreateClusterTopology # integrator, 2026-11-26
-      - weft.cluster.RemoveClusterTopology # integrator, 2026-11-26
-      - weft.cluster.AddTopologyGroup # integrator, 2026-11-26
-      - weft.cluster.RemoveTopologyGroup # integrator, 2026-11-26
-      - weft.cluster.DeclareTopologyLink # integrator, 2026-11-26
-      - weft.cluster.RemoveTopologyLink # integrator, 2026-11-26
-      - weft.formations.CreatePreviewEnvironment # integrator, 2026-11-26
+      - weft.cluster.PinFormation # D-e A, story cloud-blocks-cluster-pinning
+      - weft.topology.CreateTopology # integrator, 2026-11-26
+      - weft.topology.RemoveTopology # integrator, 2026-11-26
+      - weft.topology.AddTopologyGroup # integrator, 2026-11-26
+      - weft.topology.RemoveTopologyGroup # integrator, 2026-11-26
+      - weft.topology.DeclareTopologyLink # integrator, 2026-11-26
+      - weft.topology.RemoveTopologyLink # integrator, 2026-11-26
+      - weft.architecture.CreatePreviewEnvironment # integrator, 2026-11-26
       - weft.access.CreateFederationRule # integrator, 2026-11-26
       - weft.access.WithdrawFederationRule # integrator, 2026-11-26
       - weft.pipelines.ConnectForge # integrator, 2026-11-26
@@ -293,12 +304,12 @@ actors:
       # artifacts (integrator default)
       - weft.artifacts.RevokeArtifact
       # formations
-      - weft.formations.CreateFormation
-      - weft.formations.RetireFormation
-      - weft.formations.SetFormationQuota
-      - weft.formations.CreateEnvironment
-      - weft.formations.RetireEnvironment
-      - weft.formations.SetEnvironmentQuota
+      - weft.architecture.CreateFormation
+      - weft.architecture.RetireFormation
+      - weft.architecture.SetFormationQuota
+      - weft.architecture.CreateEnvironment
+      - weft.architecture.RetireEnvironment
+      - weft.architecture.SetEnvironmentQuota
       - weft.formations.CreateExport
       - weft.formations.RevokeExport
       # identity
@@ -309,28 +320,28 @@ actors:
       - weft.secrets.AddSecretVersion
       - weft.secrets.GrantSecret
       # catalog
-      - weft.catalog.ProvisionServiceInstance
-      - weft.catalog.ChangeServicePlan
-      - weft.catalog.SetServiceSleepPolicy
-      - weft.catalog.DeprovisionServiceInstance
-      - weft.catalog.BindService
-      - weft.catalog.UnbindService
-      - weft.catalog.BackupServiceInstance
-      - weft.catalog.RestoreServiceInstance
+      - weft.services.ProvisionServiceInstance
+      - weft.services.ChangeServicePlan
+      - weft.services.SetServiceSleepPolicy
+      - weft.services.DeprovisionServiceInstance
+      - weft.services.BindService
+      - weft.services.UnbindService
+      - weft.services.BackupServiceInstance
+      - weft.services.RestoreServiceInstance
       - weft.catalog.InstallProduct
       - weft.catalog.UpgradeInstallation
       - weft.catalog.UninstallProduct
       - weft.catalog.SetInstallationSleepPolicy
       # metering
-      - weft.metering.SetDeadline
-      - weft.metering.ChangeDeadline
-      - weft.metering.RemoveDeadline
-      - weft.metering.SetConcurrency
-      - weft.metering.ChangeConcurrency
-      - weft.metering.RemoveConcurrency
-      - weft.metering.SetRate
-      - weft.metering.ChangeRate
-      - weft.metering.RemoveRate
+      - weft.limits.SetDeadline
+      - weft.limits.ChangeDeadline
+      - weft.limits.RemoveDeadline
+      - weft.limits.SetConcurrency
+      - weft.limits.ChangeConcurrency
+      - weft.limits.RemoveConcurrency
+      - weft.limits.SetRate
+      - weft.limits.ChangeRate
+      - weft.limits.RemoveRate
       - weft.metering.SetBudget
       - weft.metering.ChangeBudget
       - weft.metering.RemoveBudget
@@ -343,9 +354,9 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
-      - weft.formations.CreatePreviewEnvironment # integrator, 2026-11-26
+      - weft.architecture.CreatePreviewEnvironment # integrator, 2026-11-26
       - weft.pipelines.CreateRunnerPool # integrator, 2026-11-26
       - weft.pipelines.RetireRunnerPool # integrator, 2026-11-26
       - weft.pipelines.CreateBuildCache # integrator, 2026-11-26
@@ -380,28 +391,28 @@ actors:
       # artifacts
       - weft.artifacts.RegisterArtifact
       # formations: CommitRevision and every add, remove and change of a revision's parts.
-      - weft.formations.CommitRevision
-      - weft.formations.AddComponent
-      - weft.formations.RemoveComponent
-      - weft.formations.AddLink
-      - weft.formations.RemoveLink
-      - weft.formations.AddToBorder
-      - weft.formations.RemoveFromBorder
-      - weft.formations.AddEndpoint
-      - weft.formations.RemoveEndpoint
-      - weft.formations.AddRoute
-      - weft.formations.RemoveRoute
-      - weft.formations.CreateConfig
-      - weft.formations.ChangeConfig
-      - weft.formations.RemoveConfig
-      - weft.formations.MountConfig
-      - weft.formations.UnmountConfig
-      - weft.formations.SetConfigOverride
-      - weft.formations.ChangeConfigOverride
-      - weft.formations.RemoveConfigOverride
-      - weft.formations.SetScale
-      - weft.formations.ChangeScale
-      - weft.formations.RemoveScale
+      - weft.architecture.CommitRevision
+      - weft.architecture.AddComponent
+      - weft.architecture.RemoveComponent
+      - weft.architecture.AddLink
+      - weft.architecture.RemoveLink
+      - weft.architecture.AddToBorder
+      - weft.architecture.RemoveFromBorder
+      - weft.edge.AddEndpoint
+      - weft.edge.RemoveEndpoint
+      - weft.edge.AddRoute
+      - weft.edge.RemoveRoute
+      - weft.architecture.CreateConfig
+      - weft.architecture.ChangeConfig
+      - weft.architecture.RemoveConfig
+      - weft.architecture.MountConfig
+      - weft.architecture.UnmountConfig
+      - weft.architecture.SetConfigOverride
+      - weft.architecture.ChangeConfigOverride
+      - weft.architecture.RemoveConfigOverride
+      - weft.architecture.SetScale
+      - weft.architecture.ChangeScale
+      - weft.architecture.RemoveScale
       # workloads: every user command. Invoke, SubmitJob and CancelJob are counted as user
       # commands (CLI `weft invoke`, workloads.yaml); the draft's list names no invocation or job.
       - weft.workloads.DefineWorkload
@@ -466,22 +477,22 @@ actors:
       - weft.deployments.DiscardPlan
       - weft.deployments.ApplyPlan
       # catalog
-      - weft.catalog.ProvisionServiceInstance
-      - weft.catalog.ChangeServicePlan
-      - weft.catalog.SetServiceSleepPolicy
-      - weft.catalog.DeprovisionServiceInstance
-      - weft.catalog.BindService
-      - weft.catalog.UnbindService
-      - weft.catalog.BackupServiceInstance
-      - weft.catalog.RestoreServiceInstance
+      - weft.services.ProvisionServiceInstance
+      - weft.services.ChangeServicePlan
+      - weft.services.SetServiceSleepPolicy
+      - weft.services.DeprovisionServiceInstance
+      - weft.services.BindService
+      - weft.services.UnbindService
+      - weft.services.BackupServiceInstance
+      - weft.services.RestoreServiceInstance
       - weft.catalog.InstallProduct
       - weft.catalog.UpgradeInstallation
       - weft.catalog.UninstallProduct
       - weft.catalog.SetInstallationSleepPolicy
       # metering
-      - weft.metering.SetDeadline
-      - weft.metering.SetConcurrency
-      - weft.metering.SetRate
+      - weft.limits.SetDeadline
+      - weft.limits.SetConcurrency
+      - weft.limits.SetRate
 
   # Sketch line 112: reads state, logs and usage (role `viewer`). Views: see the OPEN at the top.
   - name: weft.actors.Viewer
@@ -491,7 +502,7 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
       # access: Approve, Deny and Revoke of its own login only.
       - weft.access.ApproveLogin
@@ -513,7 +524,7 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
       # access: Approve, Deny and Revoke of its own login only. No API token: the draft's
       # CreateApiToken line names TenantOwner, AccountAdmin, Deployer and Viewer.
@@ -531,9 +542,9 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
-      - weft.formations.CreatePreviewEnvironment # integrator, 2026-11-26
+      - weft.architecture.CreatePreviewEnvironment # integrator, 2026-11-26
       - weft.pipelines.CreateRunnerPool # integrator, 2026-11-26
       - weft.pipelines.RetireRunnerPool # integrator, 2026-11-26
       - weft.pipelines.CreateBuildCache # integrator, 2026-11-26
@@ -561,28 +572,28 @@ actors:
       # artifacts
       - weft.artifacts.RegisterArtifact
       # formations: as Deployer.
-      - weft.formations.CommitRevision
-      - weft.formations.AddComponent
-      - weft.formations.RemoveComponent
-      - weft.formations.AddLink
-      - weft.formations.RemoveLink
-      - weft.formations.AddToBorder
-      - weft.formations.RemoveFromBorder
-      - weft.formations.AddEndpoint
-      - weft.formations.RemoveEndpoint
-      - weft.formations.AddRoute
-      - weft.formations.RemoveRoute
-      - weft.formations.CreateConfig
-      - weft.formations.ChangeConfig
-      - weft.formations.RemoveConfig
-      - weft.formations.MountConfig
-      - weft.formations.UnmountConfig
-      - weft.formations.SetConfigOverride
-      - weft.formations.ChangeConfigOverride
-      - weft.formations.RemoveConfigOverride
-      - weft.formations.SetScale
-      - weft.formations.ChangeScale
-      - weft.formations.RemoveScale
+      - weft.architecture.CommitRevision
+      - weft.architecture.AddComponent
+      - weft.architecture.RemoveComponent
+      - weft.architecture.AddLink
+      - weft.architecture.RemoveLink
+      - weft.architecture.AddToBorder
+      - weft.architecture.RemoveFromBorder
+      - weft.edge.AddEndpoint
+      - weft.edge.RemoveEndpoint
+      - weft.edge.AddRoute
+      - weft.edge.RemoveRoute
+      - weft.architecture.CreateConfig
+      - weft.architecture.ChangeConfig
+      - weft.architecture.RemoveConfig
+      - weft.architecture.MountConfig
+      - weft.architecture.UnmountConfig
+      - weft.architecture.SetConfigOverride
+      - weft.architecture.ChangeConfigOverride
+      - weft.architecture.RemoveConfigOverride
+      - weft.architecture.SetScale
+      - weft.architecture.ChangeScale
+      - weft.architecture.RemoveScale
       # workloads: as Deployer, without OpenExec and AttachSession.
       - weft.workloads.DefineWorkload
       - weft.workloads.RetireWorkload
@@ -644,22 +655,22 @@ actors:
       - weft.deployments.DiscardPlan
       - weft.deployments.ApplyPlan
       # catalog
-      - weft.catalog.ProvisionServiceInstance
-      - weft.catalog.ChangeServicePlan
-      - weft.catalog.SetServiceSleepPolicy
-      - weft.catalog.DeprovisionServiceInstance
-      - weft.catalog.BindService
-      - weft.catalog.UnbindService
-      - weft.catalog.BackupServiceInstance
-      - weft.catalog.RestoreServiceInstance
+      - weft.services.ProvisionServiceInstance
+      - weft.services.ChangeServicePlan
+      - weft.services.SetServiceSleepPolicy
+      - weft.services.DeprovisionServiceInstance
+      - weft.services.BindService
+      - weft.services.UnbindService
+      - weft.services.BackupServiceInstance
+      - weft.services.RestoreServiceInstance
       - weft.catalog.InstallProduct
       - weft.catalog.UpgradeInstallation
       - weft.catalog.UninstallProduct
       - weft.catalog.SetInstallationSleepPolicy
       # metering
-      - weft.metering.SetDeadline
-      - weft.metering.SetConcurrency
-      - weft.metering.SetRate
+      - weft.limits.SetDeadline
+      - weft.limits.SetConcurrency
+      - weft.limits.SetRate
 
   # Sketch line 121: a CLI before login; starts and collects a device login only.
   - name: weft.actors.Anonymous
@@ -840,9 +851,9 @@ actors:
       - weft.nodes.Drain
       - weft.nodes.CompleteDrain
       # metering
-      - weft.metering.AdmitWork
-      - weft.metering.AcquireConcurrency
-      - weft.metering.ReleaseConcurrency
+      - weft.limits.AdmitWork
+      - weft.limits.AcquireConcurrency
+      - weft.limits.ReleaseConcurrency
 
   # Sketch line 119: writes translations of deployment sources, their coverage entries and the
   # translated formation rows.
@@ -853,18 +864,18 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
       # formations
-      - weft.formations.CommitRevision
-      - weft.formations.AddComponent
-      - weft.formations.AddLink
-      - weft.formations.AddToBorder
-      - weft.formations.AddEndpoint
-      - weft.formations.AddRoute
-      - weft.formations.CreateConfig
-      - weft.formations.MountConfig
-      - weft.formations.SetConfigOverride
+      - weft.architecture.CommitRevision
+      - weft.architecture.AddComponent
+      - weft.architecture.AddLink
+      - weft.architecture.AddToBorder
+      - weft.edge.AddEndpoint
+      - weft.edge.AddRoute
+      - weft.architecture.CreateConfig
+      - weft.architecture.MountConfig
+      - weft.architecture.SetConfigOverride
       # deployments
       - weft.deployments.RecordCoverageEntry
       - weft.deployments.CompleteTranslation
@@ -881,7 +892,7 @@ actors:
       - weft.workloads.Invoke
       - weft.workloads.WakeService # source `link_request` only
       - weft.identity.ExchangeToken
-      - weft.catalog.CheckServiceAccess
+      - weft.services.CheckServiceAccess
       # node (sketch line 100, design:components): its own node's local endpoint, for its identity
       # document and its secrets; own instance only (`not-from-instance`, `other-instance`).
       - weft.node.OpenLocalEndpointSession
@@ -930,7 +941,7 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
       - weft.pipelines.OpenGateCheck # integrator, 2026-11-26
       - weft.deployments.ReapplyDrift # integrator, 2026-11-26
@@ -970,10 +981,10 @@ actors:
     attributes:
       - {name: principal_id, type: weft.shared.PrincipalId}
       - {name: tenant_id, type: weft.shared.TenantId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     may:
       - weft.cluster.RecordClusterNodePoolReady # integrator, 2026-11-26
-      - weft.formations.ExpirePreviewEnvironment # integrator, 2026-11-26
+      - weft.architecture.ExpirePreviewEnvironment # integrator, 2026-11-26
       - weft.artifacts.RecordAttestation # integrator, 2026-11-26
       - weft.pipelines.QueueRunnerJob # integrator, 2026-11-26
       - weft.pipelines.TimeOutRunnerJob # integrator, 2026-11-26
@@ -1008,15 +1019,20 @@ actors:
       - weft.access.RevokeAccountApiTokens
       - weft.formations.RevokeAccountExports
       - weft.workloads.StopAccountInstances
-      - weft.workloads.RetireAccountServices
-      - weft.observability.DeleteAccountAlertRules
-      - weft.observability.RemoveAccountTelemetryPolicies
-      - weft.observability.RemoveAccountTelemetrySinks
-      - weft.observability.RemoveAccountNotificationTargets
+      - weft.workloads.RetireScopeServices
+      - weft.observability.DeleteScopeAlertRules
+      - weft.observability.RemoveScopeTelemetryPolicies
+      - weft.observability.RemoveScopeTelemetrySinks
+      - weft.observability.RemoveScopeNotificationTargets
       - weft.observability.ResolveDeletedRuleAlerts
       - weft.observability.CloseInstanceLogStreams
       - weft.observability.RetireInstanceMetricSeries
       - weft.claims.ReleaseClaimBindings
+      # D-d A: the binding account-opens-scope opens a created account's scope, and the control
+      # plane records the id OpenScope answered on the account.
+      - weft.scope.OpenScope
+      - weft.accounts.RecordAccountScope
+      - weft.scope.CloseScope
       # The gap views of its time steps: R3 (silent sessions, expired leases) and log retention.
       # Read-granted once named here. Bindings pass, 2026-11-26.
       - weft.nodes.SilentNodeSessions
@@ -1063,13 +1079,13 @@ actors:
       # decision") give it to ControlPlane. Taken: ControlPlane only (deny by default).
       - weft.secrets.DeliverSecret
       # catalog: every Report*.
-      - weft.catalog.ReportServiceInstanceReady
-      - weft.catalog.ReportServiceInstanceDegraded
-      - weft.catalog.ReportServiceInstanceGone
-      - weft.catalog.ReportBackupCompleted
-      - weft.catalog.ReportBackupFailed
-      - weft.catalog.ReportRestoreCompleted
-      - weft.catalog.ReportRestoreFailed
+      - weft.services.ReportServiceInstanceReady
+      - weft.services.ReportServiceInstanceDegraded
+      - weft.services.ReportServiceInstanceGone
+      - weft.services.ReportBackupCompleted
+      - weft.services.ReportBackupFailed
+      - weft.services.ReportRestoreCompleted
+      - weft.services.ReportRestoreFailed
       - weft.catalog.ReportInstallationInstalled
       - weft.catalog.ReportInstallationUninstalled
       - weft.catalog.ReportInstallationFailed

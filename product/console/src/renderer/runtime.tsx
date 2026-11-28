@@ -178,8 +178,8 @@ export function useRead(r: Reads | undefined, scope: Scope): ReadState {
 /**
  * The params of a `label_from` read. ess-ui/1 reads a `label_from` view without params (gap 7 of
  * the pull request: it cannot pass them); this renderer's convention binds each param the model
- * gives the view by name, from the signed-in actor first (AlertRules(account_id) reads the actor's
- * account), then from the page params. `undefined` when a param has no value: the map is not read.
+ * gives the view by name, from the signed-in actor first (AlertRules(scope_id) reads the actor's
+ * scope), then from the page params. `undefined` when a param has no value: the map is not read.
  */
 export function labelFromParams(model: ModelMeta, view: string, actor: Obj | undefined, params: Record<string, Json> | undefined): Record<string, Json> | undefined {
   const out: Record<string, Json> = {};

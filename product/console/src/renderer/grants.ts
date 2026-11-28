@@ -45,9 +45,9 @@ export function actionAllowed(doc: Doc, page: Page | undefined, a: Action, g: Gr
   return true;
 }
 
-/** The inputs a caller owns: account_id, tenant_id, and every attribute of the model actors it holds. */
+/** The inputs a caller owns: account_id, scope_id, tenant_id, and every attribute of the model actors it holds. */
 export function callerOwned(model: ModelMeta, actor: Json): Set<string> {
-  const out = new Set(['account_id', 'tenant_id']);
+  const out = new Set(['account_id', 'scope_id', 'tenant_id']);
   const held = grantsOf(model, actor).actors;
   for (const name of held) for (const at of model.actors[name]?.attributes ?? []) out.add(at);
   return out;

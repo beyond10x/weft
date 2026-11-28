@@ -106,12 +106,24 @@ entities:
         summary: The account this one is nested in; absent for an account directly in its tenant.
       - name: name
         type: weft.accounts.Name
+      # D-d A: the cloudspec scope the account maps to, one scope per account. The binding
+      # account-opens-scope opens it on AccountCreated; OpenScope mints the scope's id in its
+      # response, which a binding does not carry back, so RecordAccountScope records it on the
+      # account and refuses a scope another account holds.
+      - name: scope_id
+        type: Optional<weft.shared.ScopeId>
+        summary: The scope the account maps to; absent until RecordAccountScope records it.
     relations:
       - name: parent
         kind: references
         target: weft.accounts.Account
         cardinality: one
         via: parent_account_id
+      - name: scope
+        kind: references
+        target: weft.scope.Scope
+        cardinality: one
+        via: scope_id
     # OPEN: the sketch gives an account no lifecycle. Taken: Open, then Closed once no
     # sub-account of it is open. Records are kept, never deleted.
     lifecycle:
@@ -286,6 +298,12 @@ errors:
     summary: An open account with this name already sits under the same parent, and nothing was created.
   - name: weft.accounts.AccountHasOpenChildren
     summary: The account still has an open sub-account, so it was not closed.
+  - name: weft.accounts.ScopeMismatch
+    summary: The scope named is not the one recorded on the account, or none is recorded yet; nothing changed.
+  - name: weft.accounts.ScopeNotFound
+    summary: No scope has this identifier, so none was recorded on the account.
+  - name: weft.accounts.ScopeTaken
+    summary: The scope is recorded on an account already, or the account has its scope; nothing changed.
   - name: weft.accounts.PrincipalNotFound
     summary: No principal has this identifier, and nothing changed.
   - name: weft.accounts.PrincipalNotActive
@@ -351,6 +369,11 @@ events:
   - name: weft.accounts.AccountClosed
     fields:
       - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+  - name: weft.accounts.AccountScopeRecorded
+    fields:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
   - name: weft.accounts.PrincipalAdded
     fields:
       - {name: principal_id, type: weft.shared.PrincipalId}
@@ -507,6 +530,7 @@ commands:
         sets:
           tenant_id: input.tenant_id
           parent_account_id: {cleared: true}
+          scope_id: {cleared: true}
           name: input.name
         emits: [weft.accounts.AccountCreated]
         payload:
@@ -554,6 +578,7 @@ commands:
         sets:
           tenant_id: {related: {via: input.parent_account_id, field: tenant_id}}
           parent_account_id: input.parent_account_id
+          scope_id: {cleared: true}
           name: input.name
         emits: [weft.accounts.SubAccountCreated]
         payload:
@@ -575,6 +600,7 @@ commands:
       display: Close an account
     input:
       - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
     outcomes:
       # hardening pass 1 D3: the account closed is the account the request acts in, so another
       # account answers as a missing one before its row or children are read. Written over the
@@ -596,6 +622,22 @@ commands:
               - state == Open
           exists: true
         error: weft.accounts.AccountHasOpenChildren
+      # D-d A: AccountClosed names the account's scope, by which the R6 bindings remove the
+      # scope's rows. The scope is the input, checked against the one recorded on the account: the
+      # payload cannot take the stored Optional, since ESS 0.99.2 narrows it after a subject guard
+      # only, and a subject guard is refused beside the row set above. `defined` first, as in
+      # has-open-children; an account whose scope is not recorded yet is not closed.
+      - name: other-scope
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - account_id == input.account_id
+              - any:
+                  - not defined(scope_id)
+                  - scope_id != input.scope_id
+          exists: true
+        error: weft.accounts.ScopeMismatch
       - name: closed
         moves: weft.accounts.Account.close
         instance: account_id
@@ -611,9 +653,48 @@ commands:
         payload:
           weft.accounts.AccountClosed:
             account_id: input.account_id
+            scope_id: input.scope_id
       - name: wrong-state
         wrong_state: true
         error: weft.accounts.AccountNotOpen
+
+  # D-d A: one account, one scope. The binding account-opens-scope opens the scope on
+  # AccountCreated, and the control plane records the id OpenScope answered on the account. A
+  # scope recorded on another account, or a second scope on one account, is refused, so the
+  # reference is unique both ways.
+  # OPEN: a sub-account's scope; the binding opens one for AccountCreated only.
+  - name: weft.accounts.RecordAccountScope
+    naming:
+      display: Record an account's scope
+    input:
+      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      - name: no-such-account
+        unknown_instance: true
+        error: weft.accounts.AccountNotFound
+      - name: no-such-scope
+        when_related: {via: input.scope_id, exists: false}
+        error: weft.accounts.ScopeNotFound
+      - name: scope-taken
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            any:
+              - all: [account_id == input.account_id, defined(scope_id)]
+              - all: [defined(scope_id), scope_id == input.scope_id]
+          exists: true
+        error: weft.accounts.ScopeTaken
+      - name: recorded
+        updates: weft.accounts.Account
+        instance: account_id
+        sets:
+          scope_id: input.scope_id
+        emits: [weft.accounts.AccountScopeRecorded]
+        payload:
+          weft.accounts.AccountScopeRecorded:
+            account_id: input.account_id
+            scope_id: input.scope_id
 
   # Sketch line 124 ("a user") and lines 141-142 (federated login, tokens from an external
   # identity provider): a user is known by the provider's subject.
