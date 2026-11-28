@@ -547,16 +547,20 @@ commands:
         unknown_instance: true
         error: weft.infrastructure.NotFound
       - name: weakened-from-microvm
-        when: {policy.minimum_isolation: {in: [UserKernel, Container, ProcessSandbox]}}
+        when: {policy.minimum_isolation: {in: [UserKernel, Container, ProcessSandbox, None]}}
         when_subject: {predicate: policy.minimum_isolation == MicroVm}
         error: weft.infrastructure.IsolationWeakened
       - name: weakened-from-user-kernel
-        when: {policy.minimum_isolation: {in: [Container, ProcessSandbox]}}
+        when: {policy.minimum_isolation: {in: [Container, ProcessSandbox, None]}}
         when_subject: {predicate: policy.minimum_isolation == UserKernel}
         error: weft.infrastructure.IsolationWeakened
       - name: weakened-from-container
-        when: {policy.minimum_isolation: {in: [ProcessSandbox]}}
+        when: {policy.minimum_isolation: {in: [ProcessSandbox, None]}}
         when_subject: {predicate: policy.minimum_isolation == Container}
+        error: weft.infrastructure.IsolationWeakened
+      - name: weakened-from-process-sandbox
+        when: {policy.minimum_isolation: {in: [None]}}
+        when_subject: {predicate: policy.minimum_isolation == ProcessSandbox}
         error: weft.infrastructure.IsolationWeakened
       - name: set
         updates: weft.infrastructure.Cloud

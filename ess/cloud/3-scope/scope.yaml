@@ -12,6 +12,27 @@ naming:
   wire: weft
   display: Scope
 
+types:
+  # story:scope-placement: how long a scope may hold a leased machine of a pool, in whole hours.
+  - name: weft.scope.Lease
+    kind: struct
+    fields:
+      - name: max_hours
+        type: Integer
+  # story:scope-placement: where a scope may run, declared at design time; the placement decision
+  # within it is a run-time record of the runtime (D7 A). Exactly one of `host` (a named host, a
+  # node of layer 2 or a machine the runtime knows by name) and `pool` (a node pool of layer 2 by
+  # name, whose machines are leased); `lease` only with `pool`.
+  - name: weft.scope.Placement
+    kind: struct
+    fields:
+      - name: host
+        type: Optional<String>
+      - name: pool
+        type: Optional<String>
+      - name: lease
+        type: Optional<weft.scope.Lease>
+
 entities:
   - name: weft.scope.Scope
     naming:
@@ -22,6 +43,8 @@ entities:
     fields:
       - name: name
         type: String
+      - name: placement
+        type: Optional<weft.scope.Placement>
     lifecycle:
       initial: Open
       states:
@@ -38,6 +61,8 @@ errors:
     summary: The scope is not in a state this command acts from, and nothing changed.
   - name: weft.scope.ScopeNameTaken
     summary: An open scope already has this name, and nothing was created.
+  - name: weft.scope.PlacementForm
+    summary: The placement names both a host and a pool, neither, a lease without a pool, or a lease of less than one hour, and nothing was created.
 
 events:
   - name: weft.scope.ScopeOpened
@@ -54,9 +79,20 @@ commands:
       display: Open a scope
     input:
       - {name: name, type: String}
+      - {name: placement, type: Optional<weft.scope.Placement>}
     response:
       - {name: scope_id, type: weft.shared.ScopeId}
     outcomes:
+      - name: placement-form
+        when:
+          all:
+            - defined(placement)
+            - any:
+                - all: [defined(placement.host), defined(placement.pool)]
+                - all: [not defined(placement.host), not defined(placement.pool)]
+                - all: [defined(placement.host), defined(placement.lease)]
+                - all: [defined(placement.lease), placement.lease.max_hours < 1]
+        error: weft.scope.PlacementForm
       - name: name-taken
         when_related:
           entity: weft.scope.Scope
@@ -72,6 +108,7 @@ commands:
         returns: true
         sets:
           name: input.name
+          placement: input.placement
         emits: [weft.scope.ScopeOpened]
         payload:
           weft.scope.ScopeOpened:

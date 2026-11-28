@@ -2,7 +2,8 @@
 //! in the selection precedence of its contract:
 //!
 //! 1. the input guards in declaration order: `not-callers-scope` (a caller acting in no
-//!    scope counts as another scope's), `spec-kind`, `box-package`, `no-main`,
+//!    scope counts as another scope's), `spec-kind`, `box-package`, `run-as-missing`
+//!    (isolation `None` with no host user in `run_as`), `no-main`,
 //!    `invalid-check`, `invalid-restart-policy`, and the external `settings-shape-mismatch`
 //!    (`before_row`: the tag of `settings` names another shape than `shape`);
 //! 2. every existence check before every predicate, in declaration order:
@@ -36,9 +37,9 @@ use weft_types::workloads::{
     ArtifactIsRevoked, ArtifactKindMismatch, ArtifactNotFound, BoxPackageKind, Check, CheckKind,
     DefineWorkload, DefineWorkloadOutcome, InvalidCheck, InvalidRestartPolicy,
     IsolationBelowMinimum, NoMainProcess, NotFound, PackageKind, ProcessRole, QuotaExceeded,
-    RestartPolicy, RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound, RuntimeState,
-    SettingsShapeMismatch, ShapeKind, ShapeSettings, SpecKindNotRunnable, StateConflict,
-    WorkloadData, WorkloadDefined, WorkloadSnapshot, WorkloadState,
+    RestartPolicy, RunAsMissing, RuntimeIsRetired, RuntimeKindUnsupported, RuntimeNotFound,
+    RuntimeState, SettingsShapeMismatch, ShapeKind, ShapeSettings, SpecKindNotRunnable,
+    StateConflict, WorkloadData, WorkloadDefined, WorkloadSnapshot, WorkloadState,
 };
 
 use crate::context::mint;
@@ -72,6 +73,11 @@ impl DefineWorkloadBehavior for Ports {
         {
             return Ok(DefineWorkloadOutcome::BoxPackage {
                 error: BoxPackageKind,
+            });
+        }
+        if input.isolation == IsolationLevel::None && input.run_as.is_none() {
+            return Ok(DefineWorkloadOutcome::RunAsMissing {
+                error: RunAsMissing,
             });
         }
         if !input
@@ -212,6 +218,10 @@ impl DefineWorkloadBehavior for Ports {
                     artifact_digest: input.artifact_digest,
                     runtime_id: input.runtime_id,
                     isolation: input.isolation,
+                    run_as: input.run_as,
+                    upgrade: input.upgrade,
+                    volumes: input.volumes,
+                    ports: input.ports,
                     shape: input.shape,
                     settings: input.settings,
                     claims: input.claims,
@@ -267,7 +277,8 @@ fn settings_shape(settings: &ShapeSettings) -> ShapeKind {
 }
 
 /// The predicate of `below-runtime-isolation`: `isolation` is weaker than the runtime's
-/// `minimum`, as the specification lists the weaker levels for each minimum.
+/// `minimum`, as the specification lists the weaker levels for each minimum (`None`, no sandbox,
+/// is the weakest).
 fn below(isolation: IsolationLevel, minimum: IsolationLevel) -> bool {
     match minimum {
         IsolationLevel::MicroVm => isolation != IsolationLevel::MicroVm,
@@ -275,8 +286,12 @@ fn below(isolation: IsolationLevel, minimum: IsolationLevel) -> bool {
             isolation,
             IsolationLevel::MicroVm | IsolationLevel::UserKernel
         ),
-        IsolationLevel::Container => isolation == IsolationLevel::ProcessSandbox,
-        IsolationLevel::ProcessSandbox => false,
+        IsolationLevel::Container => matches!(
+            isolation,
+            IsolationLevel::ProcessSandbox | IsolationLevel::None
+        ),
+        IsolationLevel::ProcessSandbox => isolation == IsolationLevel::None,
+        IsolationLevel::None => false,
     }
 }
 
@@ -296,5 +311,7 @@ fn artifact_kind(kind: PackageKind) -> ArtifactKind {
         PackageKind::Agent => ArtifactKind::Agent,
         PackageKind::Training => ArtifactKind::Training,
         PackageKind::Graph => ArtifactKind::Graph,
+        PackageKind::WebBundle => ArtifactKind::WebBundle,
+        PackageKind::BuildContext => ArtifactKind::BuildContext,
     }
 }

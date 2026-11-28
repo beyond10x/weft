@@ -4,14 +4,16 @@
 //! - `no-such-scope`, decided externally before any row ("the scope does not exist or is
 //!   closed"), from the `weft.scope.Scope` row of the same store;
 //! - `not-callers-scope` (a caller acting in no scope counts as another scope's);
+//! - `parity-form` (a parity of fewer than two scopes or of no fact);
 //! - `name-taken` (a formation of the scope with the name, in any state);
 //! - `created` otherwise: `Active`, its internal domain `<name>.internal`, no quota slice. The
-//!   formation is in no cluster until `weft.cluster.PinFormation` records it in one.
+//!   formation is in no cluster until `weft.cluster.PinFormation` records it in one; its parity
+//!   constraints as sent.
 
 use weft_types::architecture::obligations::CreateFormationBehavior;
 use weft_types::architecture::{
     CreateFormation, CreateFormationOutcome, FormationCreated, FormationData, FormationNameTaken,
-    FormationSnapshot, FormationState, NoSuchScope,
+    FormationSnapshot, FormationState, NoSuchScope, ParityForm,
 };
 use weft_types::behaviour::{Context, FormationStorage, ScopeStorage};
 use weft_types::obligation::UnmetObligation;
@@ -35,6 +37,13 @@ impl CreateFormationBehavior for Ports {
         if Context::caller_scope_id(self).as_ref() != Some(&input.scope_id) {
             return Ok(CreateFormationOutcome::NotCallersScope { error: NoSuchScope });
         }
+        if input
+            .parity
+            .iter()
+            .any(|parity| parity.scopes.len() < 2 || parity.facts.is_empty())
+        {
+            return Ok(CreateFormationOutcome::ParityForm { error: ParityForm });
+        }
         if FormationStorage::list(self)
             .iter()
             .any(|row| row.data.scope_id == input.scope_id && row.data.name == input.name)
@@ -55,6 +64,7 @@ impl CreateFormationBehavior for Ports {
                     internal_domain: format!("{}.internal", input.name.0),
                     quota_slice: Vec::new(),
                     zones: input.zones,
+                    parity: input.parity,
                 },
             },
         );

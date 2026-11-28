@@ -411,6 +411,7 @@ components:
         - weft.deployments.FailTranslation
         - weft.deployments.MarkReleaseLive
         - weft.deployments.MarkRollbackLive
+        - weft.deployments.PlanFromSource
         - weft.deployments.PlanRollback
         - weft.deployments.ReapplyDrift
         - weft.deployments.RecordCoverageEntry

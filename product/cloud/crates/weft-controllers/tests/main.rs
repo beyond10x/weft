@@ -4,13 +4,15 @@
 //!   the two hand-run bindings of R1, on the `weft` binary and in-process;
 //! - [`obligations`]: `weft.workloads.CreateInstance` and `weft.scheduling.SubmitSchedulingRequest`,
 //!   each guard in the selection precedence of its contract;
+//! - [`open_scope`]: `weft.scope.OpenScope` with a placement (`placement-form`).
 //! - [`runner`]: the runner of the hand-run bindings on a state file of its own;
 //! - [`adversary`]: the cases of the adversary pass;
 //! - [`placement`], [`repair`] and [`r4_bindings`]: the acceptance of
 //!   `story:skeleton-controllers`, the Scheduler's decision step, the R4 level step and the four
 //!   hand-run bindings of R4, in-process on a world whose node is made schedulable ([`ready`]);
 //! - [`place_instance`] and [`assign`]: `weft.scheduling.PlaceInstance` and `weft.nodes.Assign`,
-//!   each guard in the selection precedence of its contract.
+//!   each guard in the selection precedence of its contract;
+//! - [`open_scope`]: `weft.scope.OpenScope` with a placement (`placement-form`).
 
 /// What both modules share: a control host in this process after the operator and tenant path
 /// and the workload definitions, and readers of its views and log.
@@ -1557,6 +1559,7 @@ mod ready {
                         zone: weft_types::shared::ZoneName("z1".to_owned()),
                         formation_id: request.formation_id.clone(),
                         topology_group_id: None,
+                        topology_id: None,
                         isolation: IsolationLevel::Container,
                         min_isolation: request.min_isolation,
                         assigned: false,
@@ -1780,8 +1783,8 @@ mod placement {
     }
 
     /// The weakest level the request admits is tried first, and no level below its minimum: a
-    /// node offering `MicroVm`, `ProcessSandbox` and `Container` places a `Container` request
-    /// at `Container`, in one `PlaceInstance`.
+    /// node offering `MicroVm`, `None`, `ProcessSandbox` and `Container` places a `Container`
+    /// request at `Container`, in one `PlaceInstance`.
     #[test]
     fn the_weakest_admitted_level_is_placed_first() {
         let r = Ready::new();
@@ -1790,6 +1793,7 @@ mod placement {
             &r.node,
             &[
                 IsolationLevel::MicroVm,
+                IsolationLevel::None,
                 IsolationLevel::ProcessSandbox,
                 IsolationLevel::Container,
             ],
@@ -1798,6 +1802,31 @@ mod placement {
         let rows = decisions(&r);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].isolation, IsolationLevel::Container);
+    }
+
+    /// `None` (no sandbox) is the weakest level: a request and a cluster of minimum `None` on a
+    /// node offering `Container` and `None` are placed at `None`, in one `PlaceInstance`.
+    #[test]
+    fn a_request_of_minimum_none_is_placed_at_none_first() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut request = SchedulingRequestStorage::get(&ports, &r.request.data.request_id)
+            .expect("the request row");
+        request.data.min_isolation = IsolationLevel::None;
+        SchedulingRequestStorage::put(&mut ports, request);
+        let mut cluster = weft_types::behaviour::ClusterStorage::get(&ports, &r.cluster())
+            .expect("the cluster row");
+        cluster.data.min_isolation = IsolationLevel::None;
+        weft_types::behaviour::ClusterStorage::put(&mut ports, cluster);
+        make_ready(
+            &ports,
+            &r.node,
+            &[IsolationLevel::Container, IsolationLevel::None],
+        );
+        assert_eq!(tick(&r), 1);
+        let rows = decisions(&r);
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].isolation, IsolationLevel::None);
     }
 
     /// Only the levels a node offers are tried: a node offering only `MicroVm` places a
@@ -2774,6 +2803,7 @@ mod place_instance {
         assert_eq!(data.zone, input.zone);
         assert_eq!(data.formation_id, request.formation_id);
         assert_eq!(data.topology_group_id, None);
+        assert_eq!(data.topology_id, None);
         assert_eq!(data.isolation, IsolationLevel::Container);
         assert_eq!(data.min_isolation, request.min_isolation);
         assert!(!data.assigned);
@@ -2794,6 +2824,96 @@ mod place_instance {
         );
         let request = SchedulingRequestStorage::get(&ports, &request.request_id).expect("it");
         assert_eq!(request.state, SchedulingRequestState::Pending);
+    }
+
+    /// A placement at `None` (no sandbox, the weakest level) is refused under every minimum
+    /// stronger than `None`, the request's and the cluster's, `ProcessSandbox` included; a
+    /// minimum of `None` takes it as far as the node's facts (default deny).
+    #[test]
+    fn a_placement_at_none_is_below_every_stronger_minimum() {
+        let r = Ready::new();
+        let mut input = base(&r);
+        input.isolation = IsolationLevel::None;
+        set_cluster(&r, |row| row.data.min_isolation = IsolationLevel::None);
+        for (minimum, outcome) in [
+            (IsolationLevel::MicroVm, "below-microvm"),
+            (IsolationLevel::UserKernel, "below-user-kernel"),
+            (IsolationLevel::Container, "below-container"),
+            (IsolationLevel::ProcessSandbox, "below-process-sandbox"),
+        ] {
+            set_request(&r, |row| row.data.min_isolation = minimum);
+            refuses(&r, &input, outcome);
+        }
+        set_request(&r, |row| row.data.min_isolation = IsolationLevel::None);
+        for (minimum, outcome) in [
+            (IsolationLevel::MicroVm, "below-cluster-microvm"),
+            (IsolationLevel::UserKernel, "below-cluster-user-kernel"),
+            (IsolationLevel::Container, "below-cluster-container"),
+            (
+                IsolationLevel::ProcessSandbox,
+                "below-cluster-process-sandbox",
+            ),
+        ] {
+            set_cluster(&r, |row| row.data.min_isolation = minimum);
+            refuses(&r, &input, outcome);
+        }
+        set_cluster(&r, |row| row.data.min_isolation = IsolationLevel::None);
+        refuses(&r, &input, "isolation-not-offered");
+    }
+
+    /// A decision placed in a topology group records the group's topology as `topology_id`,
+    /// and the view `PlacementDecisions` shows it: cloudspec-sim's `closed-link` reads the
+    /// topology's links (`TopologyLinks`, by `topology_id`) from a decision's row.
+    #[test]
+    fn a_placement_in_a_group_records_the_groups_topology() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let mut input = base(&r);
+        let node_pool = input.node_pool_id.clone().expect("the node's pool");
+        let own_pool = pool(
+            &mut ports,
+            &r.cluster(),
+            &r.request.data.scope_id,
+            Some(node_pool.clone()),
+        );
+        let group = TopologyGroupId(id());
+        let topology = TopologyId(id());
+        TopologyGroupStorage::put(
+            &mut ports,
+            TopologyGroupSnapshot {
+                state: TopologyGroupState::Active,
+                data: TopologyGroupData {
+                    topology_group_id: group.clone(),
+                    topology_id: topology.clone(),
+                    name: "a".to_owned(),
+                    node_pools: vec![node_pool],
+                    role: GroupRole::Hub,
+                    position: None,
+                    parent_group_id: None,
+                },
+            },
+        );
+        input.cluster_node_pool_id = Some(own_pool);
+        input.topology_group_id = Some(group.clone());
+        let placed =
+            match PlaceInstanceBehavior::place_instance(&mut ports, input).expect("an outcome") {
+                PlaceInstanceOutcome::Placed { instance_placed } => instance_placed,
+                other => panic!("{other:?}"),
+            };
+        let row = PlacementDecisionStorage::get(&ports, &placed.decision_id).expect("the row");
+        assert_eq!(row.data.topology_group_id, Some(group));
+        assert_eq!(row.data.topology_id, Some(topology.clone()));
+        let shown =
+            r.w.process
+                .host()
+                .system()
+                .weft_control
+                .placement_decisions()
+                .expect("the view reads")
+                .into_iter()
+                .find(|row| row.decision_id == placed.decision_id)
+                .expect("the decision's row");
+        assert_eq!(shown.topology_id, Some(topology));
     }
 
     /// The answer of `input`, whatever it writes.
@@ -3214,6 +3334,27 @@ mod assign {
                 ended_at: None,
             }
         );
+    }
+
+    /// `rank()` puts `None` (cloudspec's no-sandbox level) below `ProcessSandbox`: a node that
+    /// offers only `None` takes no placement at `ProcessSandbox`, and a placement at `None` is
+    /// taken by a node that offers only `ProcessSandbox`.
+    #[test]
+    fn assign_ranks_none_below_process_sandbox() {
+        let r = Ready::new();
+        let mut ports = r.ports();
+        let decision = r.bound();
+        let mut row = PlacementDecisionStorage::get(&ports, &decision).expect("the decision");
+        row.data.isolation = IsolationLevel::ProcessSandbox;
+        PlacementDecisionStorage::put(&mut ports, row.clone());
+        make_ready(&ports, &r.node, &[IsolationLevel::None]);
+        refuses(&r, &input(&r, &decision), "isolation-unavailable");
+
+        row.data.isolation = IsolationLevel::None;
+        PlacementDecisionStorage::put(&mut ports, row);
+        make_ready(&ports, &r.node, &[IsolationLevel::ProcessSandbox]);
+        let answer = AssignBehavior::assign(&mut ports, input(&r, &decision)).expect("an outcome");
+        assert_eq!(outcome_name(&answer), "assigned", "{answer:?}");
     }
 }
 
@@ -3930,5 +4071,70 @@ mod adversary_cloud_blocks_rust {
         r.w.process.host().tick();
         assert!(decisions(&r).is_empty(), "{:?}", decisions(&r));
         assert!(r.ports().store().step_waits(STEP).is_empty());
+    }
+}
+
+/// `weft.scope.OpenScope` with a placement (cloudspec's `Scope.placement`): `placement-form` in its
+/// declaration order, ahead of `name-taken`, and what `opened` writes.
+mod open_scope {
+    use weft_impl::bindings::outcome_name;
+    use weft_impl::context::mint;
+    use weft_testkit::InProcess;
+    use weft_types::behaviour::ScopeStorage;
+    use weft_types::scope::obligations::OpenScopeBehavior;
+    use weft_types::scope::{Lease, OpenScope, Placement};
+
+    fn open(process: &InProcess, name: &str, placement: Option<Placement>) -> String {
+        let mut ports = process.ports();
+        let input = OpenScope {
+            name: name.to_owned(),
+            placement,
+        };
+        outcome_name(&OpenScopeBehavior::open_scope(&mut ports, input).expect("an outcome"))
+            .to_owned()
+    }
+
+    fn placement(host: Option<&str>, pool: Option<&str>, lease: Option<i64>) -> Option<Placement> {
+        Some(Placement {
+            host: host.map(str::to_owned),
+            pool: pool.map(str::to_owned),
+            lease: lease.map(|max_hours| Lease { max_hours }),
+        })
+    }
+
+    #[test]
+    fn open_scope_answers_placement_form_ahead_of_name_taken_and_records_the_placement() {
+        let process = InProcess::start();
+        let taken = mint();
+        assert_eq!(open(&process, &taken, None), "opened");
+        let scopes = || ScopeStorage::list(&process.ports()).len();
+        let before = scopes();
+        for (form, name) in [
+            (placement(Some("h"), Some("p"), None), mint()),
+            (placement(None, None, None), mint()),
+            (placement(Some("h"), None, Some(1)), mint()),
+            (placement(None, Some("p"), Some(0)), mint()),
+            (placement(None, None, None), taken.clone()),
+        ] {
+            assert_eq!(
+                open(&process, &name, form.clone()),
+                "placement-form",
+                "{form:?}"
+            );
+        }
+        assert_eq!(scopes(), before);
+        assert_eq!(
+            open(&process, &taken, placement(Some("h"), None, None)),
+            "name-taken"
+        );
+
+        let leased = placement(None, Some("p"), Some(1));
+        let name = mint();
+        assert_eq!(open(&process, &name, leased.clone()), "opened");
+        let row = ScopeStorage::list(&process.ports())
+            .into_iter()
+            .find(|row| row.data.name == name)
+            .expect("the scope row");
+        assert_eq!(row.data.placement, leased);
     }
 }

@@ -14,8 +14,10 @@
 //!    `other-cluster` (the cluster's `formations` do not list the formation:
 //!    a formation is placed only in the cluster `weft.cluster.PinFormation` pinned it to),
 //!    `binding-of-other-account`, `binding-on-other-node`, `below-microvm`, `below-user-kernel`,
-//!    `below-container`, `below-cluster-microvm`, `below-cluster-user-kernel`,
-//!    `below-cluster-container`, `outside-cluster-zones`, `outside-zones`, `shared-kernel`,
+//!    `below-container`, `below-process-sandbox`, `below-cluster-microvm`,
+//!    `below-cluster-user-kernel`, `below-cluster-container`, `below-cluster-process-sandbox`
+//!    (`None`, no sandbox, is the weakest level, below `ProcessSandbox`),
+//!    `outside-cluster-zones`, `outside-zones`, `shared-kernel`,
 //!    `node-not-schedulable`, `node-not-connected`, `node-zone-differs`, `node-in-other-cloud`,
 //!    `node-pool-differs`, `node-in-other-clusters-pool`, `node-outside-dedicated-pools`,
 //!    `cluster-pool-differs`, `group-not-of-node`, `crosses-closed-link`,
@@ -33,7 +35,8 @@
 //!    - `device-not-wiped`: a `Wiping` device of the node that a binding of the placement, on
 //!      that node, names;
 //! 5. `placed`, the branch the contract takes otherwise: a `Reserved` decision with the
-//!    request's instance, scope, minimum isolation, formation, gang and priority, and
+//!    request's instance, scope, minimum isolation, formation, gang and priority, the topology
+//!    of the input's group (`topology_id`), and
 //!    `InstancePlaced`.
 
 use std::collections::HashMap;
@@ -188,13 +191,20 @@ impl PlaceInstanceBehavior for Ports {
         let isolation = input.isolation;
         let weaker_than_microvm = matches!(
             isolation,
-            IsolationLevel::UserKernel | IsolationLevel::Container | IsolationLevel::ProcessSandbox
+            IsolationLevel::UserKernel
+                | IsolationLevel::Container
+                | IsolationLevel::ProcessSandbox
+                | IsolationLevel::None
         );
         let weaker_than_user_kernel = matches!(
             isolation,
-            IsolationLevel::Container | IsolationLevel::ProcessSandbox
+            IsolationLevel::Container | IsolationLevel::ProcessSandbox | IsolationLevel::None
         );
-        let weaker_than_container = matches!(isolation, IsolationLevel::ProcessSandbox);
+        let weaker_than_container = matches!(
+            isolation,
+            IsolationLevel::ProcessSandbox | IsolationLevel::None
+        );
+        let weaker_than_process_sandbox = isolation == IsolationLevel::None;
         let minimum = request.data.min_isolation;
         if weaker_than_microvm && minimum == IsolationLevel::MicroVm {
             return Ok(PlaceInstanceOutcome::BelowMicrovm {
@@ -211,6 +221,11 @@ impl PlaceInstanceBehavior for Ports {
                 error: IsolationTooWeak,
             });
         }
+        if weaker_than_process_sandbox && minimum == IsolationLevel::ProcessSandbox {
+            return Ok(PlaceInstanceOutcome::BelowProcessSandbox {
+                error: IsolationTooWeak,
+            });
+        }
         let cluster_minimum = cluster.data.min_isolation;
         if weaker_than_microvm && cluster_minimum == IsolationLevel::MicroVm {
             return Ok(PlaceInstanceOutcome::BelowClusterMicrovm {
@@ -224,6 +239,11 @@ impl PlaceInstanceBehavior for Ports {
         }
         if weaker_than_container && cluster_minimum == IsolationLevel::Container {
             return Ok(PlaceInstanceOutcome::BelowClusterContainer {
+                error: IsolationTooWeak,
+            });
+        }
+        if weaker_than_process_sandbox && cluster_minimum == IsolationLevel::ProcessSandbox {
+            return Ok(PlaceInstanceOutcome::BelowClusterProcessSandbox {
                 error: IsolationTooWeak,
             });
         }
@@ -427,6 +447,11 @@ impl PlaceInstanceBehavior for Ports {
 
         let decision_id = PlacementDecisionId(Uuid(mint()));
         let data = request.data;
+        // `topology_id: {related: {via: input.topology_group_id, field: topology_id}}`: the
+        // topology of the group, absent with the group (or with its row).
+        let topology_id = input.topology_group_id.as_ref().and_then(|group| {
+            TopologyGroupStorage::get(self, group).map(|row| row.data.topology_id)
+        });
         PlacementDecisionStorage::put(
             self,
             PlacementDecisionSnapshot {
@@ -441,6 +466,7 @@ impl PlaceInstanceBehavior for Ports {
                     zone: input.zone,
                     formation_id: data.formation_id,
                     topology_group_id: input.topology_group_id,
+                    topology_id,
                     isolation,
                     min_isolation: data.min_isolation,
                     assigned: false,

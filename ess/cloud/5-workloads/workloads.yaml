@@ -41,6 +41,34 @@ types:
       # Sketch line 237: "training (later)".
       - Training
       - Graph
+      # docs/layers.md § 5 Frontends: the static files of a frontend, served by the edge.
+      - WebBundle
+      # docs/layers.md § 1 Image build: a source archive an image_build provider builds into an
+      # image.
+      - BuildContext
+
+  # docs/layers.md § 1 Image build: the declared kind of a build. `Static`: a stock static-file
+  # server plus the archive's files; `Container`: a container build file in the archive.
+  - name: weft.workloads.BuildKind
+    kind: enum
+    variants: [Static, Container]
+
+  # docs/layers.md § 1 Image build: package kind build_context, an archive by digest (layer 4)
+  # and its build kind; the image it becomes is the digest the image_build provider returns.
+  - name: weft.workloads.BuildContext
+    kind: struct
+    fields:
+      - name: archive
+        type: weft.shared.ArtifactDigest
+      - name: build_kind
+        type: weft.workloads.BuildKind
+
+  # docs/layers.md § 5 Frontends: package kind web_bundle, the built bundle by digest.
+  - name: weft.workloads.WebBundle
+    kind: struct
+    fields:
+      - name: digest
+        type: weft.shared.ArtifactDigest
 
   # Sketch lines 241-257: the shapes.
   # weft@6798e7d:ess/4-applications/workloads.yaml:41
@@ -254,6 +282,85 @@ types:
       - name: checks
         type: List<weft.workloads.Check>
 
+  # New in cloudspec (story:workload-process-daemon): the host user a workload under isolation
+  # `None` runs as. `user` is a user name of the host, or `deployer`: the user who deploys,
+  # resolved by the runtime at placement (a daemon that runs as the owner of the checkouts it
+  # builds). Isolation `None` without it is refused (RunAsMissing).
+  - name: weft.workloads.RunAs
+    kind: struct
+    fields:
+      - name: user
+        type: String
+
+  # New in cloudspec (story:workload-process-daemon): how a new version of a running workload
+  # takes over. `Restart` (the default): the runtime stops the process and starts the new one.
+  # `Reload`: the runtime sends `signal` and does not restart the process; the process may hand
+  # its open sockets and running work to the new binary.
+  - name: weft.workloads.UpgradeKind
+    kind: enum
+    variants: [Restart, Reload]
+
+  # `signal` is the signal's name without the SIG prefix (`HUP`, `USR2`); only `Reload` has one.
+  - name: weft.workloads.Upgrade
+    kind: struct
+    fields:
+      - name: kind
+        type: weft.workloads.UpgradeKind
+      - name: signal
+        type: Optional<String>
+
+  # New in cloudspec (story:host-path-volume): a host directory mounted into a workload. `host_path`
+  # is absolute; `mount` is `same` (the directory at its own path, as every node holds the
+  # operating user's checkouts at one path) or an absolute path; `mode` read-only or read-write.
+  - name: weft.workloads.MountMode
+    kind: enum
+    variants: [Ro, Rw]
+  - name: weft.workloads.HostPathMount
+    kind: struct
+    fields:
+      - name: host_path
+        type: String
+      - name: mount
+        type: String
+      - name: mode
+        type: weft.workloads.MountMode
+
+  # New in cloudspec (story:socket-ports): a port a workload serves. Exactly one address: `tcp`
+  # (or `port`, the form the translators write; a bare number in an architecture is the same), a
+  # `unix` socket path or a `fifo` path (both absolute). A link to a unix or fifo port names it in
+  # `to_port` and takes no protocol word: the protocol is the kind of the port. `bind` and
+  # `protocol` apply to a TCP port.
+  # story:generate-out-systemd: `activation` applies to a unix or fifo port. `None` (the default):
+  # the process creates the path itself. `Socket`: the service manager creates it and hands the
+  # open socket to the process (systemd socket activation). A socket path, a `host_path` and a
+  # `mount` may also start with `${runtime_dir}/` or `${home}/`, the deploying user's runtime
+  # directory or home, when the workload runs as `deployer`.
+  - name: weft.workloads.PortBind
+    kind: enum
+    variants: [Loopback, All]
+  - name: weft.workloads.SocketActivation
+    kind: enum
+    variants: [None, Socket]
+  - name: weft.workloads.ServedPort
+    kind: struct
+    fields:
+      - name: name
+        type: Optional<String>
+      - name: tcp
+        type: Optional<Integer>
+      - name: port
+        type: Optional<Integer>
+      - name: unix
+        type: Optional<String>
+      - name: fifo
+        type: Optional<String>
+      - name: bind
+        type: Optional<weft.workloads.PortBind>
+      - name: protocol
+        type: Optional<String>
+      - name: activation
+        type: Optional<weft.workloads.SocketActivation>
+
   # Sketch line 269: "never, on failure, always; with a backoff".
   # weft@6798e7d:ess/4-applications/workloads.yaml:254
   - name: weft.workloads.RestartMode
@@ -419,6 +526,18 @@ entities:
       # lines 456-458).
       - name: isolation
         type: weft.shared.IsolationLevel
+      # story:workload-process-daemon: the host user under isolation None (required then), and
+      # how a new version takes over (absent: restart).
+      - name: run_as
+        type: Optional<weft.workloads.RunAs>
+      - name: upgrade
+        type: Optional<weft.workloads.Upgrade>
+      # story:host-path-volume: host directories mounted into each instance.
+      - name: volumes
+        type: Optional<List<weft.workloads.HostPathMount>>
+      # story:socket-ports: the ports each instance serves.
+      - name: ports
+        type: Optional<List<weft.workloads.ServedPort>>
       # Axis 2, Shape (sketch lines 241-257).
       - name: shape
         type: weft.workloads.ShapeKind
@@ -1134,6 +1253,11 @@ errors:
     summary: >-
       The command would run the workload under an isolation level weaker than its runtime's or its
       own minimum; a minimum is never weakened.
+  # story:workload-process-daemon: isolation None names the host user it runs as.
+  - name: weft.workloads.RunAsMissing
+    summary: >-
+      The workload asks for isolation None and names no host user to run as (run_as), and nothing
+      was defined.
 
   # weft@6798e7d:ess/4-applications/workloads.yaml:1350
   - name: weft.workloads.SpecKindNotRunnable
@@ -1741,6 +1865,10 @@ commands:
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
       - {name: runtime_id, type: weft.shared.RuntimeId}
       - {name: isolation, type: weft.shared.IsolationLevel}
+      - {name: run_as, type: Optional<weft.workloads.RunAs>}
+      - {name: upgrade, type: Optional<weft.workloads.Upgrade>}
+      - {name: volumes, type: Optional<List<weft.workloads.HostPathMount>>}
+      - {name: ports, type: Optional<List<weft.workloads.ServedPort>>}
       - {name: shape, type: weft.workloads.ShapeKind}
       - {name: settings, type: weft.workloads.ShapeSettings}
       - {name: claims, type: List<weft.workloads.ClaimRequest>}
@@ -1764,6 +1892,13 @@ commands:
             - shape == Box
             - package_kind: {none_of: [Image, Machine]}
         error: weft.workloads.BoxPackageKind
+      # story:workload-process-daemon: no sandbox means a named host user; default deny.
+      - name: run-as-missing
+        when:
+          all:
+            - isolation == None
+            - not defined(run_as)
+        error: weft.workloads.RunAsMissing
       # "No Main process": an empty list, or a list none of whose processes is Main. The read of
       # `processes.0` is implied by the quantifier (the first process is not Main either) and
       # changes no answer; it gives synthesis a first process to vary beside the runtime's kind
@@ -1888,7 +2023,10 @@ commands:
                   - minimum_isolation == UserKernel
                   - input.isolation != MicroVm
                   - input.isolation != UserKernel
-              - all: [minimum_isolation == Container, input.isolation == ProcessSandbox]
+              - all:
+                  - minimum_isolation == Container
+                  - input.isolation: {in: [ProcessSandbox, None]}
+              - all: [minimum_isolation == ProcessSandbox, input.isolation == None]
         error: weft.workloads.IsolationBelowMinimum
       # The artifact is held by the artifacts domain (weft.artifacts); an external check answers
       # after every check on this domain's own records.
@@ -1925,6 +2063,10 @@ commands:
           artifact_digest: input.artifact_digest
           runtime_id: input.runtime_id
           isolation: input.isolation
+          run_as: input.run_as
+          upgrade: input.upgrade
+          volumes: input.volumes
+          ports: input.ports
           shape: input.shape
           settings: input.settings
           claims: input.claims
