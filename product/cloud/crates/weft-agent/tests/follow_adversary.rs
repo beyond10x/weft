@@ -415,3 +415,85 @@ fn the_guards_of_record_artifact_verified_and_record_instance_running_refuse_as_
     assert_eq!(state(&host, &this.instance_id), json!("Running"));
     assert_eq!(state(&host, &other.instance_id), json!("Scheduled"));
 }
+
+/// The request lines of `operation` in the control host's log.
+fn requests(host: &ControlHost, operation: &str) -> Vec<Value> {
+    host.log_after(0)
+        .into_iter()
+        .filter(|line| line["kind"] == "request" && line["operation"] == operation)
+        .collect()
+}
+
+/// The seed of two nodes with this node's instance of restart mode `Never`
+/// (`story:cloudspec-submission-job-exit`).
+fn never() -> seeds::Seed {
+    seeds::two_nodes_changed(|instance| {
+        instance.data.restart_policy.mode = weft_types::workloads::RestartMode::Never;
+    })
+}
+
+/// `RecordInstanceExited` is sent again in the next pass until it is answered
+/// (`story:cloudspec-submission-job-exit`): its first request is lost, and the instance of restart
+/// mode `Never` whose process exited 0 still reads `Exited`, from the one request that reached
+/// the control host.
+#[test]
+fn a_lost_record_instance_exited_is_sent_again() {
+    let seed = never();
+    let host = ControlHost::start_seeded(seed.rows.clone());
+    let this = seed.this.instance_id.clone();
+    let relay = Relay::start(
+        host.address(),
+        "/weft/commands/RecordInstanceExited ",
+        Loss::Request,
+    );
+    let stub = Stub::leaked(0);
+    let report = report_path("lost-exited-request");
+    spawn_follower(relay.address, &seed.this.node_id, stub, &report);
+
+    let lines = wait_for_pass(&report, 6);
+    assert_eq!(relay.lost(), 1, "the relay lost no request: {lines:?}");
+    assert_eq!(
+        state(&host, &this),
+        json!("Exited"),
+        "the process exited 0, one RecordInstanceExited was lost, and 5 passes later it was \
+         never sent again: {lines:?}"
+    );
+    assert_eq!(
+        requests(&host, "weft.workloads.RecordInstanceExited").len(),
+        1,
+        "{lines:?}"
+    );
+}
+
+/// `RecordInstanceExited` waits for an answered `RecordInstanceRunning`
+/// (`story:cloudspec-submission-job-exit`): the first `RecordInstanceRunning` is lost, so the
+/// exit is sent only after the one sent again in a later pass, and the instance reads `Exited`.
+#[test]
+fn record_instance_exited_waits_for_an_answered_record_instance_running() {
+    let seed = never();
+    let host = ControlHost::start_seeded(seed.rows.clone());
+    let this = seed.this.instance_id.clone();
+    let relay = Relay::start(
+        host.address(),
+        "/weft/commands/RecordInstanceRunning ",
+        Loss::Request,
+    );
+    let stub = Stub::leaked(0);
+    let report = report_path("exited-after-running");
+    spawn_follower(relay.address, &seed.this.node_id, stub, &report);
+
+    let lines = wait_for_pass(&report, 6);
+    assert_eq!(relay.lost(), 1, "the relay lost no request: {lines:?}");
+    assert_eq!(state(&host, &this), json!("Exited"), "{lines:?}");
+    let running = requests(&host, "weft.workloads.RecordInstanceRunning");
+    let exited = requests(&host, "weft.workloads.RecordInstanceExited");
+    assert_eq!(
+        (running.len(), exited.len()),
+        (1, 1),
+        "{running:?} {exited:?}"
+    );
+    assert!(
+        running[0]["seq"].as_u64() < exited[0]["seq"].as_u64(),
+        "{running:?} {exited:?}"
+    );
+}

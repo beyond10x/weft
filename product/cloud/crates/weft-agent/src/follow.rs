@@ -23,6 +23,13 @@
 //! 4. `weft.workloads.RecordInstanceRunning` as the NodeAgent, once every process of the instance
 //!    is `running`, or has `exited` before the agent saw it `running` (it ran).
 //! 5. The exit code and output of each process that `exited`, one line of the report file.
+//! 6. `weft.workloads.RecordInstanceExited` with exit code 0 as the NodeAgent
+//!    (`story:cloudspec-submission-job-exit`), once every process of an instance whose restart
+//!    mode is `Never` has exited 0 and its `RecordInstanceRunning` was answered. An instance of
+//!    another restart mode is not reported (its owner restarts an exit: the skeleton `Service`),
+//!    nor one with a process that ended otherwise (a non-zero exit, a signal, a refusal; recording
+//!    a failure is `RecordInstanceFailed`, outside this story), nor one with no process (it has no
+//!    exit code to report).
 //!
 //! A start the place refused before the process ran with `retriable: true` (the place says it
 //! started nothing) is started again [`RETRY_AFTER`] passes later, while the instance reads
@@ -46,10 +53,12 @@
 //! once in this run is not taken again, whatever `RecordArtifactVerified` answered. A work list
 //! that is not answered is read again in the next pass; a `RecordArtifactVerified` that is not
 //! answered is sent again while the instance reads `Scheduled`; a `RecordInstanceRunning` that is
-//! not answered is sent again in each pass while the instance reads `Starting`. A `5xx` answer
-//! without `committed: true` counts as no answer.
+//! not answered is sent again in each pass while the instance reads `Starting`; a `RecordInstanceExited`
+//! that is not answered is sent again at the start of each pass, before the work list is read
+//! (the instance reads `Running` and is no longer on it). A `5xx` answer without
+//! `committed: true` counts as no answer.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::Scope;
@@ -82,6 +91,9 @@ const INSTANCES: &str = "weft.workloads.Instances";
 /// The command that records an instance `Running`.
 const RUNNING: &str = "weft.workloads.RecordInstanceRunning";
 
+/// The command that records an instance `Exited`.
+const EXITED: &str = "weft.workloads.RecordInstanceExited";
+
 /// What the agent follows its work list with.
 pub struct Follower<'a> {
     client: &'a Client,
@@ -89,7 +101,9 @@ pub struct Follower<'a> {
     exec: &'a (dyn Exec + Sync),
     report: &'a Mutex<Report>,
     /// The instances whose processes all ran and whose `RecordInstanceRunning` was not answered.
-    unrecorded: Mutex<HashSet<String>>,
+    unrecorded: Mutex<HashMap<String, Arc<Start>>>,
+    /// The instances whose `RecordInstanceExited` is due and was not answered.
+    unexited: Mutex<HashSet<String>>,
     /// The refused starts to make again.
     retries: Mutex<Vec<Retry>>,
     /// The time between two passes.
@@ -117,10 +131,28 @@ enum Verified {
     Unanswered(String),
 }
 
-/// The start of one instance: its processes that have not run yet.
+/// The start of one instance: its processes that have not run yet, and what its exit waits for.
 struct Start {
     instance_id: String,
     left: AtomicUsize,
+    /// Its restart mode is `Never`: an exit 0 of every process is recorded.
+    never: bool,
+    /// How many processes it has.
+    processes: usize,
+    end: Mutex<End>,
+}
+
+/// What [`Follower::record_exit_when_due`] waits for.
+#[derive(Default)]
+struct End {
+    /// `RecordInstanceRunning` was answered.
+    running: bool,
+    /// The processes that exited 0.
+    exited: usize,
+    /// A process ended otherwise: another exit code, a signal, a refusal for good.
+    failed: bool,
+    /// `RecordInstanceExited` was sent once.
+    sent: bool,
 }
 
 /// A refused start of `process` to make again in pass `due`, as attempt `attempt`.
@@ -145,7 +177,8 @@ impl<'a> Follower<'a> {
             node_id,
             exec,
             report,
-            unrecorded: Mutex::new(HashSet::new()),
+            unrecorded: Mutex::new(HashMap::new()),
+            unexited: Mutex::new(HashSet::new()),
             retries: Mutex::new(Vec::new()),
             pass: PASS,
             retry_after: RETRY_AFTER,
@@ -180,7 +213,8 @@ impl<'a> Follower<'a> {
         })
     }
 
-    /// One pass over the work list: the `RecordInstanceRunning` not answered are sent again, the
+    /// One pass over the work list: the `RecordInstanceExited` not answered are sent again, then
+    /// the work list is read, the `RecordInstanceRunning` not answered are sent again, the
     /// refused starts that are due are made again, and every instance it takes is started; each
     /// start on a thread of `scope`.
     fn pass<'scope>(
@@ -189,6 +223,7 @@ impl<'a> Follower<'a> {
         pass: u64,
         taken: &mut Taken,
     ) -> Result<(), String> {
+        self.record_unexited();
         let instances = match self.work() {
             Ok(instances) => instances,
             Err(error) => {
@@ -247,6 +282,9 @@ impl<'a> Follower<'a> {
         let start = Arc::new(Start {
             instance_id,
             left: AtomicUsize::new(processes.len().max(1)),
+            never: instance["restart_policy"]["mode"] == "Never",
+            processes: processes.len(),
+            end: Mutex::new(End::default()),
         });
         if processes.is_empty() {
             self.ran(&start);
@@ -320,14 +358,25 @@ impl<'a> Follower<'a> {
     /// that reads `Starting`; an instance that reads otherwise, or is gone from the work list, is
     /// no longer followed.
     fn record_unrecorded(&self, instances: &[Value]) {
-        let unrecorded: Vec<String> = {
+        let unrecorded: Vec<Arc<Start>> = {
             let mut unrecorded = lock(&self.unrecorded);
-            unrecorded.retain(|instance_id| reads_starting(instances, instance_id));
-            unrecorded.iter().cloned().collect()
+            unrecorded.retain(|instance_id, _| reads_starting(instances, instance_id));
+            unrecorded.values().cloned().collect()
         };
-        for instance_id in unrecorded {
-            if self.record_running(&instance_id) {
-                lock(&self.unrecorded).remove(&instance_id);
+        for start in unrecorded {
+            if self.record_running(&start.instance_id) {
+                lock(&self.unrecorded).remove(&start.instance_id);
+                self.running_answered(&start);
+            }
+        }
+    }
+
+    /// Sends `RecordInstanceExited` again for each instance whose last one was not answered.
+    fn record_unexited(&self) {
+        let unexited: Vec<String> = lock(&self.unexited).iter().cloned().collect();
+        for instance_id in unexited {
+            if self.record_exited(&instance_id) {
+                lock(&self.unexited).remove(&instance_id);
             }
         }
     }
@@ -378,9 +427,11 @@ impl<'a> Follower<'a> {
                 if let Err(error) = self.write(|report| report.exited(instance_id, &exited)) {
                     eprintln!("weft-agent: {instance_id}: {error}");
                 }
+                self.ended(&start, exited.code == Some(0));
             }
             Err(error) if ran => {
-                eprintln!("weft-agent: a process of {instance_id} through the exec port: {error}")
+                eprintln!("weft-agent: a process of {instance_id} through the exec port: {error}");
+                self.ended(&start, false);
             }
             Err(error) if again(&error) && attempt < ATTEMPTS => {
                 let due = pass + self.retry_after;
@@ -402,13 +453,14 @@ impl<'a> Follower<'a> {
                 if let Err(error) = self.write(|report| report.refused(instance_id, &code)) {
                     eprintln!("weft-agent: {instance_id}: {error}");
                 }
+                self.ended(&start, false);
             }
         }
     }
 
     /// One process of `start` ran; after the last one, `RecordInstanceRunning`, followed again in
     /// the next passes when it is not answered.
-    fn ran(&self, start: &Start) {
+    fn ran(&self, start: &Arc<Start>) {
         let before = start
             .left
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
@@ -417,8 +469,81 @@ impl<'a> Follower<'a> {
         if before != Ok(1) {
             return;
         }
-        if !self.record_running(&start.instance_id) {
-            lock(&self.unrecorded).insert(start.instance_id.clone());
+        if self.record_running(&start.instance_id) {
+            self.running_answered(start);
+        } else {
+            lock(&self.unrecorded).insert(start.instance_id.clone(), Arc::clone(start));
+        }
+    }
+
+    /// `RecordInstanceRunning` of `start` was answered.
+    fn running_answered(&self, start: &Start) {
+        lock(&start.end).running = true;
+        self.record_exit_when_due(start);
+    }
+
+    /// A process of `start` ended for good: it exited 0 (`zero`), or it ended otherwise.
+    fn ended(&self, start: &Start, zero: bool) {
+        {
+            let mut end = lock(&start.end);
+            if zero {
+                end.exited += 1;
+            } else {
+                end.failed = true;
+            }
+        }
+        self.record_exit_when_due(start);
+    }
+
+    /// `RecordInstanceExited` of `start`, once: when its restart mode is `Never`, its
+    /// `RecordInstanceRunning` was answered and every one of its processes (at least one) exited
+    /// 0. Followed again in the next passes when it is not answered.
+    fn record_exit_when_due(&self, start: &Start) {
+        {
+            let mut end = lock(&start.end);
+            let due = start.never
+                && start.processes > 0
+                && end.running
+                && !end.failed
+                && end.exited == start.processes
+                && !end.sent;
+            if !due {
+                return;
+            }
+            end.sent = true;
+        }
+        if !self.record_exited(&start.instance_id) {
+            lock(&self.unexited).insert(start.instance_id.clone());
+        }
+    }
+
+    /// `RecordInstanceExited` of `instance_id` with exit code 0: whether the control host
+    /// answered it. A refusal is an answer (the instance does not read `Running` any more: it is
+    /// not sent again).
+    fn record_exited(&self, instance_id: &str) -> bool {
+        match self.command(
+            EXITED,
+            json!({"instance_id": instance_id, "node_id": self.node_id, "exit_code": 0}),
+        ) {
+            Ok(answer)
+                if matches!(
+                    answer.body["outcome"].as_str(),
+                    Some("exited" | "exited-restart")
+                ) || committed(&answer) =>
+            {
+                true
+            }
+            Ok(answer) => {
+                eprintln!(
+                    "weft-agent: {EXITED} {instance_id} answered {}: {}",
+                    answer.status, answer.body
+                );
+                answer.status < 500
+            }
+            Err(error) => {
+                eprintln!("weft-agent: {EXITED} {instance_id}: {error}");
+                false
+            }
         }
     }
 

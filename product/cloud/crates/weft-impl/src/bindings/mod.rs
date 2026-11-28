@@ -43,6 +43,15 @@
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2); three of them also read a row the event names ([`attempt_ports`]), which ESS cannot
 //!   map (OPEN (ESS) in `ess/components.yaml`, no ESS story yet);
+//! - [`job_task_succeeded_on_exit`] and [`job_complete_on_task`] (the same block, the exit of a
+//!   Job's task), ESS
+//!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
+//!   (E2); the first also reads the instance's row and compares the event's Integer `exit_code`,
+//!   which ESS cannot map or filter (OPEN (ESS) in `ess/components.yaml`, no ESS story yet);
+//! - [`telemetry_close_log_streams_on_exit`] and [`telemetry_retire_series_on_exit`]: their
+//!   command's outcome carries one event of `each: changed`, so it has no event to publish for an
+//!   instance with no row to change, and the binding reads the rows ([`attempt_ports`]) to invoke
+//!   nothing then (OPEN (ESS) in `ess/components.yaml`, no ESS story yet);
 //! - [`r1_create_replica`], ESS `story:rust-binding-wraps-a-plain-copy-into-an-optional-member`
 //!   (E3);
 //! - [`r1_submit_scheduling_request`], ESS
@@ -52,7 +61,8 @@
 //!   [`r4_record_placement_assigned`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2);
-//! - [`edge_backend_ready`], [`edge_backend_restore`] and [`edge_backend_restarting`], ESS
+//! - [`edge_backend_ready`], [`edge_backend_restore`], [`edge_backend_restarting`] and
+//!   [`edge_backend_exited`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2).
 
@@ -67,12 +77,15 @@ use crate::context::CallerAttributes;
 use crate::log::BindingResult;
 use crate::{Ports, System};
 
+pub mod edge_backend_exited;
 pub mod edge_backend_ready;
 pub mod edge_backend_restarting;
 pub mod edge_backend_restore;
+pub mod job_complete_on_task;
 pub mod job_instance_scheduling_request;
 pub mod job_start_on_submit;
 pub mod job_task_instances;
+pub mod job_task_succeeded_on_exit;
 pub mod r1_create_replica;
 pub mod r1_rollout_submit_job;
 pub mod r1_set_workload_replicas;
@@ -81,6 +94,8 @@ pub mod r4_assign;
 pub mod r4_bind_placement;
 pub mod r4_record_placement_assigned;
 pub mod r4_schedule_instance;
+pub mod telemetry_close_log_streams_on_exit;
+pub mod telemetry_retire_series_on_exit;
 
 /// The longest wait between two attempts of a held event, in ticks.
 pub const BACKOFF_CAP: u32 = 32;
@@ -119,15 +134,20 @@ pub const ENTRIES: &[&Entry] = &[
     &job_start_on_submit::ENTRY,
     &job_task_instances::ENTRY,
     &job_instance_scheduling_request::ENTRY,
+    &job_task_succeeded_on_exit::ENTRY,
+    &job_complete_on_task::ENTRY,
     &r1_create_replica::ENTRY,
     &r1_submit_scheduling_request::ENTRY,
     &r4_bind_placement::ENTRY,
     &r4_assign::ENTRY,
     &r4_schedule_instance::ENTRY,
     &r4_record_placement_assigned::ENTRY,
+    &telemetry_close_log_streams_on_exit::ENTRY,
+    &telemetry_retire_series_on_exit::ENTRY,
     &edge_backend_ready::ENTRY,
     &edge_backend_restore::ENTRY,
     &edge_backend_restarting::ENTRY,
+    &edge_backend_exited::ENTRY,
 ];
 
 /// One attempt of a binding: the line the control host logs for it.
@@ -302,7 +322,10 @@ thread_local! {
 /// The ports of the attempt in progress on this thread: the rows a hand-run binding reads
 /// where its mapping takes a value from a row the event names (`r1-rollout-submit-job`: the
 /// workload's `JobSettings`; `job-task-instances`: the Job's workload and its instances;
-/// `job-instance-scheduling-request`: the Job's `gang`). ESS maps a binding only from its
+/// `job-instance-scheduling-request`: the Job's `gang`; `job-task-succeeded-on-exit`: the
+/// instance's Job and task index), or where it invokes nothing for an event with no row to
+/// change (`telemetry-close-log-streams-on-exit`, `telemetry-retire-series-on-exit`). ESS maps a
+/// binding only from its
 /// event (the OPEN (ESS) of the block "R1 for a Job workload" in `ess/components.yaml`), and
 /// [`Entry::invoke`] is given the system alone. `None` outside an attempt.
 pub(crate) fn attempt_ports() -> Option<Ports> {

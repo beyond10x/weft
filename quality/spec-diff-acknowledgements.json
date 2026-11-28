@@ -1,7 +1,7 @@
 {
   "format": "ess-diff-acknowledgements/1",
   "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
-  "after": "83d49c824a7cdfe93d407be7690a77a5809c20ef5a84c11743bd9672b7e65001",
+  "after": "002c28d8426481e47f94b68322f4af0aa4ef1cc5fb45851cfbcff75965b0c2b0",
   "acknowledged": [
     "system/weft/unclassified-changed",
     "type/weft.artifacts.ArtifactKind/variant-added/BuildContext",
@@ -2071,9 +2071,11 @@
     "binding/edge-request-certificate/mapping-value-changed/host",
     "binding/edge-request-certificate/refusal-policy-changed",
     "binding/edge-retire-certificates/event-changed",
+    "binding/job-complete-on-task/added",
     "binding/job-instance-scheduling-request/added",
     "binding/job-start-on-submit/added",
     "binding/job-task-instances/added",
+    "binding/job-task-succeeded-on-exit/added",
     "binding/r1-create-replica/refusal-policy-changed",
     "binding/r1-rollout-submit-job/added",
     "binding/r1-set-workload-replicas/mapping-added/scope_id",
