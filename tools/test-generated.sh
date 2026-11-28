@@ -314,7 +314,7 @@ one_time_lines=$(grep -r --include='*.yaml' -c '^[[:space:]]*one_time_response:'
 jq -s -r --argjson lines "$one_time_lines" '
   ["r1-create-replica", "r1-submit-scheduling-request", "r4-bind-placement", "r4-assign",
    "r4-schedule-instance", "r4-record-placement-assigned", "edge-backend-ready",
-   "edge-backend-restore"] as $removed
+   "edge-backend-restore", "edge-backend-restarting"] as $removed
   | def otr: [.. | objects | select(has("one_time_response"))] | length;
     def drop_otr: walk(if type == "object" then del(.one_time_response) else . end);
     def expected($file):

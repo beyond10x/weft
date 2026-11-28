@@ -10,6 +10,7 @@ relations:
 - depends_on: story:skeleton-controllers
 - depends_on: story:skeleton-node-join-session
 - depends_on: story:skeleton-node-run-assignment
+- depends_on: story:skeleton-end-to-end
 scope:
 - confidence: inferred
   path: Cargo.lock
@@ -29,12 +30,13 @@ scope:
   path: tools/conformance-suite.sh
 - confidence: cited
   path: tools/slow.d/20-conform-regenerate.sh
-revision: 14
+revision: 15
 ---
 ## Epic
 
 Decomposes `epic:walking-skeleton`, outcome 7. Depends on `story:skeleton-controllers`,
-`story:skeleton-node-join-session` and `story:skeleton-node-run-assignment`, the last stories that
+`story:skeleton-node-join-session`, `story:skeleton-node-run-assignment` and `story:skeleton-end-to-end`
+(which adds `RecordBackendNotReady` and the hand-run `edge-backend-restarting`), the last stories that
 implement obligations of the path, so the held counts do not move under later stories of this epic.
 Blocked by no ESS gap of the Rust target: the suite is synthesized from the unmodified `ess/`. G5
 applies (below).

@@ -2862,3 +2862,166 @@ mod definitions {
         }
     }
 }
+
+/// The walking skeleton end to end (`story:skeleton-end-to-end`, `docs/implementation.md`
+/// § Walking skeleton): one control host and one `weft-agent` beside the substrate-daemon of the
+/// test run; the operator, tenant and workload steps of `sim/experiments/full-setup.yaml` in the
+/// default cluster over HTTP; the controllers and the hand-run bindings of the control host take
+/// the service's replica to a placed, assigned instance, which the agent starts confined and
+/// records running. The processes are started once, for the one test of this module.
+mod skeleton {
+    use std::time::{Duration, Instant};
+
+    use serde_json::{json, Value};
+    use weft_client::{Client, Expect};
+    use weft_testkit::{steps, ControlHost, NodeAgent};
+
+    /// How long the path may take from its first command to the instance reading `Running`.
+    const RUN_LIMIT: Duration = Duration::from_secs(30);
+
+    /// The commands of the path that are sent as requests: the operator's, the node agent's (its
+    /// `hello` is `OpenNodeSession` as the ControlPlane), the tenant's, the controllers' and the
+    /// node agent's two records of its instance.
+    const REQUESTS: &[&str] = &[
+        "weft.infrastructure.CreateCloud",
+        "weft.infrastructure.DeclareZone",
+        "weft.infrastructure.DefinePriorityClass",
+        "weft.workloads.RegisterRuntime",
+        "weft.infrastructure.CreateNodePool",
+        "weft.infrastructure.ProvisionPoolNode",
+        "weft.cluster.CreateDefaultCluster",
+        "weft.accounts.CreateTenant",
+        "weft.accounts.GrantTopQuota",
+        "weft.infrastructure.JoinNode",
+        "weft.infrastructure.RecordNodeObservation",
+        "weft.nodes.OpenNodeSession",
+        "weft.accounts.CreateAccount",
+        "weft.formations.CreateFormation",
+        "weft.formations.AddComponent",
+        "weft.formations.CommitRevision",
+        "weft.formations.CreateEnvironment",
+        "weft.artifacts.RegisterArtifact",
+        "weft.workloads.DefineWorkload",
+        "weft.workloads.DefineService",
+        "weft.workloads.RequestReplica",
+        "weft.scheduling.PlaceInstance",
+        "weft.workloads.RecordArtifactVerified",
+        "weft.workloads.RecordInstanceRunning",
+    ];
+
+    /// The hand-run bindings of the path whose command takes effect.
+    const APPLIED: &[&str] = &[
+        "r1-create-replica",
+        "r1-submit-scheduling-request",
+        "r4-bind-placement",
+        "r4-assign",
+        "r4-schedule-instance",
+        "r4-record-placement-assigned",
+        "edge-backend-ready",
+    ];
+
+    /// The row of `weft.workloads.Instances` of the service `service_id`, once there is one.
+    fn instance_of(client: &Client, service_id: &str) -> Option<Value> {
+        let answer = client.view("weft.workloads.Instances", &[]).ok_body(200);
+        answer["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["service_id"] == json!(service_id))
+            .cloned()
+    }
+
+    /// Statements 1 to 7 of the story's acceptance.
+    #[test]
+    fn place_instance_leads_to_a_confined_snippet_that_runs_and_is_recorded_running() {
+        let host = ControlHost::start();
+        let client = host.client();
+        let before_seq = host.last_seq();
+
+        let first_command = Instant::now();
+        let path = steps::run_path(&client);
+        let mut agent = NodeAgent::start(&host, &path.node.node_id, &path.node.join_token);
+        let ids = steps::run_definitions(&client, &path);
+
+        // 1. Within 30 s of the first command the service's instance reads Running.
+        let instance_id = loop {
+            let row = instance_of(&client, &ids.service_id);
+            if let Some(row) = row.as_ref().filter(|row| row["state"] == json!("Running")) {
+                break row["instance_id"]
+                    .as_str()
+                    .expect("an instance_id")
+                    .to_owned();
+            }
+            assert!(
+                first_command.elapsed() < RUN_LIMIT,
+                "the service's instance does not read Running {RUN_LIMIT:?} after the first \
+                 command: {row:?}; agent report: {:?}; log: {:?}",
+                agent.report(),
+                host.log_after(before_seq)
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+
+        // 2. The report file holds the exit line of its process.
+        let exit = json!({"instance_id": instance_id, "exit_code": 0, "stdout": "weft\n"});
+        agent.wait_for(RUN_LIMIT, |lines| lines.contains(&exit));
+
+        let log = host.log_after(before_seq);
+        let requests = |operation: &str| -> Vec<&Value> {
+            log.iter()
+                .filter(|line| line["kind"] == "request" && line["operation"] == operation)
+                .collect()
+        };
+        let status = |line: &Value| line["status"].as_u64().expect("a status");
+
+        // 3. A request line with a 2xx status for each command of the path sent as a request.
+        for operation in REQUESTS {
+            assert!(
+                requests(operation)
+                    .iter()
+                    .any(|line| (200..300).contains(&status(line))),
+                "no 2xx request line of {operation}: {:?}; log: {log:?}",
+                requests(operation)
+            );
+        }
+
+        // 4. No request line with status 501.
+        let unmet: Vec<&Value> = log
+            .iter()
+            .filter(|line| line["kind"] == "request" && line["status"] == json!(501))
+            .collect();
+        assert!(unmet.is_empty(), "request lines answered 501: {unmet:?}");
+
+        let bindings = |id: &str| -> Vec<&Value> {
+            log.iter()
+                .filter(|line| line["kind"] == "binding" && line["binding"] == id)
+                .collect()
+        };
+        // 5. A binding line `applied` for each binding of the path whose command takes effect.
+        for id in APPLIED {
+            assert!(
+                bindings(id).iter().any(|line| line["result"] == "applied"),
+                "no applied line of {id}: {:?}; log: {log:?}",
+                bindings(id)
+            );
+        }
+
+        // 6. `edge-backend-restore` refused `not-out-of-traffic`, dropped.
+        assert!(
+            bindings("edge-backend-restore")
+                .iter()
+                .any(|line| line["refusal"] == "not-out-of-traffic" && line["result"] == "dropped"),
+            "{:?}; log: {log:?}",
+            bindings("edge-backend-restore")
+        );
+
+        // 7. `edge-backend-restarting` refused `not-ready`, dropped.
+        assert!(
+            bindings("edge-backend-restarting")
+                .iter()
+                .any(|line| line["refusal"] == "not-ready" && line["result"] == "dropped"),
+            "{:?}; log: {log:?}",
+            bindings("edge-backend-restarting")
+        );
+    }
+}

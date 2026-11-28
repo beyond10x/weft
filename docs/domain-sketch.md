@@ -758,3 +758,16 @@ cloudspec specification; the enterprise multi-tenant cloud of this sketch is its
   `Translation`, `CoverageEntry`, `SourceKind`) and `RegisterTranslator`, `RetireTranslator`
   (`ess/9-actors/actors.yaml:100-101`). Their removal, or their reduction to a record of
   cloudspec's translation, is a later specification change (`epic:agent-workloads`).
+
+## Run-time records stay in weft (D7 A, 2026-11-28)
+
+The owner picked D7 A (relayed by the host operator, 2026-11-28 before 05:00 CET), after a
+boundary review of three reviewers: cloudspec holds the design-time pieces (blocks, contracts,
+needs, the binding format, static admission, the reference in-memory runtime); weft keeps its
+run-time records: `Instance`, `PlacementDecision`, `SecretDelivery`, `Release` and `ReleaseStep`,
+`Drift`, `Alert`, `Engine`, `OfferingPlan`, the actors `Scheduler`, `NodeAgent` and
+`ControlPlane`, its engines, the bound configuration and run-time admission. Entities whose side
+is not settled yet (`Invocation`, `Session`, `Snapshot`, `Plan`, `Translation`,
+`ServiceInstance` and others) stay in cloudspec for now, listed as open in cloudspec's
+`docs/boundary.md`. weft's `ess/` takes the design-time blocks from a vendored cloudspec at a
+pinned commit (cloudspec D2 A, `scripts/vendor.sh`) once cloudspec sends the commit.

@@ -3363,3 +3363,192 @@ mod adversary_placement {
         assert_eq!(outcome(&r, input(&r, IsolationLevel::MicroVm)), "placed");
     }
 }
+
+/// Adversary pass on `story:skeleton-end-to-end`: `weft.edge.RecordBackendNotReady` and the
+/// hand-run binding `edge-backend-restarting` on an instance whose backend is in traffic
+/// (`ess/5-runtime/edge.yaml` `taken-out`, `ess/components.yaml` `edge-backend-restarting`),
+/// which the end-to-end test never reaches: on a first start no backend exists.
+mod adversary_edge {
+    use serde_json::{json, Value};
+    use weft_impl::bindings::{edge_backend_restarting, Answer, Runner};
+    use weft_impl::context::mint;
+    use weft_impl::log::BindingResult;
+    use weft_system::SystemEvent;
+    use weft_types::behaviour::{InstanceStorage, RouteBackendStorage};
+    use weft_types::edge::{BackendSetChanged, RouteBackendState};
+    use weft_types::primitives::Uuid;
+    use weft_types::shared::{InstanceId, WorkloadId};
+    use weft_types::workloads::{InstanceHealthStarting, InstanceReady};
+
+    use super::world::{binding_lines, World};
+
+    /// The world after one tick, its instance's backend added and `Ready`.
+    struct InTraffic {
+        w: World,
+        instance: InstanceId,
+        workload: WorkloadId,
+    }
+
+    impl InTraffic {
+        fn new() -> Self {
+            let w = World::new();
+            w.process.host().tick();
+            let instances = InstanceStorage::list(&w.ports());
+            assert_eq!(instances.len(), 1, "{instances:?}");
+            let instance = instances[0].data.instance_id.clone();
+            let workload = instances[0].data.workload_id.clone();
+            let this = Self {
+                w,
+                instance,
+                workload,
+            };
+            let lines = this.replay(this.ready(), "edge-backend-ready");
+            assert_eq!(lines, [(Value::Null, json!("applied"))], "positive control");
+            assert_eq!(this.backends(), [RouteBackendState::Ready]);
+            this
+        }
+
+        fn starting(&self) -> SystemEvent {
+            SystemEvent::WorkloadsInstanceHealthStarting(InstanceHealthStarting {
+                instance_id: self.instance.clone(),
+                workload_id: self.workload.clone(),
+            })
+        }
+
+        fn ready(&self) -> SystemEvent {
+            SystemEvent::WorkloadsInstanceReady(InstanceReady {
+                instance_id: self.instance.clone(),
+                workload_id: self.workload.clone(),
+            })
+        }
+
+        /// The states of the instance's backends.
+        fn backends(&self) -> Vec<RouteBackendState> {
+            RouteBackendStorage::list(&self.w.ports())
+                .into_iter()
+                .filter(|backend| backend.data.instance_id == self.instance)
+                .map(|backend| backend.state)
+                .collect()
+        }
+
+        /// Replays `event` on the host: the (refusal, result) of each line of `binding`.
+        fn replay(&self, event: SystemEvent, binding: &str) -> Vec<(Value, Value)> {
+            self.replay_lines(event, binding).0
+        }
+
+        /// As [`InTraffic::replay`], with the names of the event lines after it.
+        fn replay_lines(
+            &self,
+            event: SystemEvent,
+            binding: &str,
+        ) -> (Vec<(Value, Value)>, Vec<Value>) {
+            let seq = self.w.process.last_seq();
+            self.w.process.host().replay(vec![event]);
+            let lines = self.w.process.log_after(seq);
+            let answers = binding_lines(&lines, binding)
+                .iter()
+                .map(|line| (line["refusal"].clone(), line["result"].clone()))
+                .collect();
+            let events = lines
+                .iter()
+                .filter(|line| line["kind"] == json!("event"))
+                .map(|line| line["name"].clone())
+                .collect();
+            (answers, events)
+        }
+    }
+
+    /// A restart of an instance in traffic (`RecordProcessRestarted` `restarted` publishes
+    /// `InstanceHealthStarting`): `edge-backend-restarting` applies, the backend reads `NotReady`
+    /// and `BackendSetChanged` is logged; a repeated delivery is `not-ready`, dropped; the next
+    /// `InstanceReady` is `known` for `edge-backend-ready` and puts the backend back through
+    /// `edge-backend-restore`.
+    #[test]
+    fn a_restart_takes_a_ready_backend_out_of_traffic_once_and_readiness_puts_it_back() {
+        let t = InTraffic::new();
+
+        let (restarting, events) = t.replay_lines(t.starting(), "edge-backend-restarting");
+        assert_eq!(restarting, [(Value::Null, json!("applied"))]);
+        assert_eq!(events, [json!("weft.edge.BackendSetChanged")]);
+        assert_eq!(t.backends(), [RouteBackendState::NotReady]);
+
+        let (again, events) = t.replay_lines(t.starting(), "edge-backend-restarting");
+        assert_eq!(again, [(json!("not-ready"), json!("dropped"))]);
+        assert_eq!(events, Vec::<Value>::new());
+        assert_eq!(t.backends(), [RouteBackendState::NotReady]);
+
+        assert_eq!(
+            t.replay(t.ready(), "edge-backend-ready"),
+            [(json!("known"), json!("dropped"))]
+        );
+        assert_eq!(t.backends(), [RouteBackendState::Ready]);
+        assert_eq!(
+            t.replay(t.ready(), "edge-backend-restore"),
+            [(json!("not-out-of-traffic"), json!("dropped"))],
+            "a second readiness finds the backend in traffic already"
+        );
+    }
+
+    /// The generated System delivers `InstanceHealthStarting` to no binding of its own (it is
+    /// removed from synthesis): a redelivery leaves the backend `Ready`. The runner's delivery of
+    /// the same event takes it out with `BackendSetChanged { ready: false }` naming the backend.
+    #[test]
+    fn only_the_runner_takes_a_backend_out_and_its_event_reads_ready_false() {
+        let t = InTraffic::new();
+        let ports = t.w.ports();
+        let backend_id = RouteBackendStorage::list(&ports)
+            .into_iter()
+            .find(|backend| backend.data.instance_id == t.instance)
+            .expect("the backend")
+            .data
+            .backend_id;
+        let mut system = weft_impl::system(&ports);
+
+        let _ = system.redeliver(&t.starting());
+        assert_eq!(
+            t.backends(),
+            [RouteBackendState::Ready],
+            "a generated binding of InstanceHealthStarting took the backend out"
+        );
+
+        let runner = Runner::open(&ports);
+        let answers = runner.deliver(&mut system, vec![t.starting()]);
+        assert_eq!(
+            answers,
+            [Answer {
+                binding: "edge-backend-restarting",
+                refusal: None,
+                result: BindingResult::Applied,
+                attempt: 1,
+                events: vec![SystemEvent::EdgeBackendSetChanged(BackendSetChanged {
+                    backend_id,
+                    instance_id: t.instance.clone(),
+                    workload_id: t.workload.clone(),
+                    ready: false,
+                })],
+            }]
+        );
+        assert_eq!(runner.held(), 0);
+        assert_eq!(t.backends(), [RouteBackendState::NotReady]);
+    }
+
+    /// The held form of `InstanceHealthStarting` reads back as the event, and another event has
+    /// none.
+    #[test]
+    fn the_held_form_of_instance_health_starting_reads_back() {
+        let instance_id = InstanceId(Uuid(mint()));
+        let workload_id = WorkloadId(Uuid(mint()));
+        let starting = SystemEvent::WorkloadsInstanceHealthStarting(InstanceHealthStarting {
+            instance_id: instance_id.clone(),
+            workload_id: workload_id.clone(),
+        });
+        let ready = SystemEvent::WorkloadsInstanceReady(InstanceReady {
+            instance_id,
+            workload_id,
+        });
+        let entry = &edge_backend_restarting::ENTRY;
+        let held = (entry.encode)(&starting).expect("a held form");
+        assert_eq!((entry.decode)(&held), Ok(starting));
+        assert_eq!((entry.encode)(&ready), None);
+    }
+}
