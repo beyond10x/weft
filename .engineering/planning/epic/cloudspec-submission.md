@@ -2,12 +2,15 @@
 format: aep.planning-md/3
 id: epic:cloudspec-submission
 kind: epic
-status: draft
+status: active
 title: weft runs a cloudspec architecture submitted as cloudspec-weft-submission/1
 relations:
 - serves: vision:weft
 - depends_on: epic:cloud-blocks
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T11:12:14Z", actor: "human:operator", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-28T11:12:19Z", actor: "human:operator", revision: 3}
 ---
 ## Why
 

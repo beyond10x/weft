@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-reader
 kind: story
-status: draft
+status: active
 title: 'weft reads a cloudspec-weft-submission/1 offline: format, both member digests and the binding, checked on cloudspec''s three goldens'
 relations:
 - decomposes: epic:cloudspec-submission
@@ -16,7 +16,10 @@ scope:
   path: tests/fixtures/cloudspec
 - confidence: cited
   path: tools/slow.d/30-cloudspec-goldens.sh
-revision: 6
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T11:12:14Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T11:12:14Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

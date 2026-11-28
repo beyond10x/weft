@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T11:12:14Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-reader",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "plan-critic panel (scope, acceptance, design, parallel-safety) needs-revision findings applied in revision 6; owner's R85 = A, D-R85-1 = B"
+  }
+}
