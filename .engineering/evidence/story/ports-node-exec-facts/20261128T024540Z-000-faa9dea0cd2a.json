@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T02:45:40Z",
+  "actor": "human:operator",
+  "artifact": "story:ports-node-exec-facts",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#31 (integration, from weft#29), merged d1d5a4a",
+    "reference": "https://github.com/beyond10x/weft/pull/31"
+  }
+}
