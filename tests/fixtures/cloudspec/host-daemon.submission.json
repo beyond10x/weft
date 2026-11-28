@@ -1,0 +1,435 @@
+{
+  "architecture": {
+    "architecture": "host-daemon",
+    "format": "cloudspec-architecture/1",
+    "links": [
+      {
+        "carries": "job",
+        "from": "session",
+        "to": "pool-daemon",
+        "to_port": "jobs"
+      },
+      {
+        "carries": "job-slot",
+        "from": "build-job",
+        "to": "pool-daemon",
+        "to_port": "jobserver"
+      },
+      {
+        "carries": "view",
+        "from": "operator",
+        "protocol": "http",
+        "to": "pool-daemon",
+        "to_port": "web"
+      },
+      {
+        "carries": "job",
+        "from": "pool-daemon",
+        "protocol": "ssh",
+        "to": "node-daemon",
+        "to_port": "ssh"
+      },
+      {
+        "carries": "tree",
+        "data": "push",
+        "from": "pool-daemon",
+        "protocol": "ssh",
+        "to": "node-daemon",
+        "to_port": "ssh"
+      },
+      {
+        "carries": "products",
+        "data": "pull",
+        "from": "pool-daemon",
+        "protocol": "ssh",
+        "to": "node-daemon",
+        "to_port": "ssh"
+      }
+    ],
+    "parity": {
+      "facts": [
+        "rustc_commit",
+        "rust_targets",
+        "go_version",
+        "node_version"
+      ],
+      "scopes": [
+        "workstation",
+        "build-node"
+      ]
+    },
+    "parts": {
+      "build-job": {
+        "block": "workloads",
+        "command": [
+          "make",
+          "all"
+        ],
+        "in": "workstation",
+        "isolation": "none",
+        "kind": "process",
+        "package": {
+          "kind": "process"
+        },
+        "run_as": {
+          "user": "deployer"
+        },
+        "shape": "job",
+        "volumes": [
+          {
+            "host_path": "${home}/checkouts",
+            "mode": "rw",
+            "mount": "same"
+          }
+        ]
+      },
+      "build-node": {
+        "block": "scope",
+        "placement": {
+          "lease": {
+            "max_hours": 8
+          },
+          "pool": "build"
+        }
+      },
+      "node-daemon": {
+        "block": "workloads",
+        "claims": {
+          "cpu_millis": 32000,
+          "memory_mib": 65536
+        },
+        "command": [
+          "poold",
+          "node"
+        ],
+        "in": "build-node",
+        "isolation": "none",
+        "kind": "process",
+        "package": {
+          "kind": "process"
+        },
+        "ports": [
+          {
+            "bind": "all",
+            "name": "ssh",
+            "protocol": "ssh",
+            "tcp": 22
+          }
+        ],
+        "run_as": {
+          "user": "builder"
+        },
+        "shape": "daemon",
+        "volumes": [
+          {
+            "host_path": "/srv/pool/work",
+            "mode": "rw",
+            "mount": "same"
+          }
+        ]
+      },
+      "operator": {
+        "block": "actors",
+        "external": true,
+        "in": "workstation",
+        "kind": "human"
+      },
+      "pool-daemon": {
+        "block": "workloads",
+        "checks": {
+          "ready": {
+            "kind": "http",
+            "path": "/status",
+            "port": 9090
+          }
+        },
+        "claims": {
+          "cpu_millis": 500,
+          "memory_mib": 256
+        },
+        "command": [
+          "poold",
+          "serve",
+          "--web",
+          "127.0.0.1:9090"
+        ],
+        "environment": {
+          "POOLD_LOG": "info",
+          "POOLD_SLOTS": 8
+        },
+        "in": "workstation",
+        "isolation": "none",
+        "kind": "process",
+        "package": {
+          "kind": "process"
+        },
+        "ports": [
+          {
+            "activation": "none",
+            "name": "jobs",
+            "unix": "${runtime_dir}/poold/jobs.sock"
+          },
+          {
+            "activation": "none",
+            "fifo": "${home}/.local/state/poold/jobserver.fifo",
+            "name": "jobserver"
+          },
+          {
+            "bind": "loopback",
+            "name": "web",
+            "protocol": "http",
+            "tcp": 9090
+          }
+        ],
+        "run_as": {
+          "user": "deployer"
+        },
+        "shape": "daemon",
+        "upgrade": {
+          "reload": {
+            "signal": "HUP"
+          }
+        },
+        "volumes": [
+          {
+            "host_path": "${home}/checkouts",
+            "mode": "rw",
+            "mount": "same"
+          },
+          {
+            "host_path": "${home}/.local/state/poold",
+            "mode": "rw",
+            "mount": "same"
+          }
+        ]
+      },
+      "session": {
+        "block": "actors",
+        "external": true,
+        "in": "workstation",
+        "kind": "agent"
+      },
+      "workstation": {
+        "block": "scope",
+        "placement": {
+          "host": "workstation"
+        }
+      }
+    },
+    "summary": "A build-pool daemon on a workstation with a leased build node. The daemon is a host process run as the deploying user; it takes jobs from local clients on a unix socket in the deploying user's runtime directory, hands its jobs a jobserver FIFO under that user's home, both created by the daemon itself, serves a status page on loopback, reads the checkouts in that home at their own path, and pushes trees to the build node and pulls their products back over ssh. Work moves between the two scopes only while their toolchains match. Kubernetes holds none of its processes; generate kubernetes refuses each by name (fixtures/kubernetes/host-daemon). generate systemd writes the units of each scope (fixtures/systemd/host-daemon/<scope>)."
+  },
+  "binding": null,
+  "coverage": {
+    "format": "cloudspec-coverage/1",
+    "steps": [
+      {
+        "counts": {
+          "mapped": 4,
+          "mapped_with_loss": 0,
+          "refused": 28
+        },
+        "entries": [
+          {
+            "note": "a scope: the containment of its parts, nothing runs of it (workstation)",
+            "object": "parts.workstation",
+            "status": "mapped"
+          },
+          {
+            "note": "weft does not run this yet: a scope placed on a named host or a leased pool machine (workstation on host workstation)",
+            "object": "parts.workstation.placement",
+            "rule": "weft_placement_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "a scope: the containment of its parts, nothing runs of it (build-node)",
+            "object": "parts.build-node",
+            "status": "mapped"
+          },
+          {
+            "note": "weft does not run this yet: a scope placed on a named host or a leased pool machine (build-node on pool build)",
+            "object": "parts.build-node.placement",
+            "rule": "weft_placement_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a program run on its scope's host (pool-daemon, workload kind process, shape daemon)",
+            "object": "parts.pool-daemon",
+            "rule": "weft_process_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a unix socket or FIFO port on the host (jobs, unix ${runtime_dir}/poold/jobs.sock)",
+            "object": "parts.pool-daemon.ports[0]",
+            "rule": "weft_socket_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: the activation of a unix socket or FIFO port (jobs, activation none)",
+            "object": "parts.pool-daemon.ports[0].activation",
+            "rule": "weft_socket_activation_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a path in the deploying user's runtime directory or home (${runtime_dir}/poold/jobs.sock)",
+            "object": "parts.pool-daemon.ports[0].unix",
+            "rule": "weft_deployer_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a unix socket or FIFO port on the host (jobserver, fifo ${home}/.local/state/poold/jobserver.fifo)",
+            "object": "parts.pool-daemon.ports[1]",
+            "rule": "weft_socket_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: the activation of a unix socket or FIFO port (jobserver, activation none)",
+            "object": "parts.pool-daemon.ports[1].activation",
+            "rule": "weft_socket_activation_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a path in the deploying user's runtime directory or home (${home}/.local/state/poold/jobserver.fifo)",
+            "object": "parts.pool-daemon.ports[1].fifo",
+            "rule": "weft_deployer_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an inbound endpoint (web, port 9090)",
+            "object": "parts.pool-daemon.ports[2]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a host directory mounted into a workload (${home}/checkouts)",
+            "object": "parts.pool-daemon.volumes[0]",
+            "rule": "weft_host_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a path in the deploying user's runtime directory or home (${home}/checkouts)",
+            "object": "parts.pool-daemon.volumes[0].host_path",
+            "rule": "weft_deployer_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a host directory mounted into a workload (${home}/.local/state/poold)",
+            "object": "parts.pool-daemon.volumes[1]",
+            "rule": "weft_host_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a path in the deploying user's runtime directory or home (${home}/.local/state/poold)",
+            "object": "parts.pool-daemon.volumes[1].host_path",
+            "rule": "weft_deployer_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: the environment of a host process (pool-daemon)",
+            "object": "parts.pool-daemon.environment",
+            "rule": "weft_process_environment_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a program run on its scope's host (build-job, workload kind process, shape job)",
+            "object": "parts.build-job",
+            "rule": "weft_process_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a host directory mounted into a workload (${home}/checkouts)",
+            "object": "parts.build-job.volumes[0]",
+            "rule": "weft_host_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a path in the deploying user's runtime directory or home (${home}/checkouts)",
+            "object": "parts.build-job.volumes[0].host_path",
+            "rule": "weft_deployer_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a program run on its scope's host (node-daemon, workload kind process, shape daemon)",
+            "object": "parts.node-daemon",
+            "rule": "weft_process_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: an inbound endpoint (ssh, port 22)",
+            "object": "parts.node-daemon.ports[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a host directory mounted into a workload (/srv/pool/work)",
+            "object": "parts.node-daemon.volumes[0]",
+            "rule": "weft_host_path_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "an external part: never deployed (session)",
+            "object": "parts.session",
+            "status": "mapped"
+          },
+          {
+            "note": "an external part: never deployed (operator)",
+            "object": "parts.operator",
+            "status": "mapped"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (session->pool-daemon:job)",
+            "object": "links[0]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (build-job->pool-daemon:job-slot)",
+            "object": "links[1]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (operator->pool-daemon:view)",
+            "object": "links[2]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a network path between parts (pool-daemon->node-daemon:job)",
+            "object": "links[3]",
+            "rule": "weft_network_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a data set moved over a link (pool-daemon->node-daemon:tree, data push)",
+            "object": "links[4]",
+            "rule": "weft_data_link_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a data set moved over a link (pool-daemon->node-daemon:products, data pull)",
+            "object": "links[5]",
+            "rule": "weft_data_link_unsupported",
+            "status": "refused"
+          },
+          {
+            "note": "weft does not run this yet: a parity of facts between scopes (workstation, build-node)",
+            "object": "parity",
+            "rule": "weft_parity_unsupported",
+            "status": "refused"
+          }
+        ],
+        "source": {
+          "digest": "sha256:df3a9619a26c1258933cfa107b15aa88e137c5e59051d18817721f540cb99eac",
+          "format": "cloudspec-architecture/1"
+        },
+        "status": "refused",
+        "step": "generate weft"
+      }
+    ]
+  },
+  "digests": {
+    "architecture": "sha256:df3a9619a26c1258933cfa107b15aa88e137c5e59051d18817721f540cb99eac",
+    "binding": "sha256:74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+  },
+  "format": "cloudspec-weft-submission/1"
+}
