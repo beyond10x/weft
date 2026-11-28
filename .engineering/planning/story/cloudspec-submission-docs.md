@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-docs
 kind: story
-status: draft
+status: active
 title: One docs page says how a cloudspec architecture reaches weft, linked from the deploy page
 relations:
 - decomposes: epic:cloudspec-submission
@@ -15,7 +15,10 @@ scope:
   path: website/docs/run/deploy-a-workload.md
 - confidence: cited
   path: website/sidebars.ts
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T15:29:47Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T15:29:47Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -34,8 +37,13 @@ weft, on one page linked from the deploy page. The site has no page named deploy
    heading `## What weft refuses`, the name first in backticks (`` | `NotASubmission` | … | ``);
    the three goldens in `tests/fixtures/cloudspec/`; the one workload kind weft runs (`snippet`) and
    that every other construct arrives refused by name in the coverage.
-2. Submitting and running a submission is not built: that section carries a `:::caution[Planned]`
-   banner and names no command that does not exist.
+2. How a submission runs, as built (weft#38): `POST /cloudspec/submissions` with the file
+   (SubmitDeploymentSource, kind Cloudspec), `PlanFromSource`, `RecordPlanResult`, `POST
+   /cloudspec/plans/<plan_id>/apply` (one Job workload per snippet part), and the Job running to
+   `Succeeded`. What is not built (process parts as supervised Daemon workloads, epic
+   slot-node-daemon) carries a `:::caution[Planned]` banner; the page names no command that does
+   not exist. (Amended 2026-11-28: the first text said submitting and running was not built; the
+   epic built it.)
 3. `deploy-a-workload.md` links the page, and `website/sidebars.ts` lists `run/cloudspec-submission`
    in the category labelled `Run weft (Planned)`, after `run/deploy-a-workload`.
 

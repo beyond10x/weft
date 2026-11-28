@@ -3,16 +3,25 @@
 //! `{"strategy": "<RolloutStrategy>"}`, sent by the caller as every request is
 //! ([`weft_bin::authenticate`]).
 //!
-//! The control host defines one workload per part with a fixed profile per part kind, here the
-//! snippet's ([`SNIPPET`]). In one unit ([`Host::unit`]):
+//! The control host defines one workload per part with a fixed profile per part kind: the
+//! snippet's ([`SNIPPET`]) and the host process's ([`PROCESS`], `story:slot-node-process`: shape
+//! `Daemon`, isolation `None`, and the part's `run_as`, `prestart`, `stop` and `restart`). In one
+//! unit ([`Host::unit`]):
 //!
 //! - the plan must name a source, else `422` `{"refusal": "PlanNotFromCloudspec"}` and no
 //!   command runs (a plan the caller's scope does not hold is left to `ApplyPlan`'s refusal);
 //! - the file kept under the source's digest ([`weft_impl::documents`]) is read with
 //!   [`Submission::read`];
+//! - the placement of each process part's scope and of its `per` scope is resolved
+//!   (`story:slot-node-pool-placement`, [`selectors`]): a pool by name (not `Deleted`), a host by
+//!   node name ([`weft_impl::placement::node_name`], not `Gone`). A name that matches none is
+//!   answered `422` `{"refusal": "UnknownPlacementPool" | "UnknownPlacementHost", "part",
+//!   "scope", "name"}`, a `per` scope without a placement `422` `{"refusal": "UnplacedPerScope",
+//!   ...}`, and no command runs;
 //! - `weft.deployments.ApplyPlan`, as the caller;
-//! - for each part with `block: workloads` and `kind: snippet` whose `parts.<key>` the coverage
-//!   does not mark `refused`, in key order, as the caller: `weft.architecture.AddComponent` named
+//! - for each part with `block: workloads` and `kind: snippet` or `kind: process` whose
+//!   `parts.<key>` the coverage does not mark `refused`, in key order, as the caller:
+//!   `weft.architecture.AddComponent` named
 //!   after the key (a component of the formation with that name is reused),
 //!   `weft.workloads.DefineWorkload` with the profile, `weft.architecture.AssignWorkload` to the
 //!   plan's revision and environment; then, as `weft.actors.ReleaseController` of the plan's
@@ -24,20 +33,23 @@
 //! Otherwise the route answers `202` `{"outcome": "applied", "release_id", "parts": [...]}`.
 //! Steps after position 1 stay `Pending`: nothing completes a rollout step of a Job yet.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{json, Value};
 use weft_bin::{Host, Unit};
-use weft_cloudspec::Submission;
+use weft_cloudspec::{Placement, Submission};
 use weft_impl::context::{mint, CallerAttributes};
+use weft_impl::placement::{self, Nodes};
 use weft_impl::Ports;
 use weft_server::http::{self, Request, Response};
 use weft_server::{weft_api, weft_control};
 use weft_types::actor::{Actor, Caller};
 use weft_types::behaviour::{
-    ComponentStorage, DeploymentSourceStorage, PlanStorage, RuntimeStorage,
+    ComponentStorage, DeploymentSourceStorage, NodePoolStorage, NodeStorage, PlanStorage,
+    RuntimeStorage,
 };
 use weft_types::deployments::PlanSnapshot;
+use weft_types::infrastructure::{NodePoolState, NodeState};
 use weft_types::primitives::Uuid;
 use weft_types::shared::PlanId;
 use weft_types::workloads::RuntimeState;
@@ -60,22 +72,33 @@ pub struct Profile {
     pub isolation: &'static str,
     /// The cpu claimed.
     pub cpu: i64,
-    /// `weft.workloads.ShapeKind`, `Job`, with `JobSettings`:
-    pub shape: &'static str,
-    /// `parallelism`,
-    pub parallelism: i64,
-    /// `gang`,
-    pub gang: bool,
-    /// `max_retries`,
-    pub max_retries: i64,
-    /// `backoff`.
-    pub backoff: &'static str,
-    /// `weft.workloads.RestartMode`.
+    /// `weft.workloads.ShapeKind` with its settings.
+    pub shape: Shape,
+    /// `weft.workloads.RestartMode` of the restart policy, when the part names no `restart`.
     pub restart_mode: &'static str,
     /// `weft.shared.PriorityClassName`.
     pub priority: &'static str,
     /// The name of the one `Main` process, which runs the part's `command` and `environment`.
     pub process: &'static str,
+    /// A host process: the part's `run_as`, `prestart`, `stop` and `restart` are the workload's,
+    /// and its `restart` sets the restart policy ([`restart_policy`]).
+    pub host_process: bool,
+}
+
+/// The shape of a profile's workloads (`weft.workloads.ShapeKind`) and its settings
+/// (`weft.workloads.ShapeSettings`).
+pub enum Shape {
+    /// `Job`, with `JobSettings`: `parallelism`, `gang`, `max_retries`, `backoff`.
+    Job {
+        parallelism: i64,
+        gang: bool,
+        max_retries: i64,
+        backoff: &'static str,
+    },
+    /// `Daemon`, with `DaemonSettings` whose `node_selector` records the placement of the part's
+    /// scope and `per` scope ([`weft_impl::placement`], empty for a scope without one): the level
+    /// step of one instance per node makes its instances (`story:slot-node-pool-placement`).
+    Daemon,
 }
 
 /// The snippet profile (D-C1 = A).
@@ -86,15 +109,37 @@ pub const SNIPPET: Profile = Profile {
     package_kind: "Snippet",
     isolation: "Container",
     cpu: 1,
-    shape: "Job",
-    parallelism: 1,
-    gang: false,
-    max_retries: 0,
-    backoff: "PT1S",
+    shape: Shape::Job {
+        parallelism: 1,
+        gang: false,
+        max_retries: 0,
+        backoff: "PT1S",
+    },
     restart_mode: "Never",
     priority: "standard",
     process: "main",
+    host_process: false,
 };
+
+/// The process profile (`story:slot-node-process`): a program run on its node's host as a
+/// supervised `Daemon`, with no sandbox (isolation `None`, which `DefineWorkload` takes only with
+/// a named host user, `run_as`), on the runtime `process`.
+pub const PROCESS: Profile = Profile {
+    part_kind: "process",
+    runtime: "process",
+    artifact_digest: "sha256:weft-skeleton-process",
+    package_kind: "Process",
+    isolation: "None",
+    cpu: 1,
+    shape: Shape::Daemon,
+    restart_mode: "Never",
+    priority: "standard",
+    process: "main",
+    host_process: true,
+};
+
+/// The profiles of the part kinds an apply defines workloads of.
+const PROFILES: [&Profile; 2] = [&SNIPPET, &PROCESS];
 
 /// The plan an apply path names: `Some` for `/cloudspec/plans/<plan_id>/apply`.
 pub fn plan_of(path: &str) -> Option<&str> {
@@ -143,6 +188,10 @@ pub fn apply(
             Some(plan) => Some(source_file(ports, plan)?),
             None => None,
         };
+        let selectors = match &submission {
+            Some(submission) => selectors(ports, submission)?,
+            None => BTreeMap::new(),
+        };
         let mut sender = Sender {
             unit,
             ports,
@@ -161,29 +210,38 @@ pub fn apply(
             ));
         };
         let release_id = published(&applied, "release_id");
-        roll_out(&mut sender, &plan, &submission, &release_id)
+        roll_out(&mut sender, &plan, &submission, &selectors, &release_id)
     })
 }
 
-/// Defines, assigns and steps every snippet part of `submission`, then starts the release and
-/// its first step: the route's answer, or the refusal of the command that refused.
+/// Defines, assigns and steps every snippet and process part of `submission` (a process part's
+/// `node_selector` from `selectors`), then starts the release and its first step: the route's
+/// answer, or the refusal of the command that refused.
 fn roll_out(
     sender: &mut Sender<'_, '_, '_>,
     plan: &PlanSnapshot,
     submission: &Submission,
+    selectors: &BTreeMap<String, BTreeMap<String, String>>,
     release_id: &str,
 ) -> Result<Response, Response> {
     let plan = &plan.data;
     let scope_id = &plan.scope_id.0 .0;
     let formation_id = &plan.formation_id.0 .0;
     let environment_id = &plan.environment_id.0 .0;
-    let runtime_id = runtime(sender.ports, SNIPPET.runtime);
     let controller = CallerAttributes {
         scope_id: Some(scope_id.clone()),
         ..CallerAttributes::default()
     };
     let mut rolled = Vec::new();
-    for (position, (key, part)) in (1_i64..).zip(parts(submission, &SNIPPET)) {
+    let mut profiled: Vec<(String, Value, &Profile, String)> = Vec::new();
+    for profile in PROFILES {
+        let runtime_id = runtime(sender.ports, profile.runtime);
+        for (key, part) in parts(submission, profile) {
+            profiled.push((key, part, profile, runtime_id.clone()));
+        }
+    }
+    profiled.sort_by(|a, b| a.0.cmp(&b.0));
+    for (position, (key, part, profile, runtime_id)) in (1_i64..).zip(profiled) {
         let component_id = match component(sender.ports, formation_id, &key) {
             Some(id) => id,
             None => published(
@@ -198,7 +256,15 @@ fn roll_out(
         let workload_id = published(
             &sender.send(
                 "weft.workloads.DefineWorkload",
-                define_workload(&SNIPPET, scope_id, &identity, &key, &runtime_id, &part),
+                define_workload(
+                    profile,
+                    scope_id,
+                    &identity,
+                    &key,
+                    &runtime_id,
+                    &part,
+                    selectors.get(&key),
+                ),
             )?,
             "workload_id",
         );
@@ -371,6 +437,70 @@ fn parts(submission: &Submission, profile: &Profile) -> Vec<(String, Value)> {
     parts
 }
 
+/// The `node_selector` of each process part of `submission` (by key, refused parts left out):
+/// the resolved placement of its scope (`in`) and of its `per` scope ([`placement::selector`]),
+/// empty for a part whose scope has no placement and no `per`. The first part, in key order,
+/// whose placement names no pool or node, or whose `per` scope has no placement, is the route's
+/// `422` refusal ([`refused`]).
+fn selectors(
+    ports: &Ports,
+    submission: &Submission,
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, Response> {
+    let mut selectors = BTreeMap::new();
+    for (key, part) in parts(submission, &PROCESS) {
+        let scope = |field: &str| part.get(field).and_then(Value::as_str);
+        let own = match scope("in") {
+            Some(name) => submission
+                .placement(name)
+                .map(|placed| resolve(ports, &key, name, &placed))
+                .transpose()?,
+            None => None,
+        };
+        let per = match scope("per") {
+            Some(name) => {
+                let placed = submission
+                    .placement(name)
+                    .ok_or_else(|| refused("UnplacedPerScope", &key, name, None))?;
+                Some(resolve(ports, &key, name, &placed)?)
+            }
+            None => None,
+        };
+        selectors.insert(key, placement::selector(own.as_ref(), per.as_ref()));
+    }
+    Ok(selectors)
+}
+
+/// The nodes `placed` names for the scope `scope` of `part`: the pool of that name that is not
+/// `Deleted` (the least identity of several), or the node of that name that is not `Gone`.
+fn resolve(ports: &Ports, part: &str, scope: &str, placed: &Placement) -> Result<Nodes, Response> {
+    match placed {
+        Placement::Pool(name) => NodePoolStorage::list(ports)
+            .into_iter()
+            .filter(|row| row.state != NodePoolState::Deleted && &row.data.name == name)
+            .map(|row| row.data.node_pool_id)
+            .min_by(|a, b| a.0 .0.cmp(&b.0 .0))
+            .map(Nodes::Pool)
+            .ok_or_else(|| refused("UnknownPlacementPool", part, scope, Some(name))),
+        Placement::Host(name) => NodeStorage::list(ports)
+            .into_iter()
+            .filter(|row| row.state != NodeState::Gone)
+            .map(|row| row.data.node_id)
+            .find(|node| &placement::node_name(node) == name)
+            .map(Nodes::Host)
+            .ok_or_else(|| refused("UnknownPlacementHost", part, scope, Some(name))),
+    }
+}
+
+/// The route's `422` refusal `refusal` of the placement of `scope`, for the part `part`, naming
+/// `name`.
+fn refused(refusal: &str, part: &str, scope: &str, name: Option<&str>) -> Response {
+    Response::new(
+        422,
+        http::JSON,
+        json!({"refusal": refusal, "part": part, "scope": scope, "name": name}).to_string(),
+    )
+}
+
 /// The registered runtime named `name` (the least identity of several); a new identity, which
 /// names no runtime, when none is registered, so `DefineWorkload` answers `no-runtime`.
 fn runtime(ports: &Ports, name: &str) -> String {
@@ -390,7 +520,8 @@ fn component(ports: &Ports, formation_id: &str, name: &str) -> Option<String> {
         .map(|row| row.data.component_id.0 .0)
 }
 
-/// The input of `DefineWorkload` for the part `key` with `profile`.
+/// The input of `DefineWorkload` for the part `key` with `profile`; a `Daemon` takes `selector`
+/// as its `node_selector` (none: empty).
 fn define_workload(
     profile: &Profile,
     scope_id: &str,
@@ -398,8 +529,32 @@ fn define_workload(
     key: &str,
     runtime_id: &str,
     part: &Value,
+    selector: Option<&BTreeMap<String, String>>,
 ) -> Value {
-    json!({
+    let (shape, settings) = match profile.shape {
+        Shape::Job {
+            parallelism,
+            gang,
+            max_retries,
+            backoff,
+        } => (
+            "Job",
+            json!({
+                "shape": "job",
+                "value": {
+                    "parallelism": parallelism,
+                    "gang": gang,
+                    "max_retries": max_retries,
+                    "backoff": backoff,
+                },
+            }),
+        ),
+        Shape::Daemon => (
+            "Daemon",
+            json!({"shape": "daemon", "value": {"node_selector": selector.cloned().unwrap_or_default()}}),
+        ),
+    };
+    let mut input = json!({
         "scope_id": scope_id,
         "identity": identity,
         "component": key,
@@ -407,33 +562,134 @@ fn define_workload(
         "artifact_digest": profile.artifact_digest,
         "runtime_id": runtime_id,
         "isolation": profile.isolation,
-        "shape": profile.shape,
-        "settings": {
-            "shape": profile.shape.to_ascii_lowercase(),
-            "value": {
-                "parallelism": profile.parallelism,
-                "gang": profile.gang,
-                "max_retries": profile.max_retries,
-                "backoff": profile.backoff,
-            },
-        },
+        "shape": shape,
+        "settings": settings,
         "claims": [{"name": "cpu", "class": "cpu", "amount": profile.cpu, "selector": {}}],
         "processes": [{
             "name": profile.process,
             "role": "Main",
             "command": part.get("command").cloned().unwrap_or_else(|| json!([])),
-            "environment": part.get("environment").cloned().unwrap_or_else(|| json!({})),
+            "environment": environment(part.get("environment")),
             "checks": [],
         }],
-        "restart_policy": {
-            "mode": profile.restart_mode,
-            "backoff_initial_seconds": 1,
-            "backoff_max_seconds": 60,
-            "backoff_limit": 5,
-            "backoff_window_seconds": 600,
-        },
+        "restart_policy": restart_policy(profile, part),
         "priority": profile.priority,
+    });
+    if profile.host_process {
+        input["run_as"] = part.get("run_as").cloned().unwrap_or(Value::Null);
+        input["prestart"] = prestart(part.get("prestart"));
+        input["stop"] = stop(part.get("stop"));
+        input["restart"] = restart(part.get("restart"));
+    }
+    input
+}
+
+/// The part's `environment` as `weft.workloads.Process.environment` takes it: each value as its
+/// text, a number or a Boolean as JSON writes it (cloudspec writes `POOLD_SLOTS: 8`).
+fn environment(environment: Option<&Value>) -> Value {
+    let Some(Value::Object(variables)) = environment else {
+        return json!({});
+    };
+    variables
+        .iter()
+        .map(|(name, value)| {
+            let text = match value {
+                Value::String(text) => text.clone(),
+                other => other.to_string(),
+            };
+            (name.clone(), Value::String(text))
+        })
+        .collect::<serde_json::Map<_, _>>()
+        .into()
+}
+
+/// The restart policy (`weft.workloads.RestartPolicy`) of a part: the profile's mode, or for a
+/// host process the mode of its `restart.policy`, with its `delay` (whole seconds, at least 1) as
+/// the initial backoff, so the node's report of a restart after that delay lies within the
+/// policy (`weft.node.RestartProcess`, `backoff-out-of-range`).
+fn restart_policy(profile: &Profile, part: &Value) -> Value {
+    let restart = part.get("restart").filter(|_| profile.host_process);
+    let mode = restart
+        .and_then(|restart| restart.get("policy"))
+        .and_then(Value::as_str)
+        .map_or_else(|| profile.restart_mode.to_owned(), variant);
+    let initial = restart
+        .and_then(|restart| restart.get("delay"))
+        .and_then(Value::as_str)
+        .and_then(seconds)
+        .unwrap_or(1)
+        .max(1);
+    json!({
+        "mode": mode,
+        "backoff_initial_seconds": initial,
+        "backoff_max_seconds": initial.max(60),
+        "backoff_limit": 5,
+        "backoff_window_seconds": 600,
     })
+}
+
+/// A part's `prestart` as `weft.workloads.PrestartStep`s, in list order: each step's `command`
+/// and `privileged` unchanged.
+fn prestart(prestart: Option<&Value>) -> Value {
+    let Some(Value::Array(steps)) = prestart else {
+        return Value::Null;
+    };
+    steps
+        .iter()
+        .map(|step| json!({"command": step.get("command"), "privileged": step.get("privileged")}))
+        .collect()
+}
+
+/// A part's `stop` as `weft.workloads.Stop`: the `grace` unchanged, the `kill` scope by its
+/// variant name (`group` is `Group`).
+fn stop(stop: Option<&Value>) -> Value {
+    let Some(stop) = stop.filter(|stop| stop.is_object()) else {
+        return Value::Null;
+    };
+    json!({
+        "grace": stop.get("grace"),
+        "kill": stop.get("kill").and_then(Value::as_str).map(variant),
+    })
+}
+
+/// A part's `restart` as `weft.workloads.ProcessRestart`: the `policy` by its variant name
+/// (`always` is `Always`, `on-failure` is `OnFailure`), `delay` and `keep_down_on_exit`
+/// unchanged.
+fn restart(restart: Option<&Value>) -> Value {
+    let Some(restart) = restart.filter(|restart| restart.is_object()) else {
+        return Value::Null;
+    };
+    json!({
+        "policy": restart.get("policy").and_then(Value::as_str).map(variant),
+        "delay": restart.get("delay"),
+        "keep_down_on_exit": restart.get("keep_down_on_exit"),
+    })
+}
+
+/// The variant name of a cloudspec word: each word of `on-failure`, `on_failure` or `group`
+/// capitalized and joined (`OnFailure`, `Group`); a variant name stays as it is.
+fn variant(word: &str) -> String {
+    word.split(['-', '_'])
+        .map(|piece| {
+            let mut chars = piece.chars();
+            chars.next().map_or_else(String::new, |first| {
+                first.to_uppercase().chain(chars).collect()
+            })
+        })
+        .collect()
+}
+
+/// The seconds of a duration `<n>s`, `<n>m` or `<n>h` (`n` a whole number), as cloudspec writes
+/// `stop.grace` and `restart.delay`.
+fn seconds(duration: &str) -> Option<i64> {
+    let (number, scale) = if let Some(number) = duration.strip_suffix('s') {
+        (number, 1)
+    } else if let Some(number) = duration.strip_suffix('m') {
+        (number, 60)
+    } else {
+        (duration.strip_suffix('h')?, 3600)
+    };
+    number.parse::<i64>().ok()?.checked_mul(scale)
 }
 
 /// The text member `field` of the first event `answer` published (empty when absent: the

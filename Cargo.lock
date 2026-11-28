@@ -1512,15 +1512,7 @@ dependencies = [
  "weft-cloudspec",
  "weft-control",
  "weft-edge",
- "weft-node",
  "weft-system",
- "weft-types",
-]
-
-[[package]]
-name = "weft-node"
-version = "1.0.0"
-dependencies = [
  "weft-types",
 ]
 
@@ -1554,7 +1546,6 @@ dependencies = [
  "weft-api",
  "weft-control",
  "weft-edge",
- "weft-node",
  "weft-system",
  "weft-types",
 ]
@@ -1566,7 +1557,6 @@ dependencies = [
  "weft-api",
  "weft-control",
  "weft-edge",
- "weft-node",
  "weft-types",
 ]
 
@@ -1580,6 +1570,7 @@ dependencies = [
  "weft-agent",
  "weft-bin",
  "weft-client",
+ "weft-cloudspec",
  "weft-impl",
  "weft-platform",
  "weft-probe-api",

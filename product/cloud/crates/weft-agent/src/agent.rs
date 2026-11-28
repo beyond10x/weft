@@ -31,6 +31,7 @@ use weft_client::{Addresses, Answer, Client};
 use weft_platform::node::{Capacity, Exec, Isolation, NodeFacts, Workloads};
 
 use crate::follow::Follower;
+use crate::records::ControlRecords;
 use crate::report::Report;
 
 /// The node agent's actor.
@@ -128,7 +129,10 @@ pub fn run(
 
 /// As [`run`], with the `workloads` port when the node has one: the processes of a `Service`
 /// replica start through it (`story:workload-environment-and-args`, [`Follower::workloads`]),
-/// every other process through `exec`.
+/// and those of a process workload (`story:slot-node-process`), every other process through
+/// `exec`. The node's own records (`weft.node`: `StartProcess`, `RestartProcess` and
+/// `StopProcess` of a process workload's processes) go to the control host through
+/// [`ControlRecords`] ([`Follower::records`], `story:node-records-on-control-host`).
 ///
 /// # Errors
 ///
@@ -201,7 +205,8 @@ pub fn run_with(
         }
     }
     let report = Mutex::new(report);
-    let follower = Follower::new(&client, &options.node_id, exec, &report);
+    let records = ControlRecords::new(&client);
+    let follower = Follower::new(&client, &options.node_id, exec, &report).records(&records);
     match workloads {
         Some(workloads) => follower.workloads(workloads).follow(),
         None => follower.follow(),

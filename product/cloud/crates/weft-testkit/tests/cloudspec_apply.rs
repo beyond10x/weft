@@ -518,6 +518,140 @@ fn a_part_the_coverage_refuses_is_not_rolled_out() {
     );
 }
 
+/// `story:slot-node-process` outcome 1: the applied plan of a submission with one `kind: process`
+/// part defines one workload of package kind `Process`, shape `Daemon`, isolation `None`, run as
+/// the named user, on the runtime `process`, with one `Main` process of the part's `command` and
+/// `environment` (a number as its text) and the part's `prestart`, `stop` and `restart` as the
+/// part states them; its restart policy is the part's, with the delay as its initial backoff.
+#[test]
+fn applying_a_process_part_defines_a_daemon_workload_with_its_prestart_stop_and_restart() {
+    use weft_testkit::cloudspec::{self, ProcessWorld};
+    use weft_types::workloads::{
+        KillScope, PrestartStep, ProcessRestart, RunAs, ShapeSettings as Settings, Stop,
+    };
+
+    let mut host = ControlHost::start();
+    let client = host.client();
+    let world = ProcessWorld::new(&client);
+    let answer = world.apply(
+        &client,
+        &cloudspec::submission_with_part("daemon", &cloudspec::process_part()),
+    );
+    assert_eq!(answer.status, 202, "{}", answer.body);
+    assert_eq!(
+        answer.body["parts"][0]["part"],
+        json!("daemon"),
+        "{}",
+        answer.body
+    );
+
+    host.stop();
+    let ports = Ports::open(&host.state_path()).expect("the state file opens");
+    let workloads = WorkloadStorage::list(&ports);
+    assert_eq!(workloads.len(), 1, "{workloads:?}");
+    let workload = &workloads[0].data;
+    assert_eq!(workload.component.0, "daemon");
+    assert_eq!(workload.package_kind, PackageKind::Process);
+    assert_eq!(workload.shape, ShapeKind::Daemon);
+    assert!(
+        matches!(&workload.settings, Settings::Daemon(daemon) if daemon.node_selector.is_empty()),
+        "{:?}",
+        workload.settings
+    );
+    assert_eq!(workload.isolation, IsolationLevel::None);
+    assert_eq!(workload.runtime_id.0 .0, world.runtime_id);
+    assert_eq!(
+        workload.artifact_digest.0,
+        cloudspec::PROCESS_ARTIFACT_DIGEST
+    );
+    assert_eq!(
+        workload.run_as,
+        Some(RunAs {
+            user: "deployer".to_owned()
+        })
+    );
+    assert_eq!(workload.processes.len(), 1, "{:?}", workload.processes);
+    let process = &workload.processes[0];
+    assert_eq!(process.role, ProcessRole::Main);
+    assert_eq!(process.command, vec!["poold", "serve"]);
+    assert_eq!(
+        process.environment,
+        BTreeMap::from([
+            ("POOLD_LOG".to_owned(), "info".to_owned()),
+            ("POOLD_SLOTS".to_owned(), "8".to_owned()),
+        ])
+    );
+    assert_eq!(
+        workload.prestart,
+        Some(vec![PrestartStep {
+            command: vec!["mkdir".to_owned(), "-p".to_owned(), "/srv/pool".to_owned()],
+            privileged: Some(true),
+        }])
+    );
+    assert_eq!(
+        workload.stop,
+        Some(Stop {
+            grace: Some("2s".to_owned()),
+            kill: Some(KillScope::Group),
+        })
+    );
+    assert_eq!(
+        workload.restart,
+        Some(ProcessRestart {
+            policy: RestartMode::Always,
+            delay: Some("1s".to_owned()),
+            keep_down_on_exit: Some(vec![2]),
+        })
+    );
+    assert_eq!(workload.restart_policy.mode, RestartMode::Always);
+    assert_eq!(workload.restart_policy.backoff_initial_seconds, 1);
+}
+
+/// A process part with no `restart` is defined with the restart policy `Never` and no
+/// `restart`, `stop` or `prestart`; one without `run_as` is refused by `DefineWorkload`
+/// (`run-as-missing`: isolation `None` needs a named host user) and leaves no workload.
+#[test]
+fn a_process_part_without_restart_never_restarts_and_one_without_run_as_is_refused() {
+    use weft_testkit::cloudspec::{self, ProcessWorld};
+
+    let mut host = ControlHost::start();
+    let client = host.client();
+    let world = ProcessWorld::new(&client);
+    let mut part = cloudspec::process_part();
+    for field in ["restart", "stop", "prestart"] {
+        part.as_object_mut().expect("an object").remove(field);
+    }
+    let mut without_user = part.clone();
+    without_user
+        .as_object_mut()
+        .expect("an object")
+        .remove("run_as");
+    let refused = world.apply(
+        &client,
+        &cloudspec::submission_with_part("other", &without_user),
+    );
+    assert_eq!(
+        (refused.status, refused.body["outcome"].clone()),
+        (422, json!("run-as-missing")),
+        "{}",
+        refused.body
+    );
+
+    let answer = world.apply(&client, &cloudspec::submission_with_part("daemon", &part));
+    assert_eq!(answer.status, 202, "{}", answer.body);
+
+    host.stop();
+    let ports = Ports::open(&host.state_path()).expect("the state file opens");
+    let workloads = WorkloadStorage::list(&ports);
+    assert_eq!(workloads.len(), 1, "{workloads:?}");
+    let workload = &workloads[0].data;
+    assert_eq!(workload.restart_policy.mode, RestartMode::Never);
+    assert_eq!(
+        (&workload.restart, &workload.stop, &workload.prestart),
+        (&None, &None, &None)
+    );
+}
+
 /// The canonical form agrees with the golden's declared architecture digest, so the copy of
 /// [`with_refused_bye`] is read as a submission.
 #[test]

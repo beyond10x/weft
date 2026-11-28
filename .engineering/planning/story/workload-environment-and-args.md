@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:workload-environment-and-args
 kind: story
-status: active
+status: implemented
 title: A Service workload's environment text values and arguments reach its instance at start, or admission refuses it by name
 relations:
 - decomposes: epic:slot-node-daemon
@@ -22,10 +22,11 @@ scope:
   path: product/cloud/crates/weft-testkit/tests
 - confidence: cited
   path: quality/spec-diff-acknowledgements.json
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T14:43:19Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T14:43:19Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T15:53:40Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

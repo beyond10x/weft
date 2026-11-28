@@ -8,7 +8,7 @@
       "A compute cloud you deploy yourself.",
       "Specified before it is built."
     ],
-    "lede": "weft is a compute cloud a team runs on its own machines: one control plane and any number of worker nodes that run confined workloads for tenants and their nested accounts. Today it is an ESS specification of that cloud, 28 domains and 4 components, explored in memory by cloudspec-sim, and a gate that holds it. The control host and the node agent are planned.",
+    "lede": "weft is a compute cloud a team runs on its own machines: one control plane and any number of worker nodes that run confined workloads for tenants and their nested accounts. Today it is an ESS specification of that cloud, 28 domains and 3 components, explored in memory by cloudspec-sim, and a gate that holds it. The control host and the node agent are planned.",
     "description": "weft is a compute cloud you deploy yourself, specified first in ESS: the specification, the gate and simulation with cloudspec-sim exist today; the control host and the node agent are planned.",
     "actions": [
       {
@@ -35,7 +35,7 @@
       "title": "From a specification to a running cloud.",
       "lede": "Every part of weft is an ESS document first, so the cloud can be checked and simulated before any of it runs.",
       "steps": [
-        {"label": "ess/", "title": "Specify", "description": "28 domains in 10 layers over cloudspec's vendored blocks, 4 components and their reconciliation bindings, validated by ess."},
+        {"label": "ess/", "title": "Specify", "description": "28 domains in 10 layers over cloudspec's vendored blocks, 3 components and their reconciliation bindings, validated by ess."},
         {"label": "cloudspec-sim", "title": "Explore", "description": "Random command sequences and experiments on the interpreted model, with system invariants checked after each step."},
         {"label": "task check", "title": "Gate", "description": "Validation, the layer rule, the stamped-time rule, the docs claims and the tests on every change."},
         {"label": "planned", "title": "Run", "description": "A control host and a node agent built from the specification. Not built yet."}

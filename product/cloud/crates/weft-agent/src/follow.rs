@@ -63,6 +63,14 @@
 //! that is not answered is sent again at the start of each pass, before the work list is read
 //! (the instance reads `Running` and is no longer on it). A `5xx` answer without
 //! `committed: true` counts as no answer.
+//!
+//! An instance whose workload has package kind `Process` (`weft.workloads.NodeInstanceRuns`,
+//! read in a pass that takes an instance) is verified the same way and then runs through the
+//! `workloads` port as a `Service` replica does, never through the exec port (without a
+//! `workloads` port its start is refused `not-served`). Its specs add the workload's host user,
+//! stop and the `Main` process's prestart steps; once a process ran, the agent holds it, restarts
+//! it by the workload's `restart` and stops it when its assignment is no longer held
+//! (`follow::supervise`, `story:slot-node-process`).
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -79,7 +87,12 @@ use weft_platform::node::{
 use weft_platform::Refusal;
 
 use crate::agent::NODE_AGENT;
+use crate::records::{NodeRecords, UNKEPT};
 use crate::report::Report;
+
+mod supervise;
+
+use supervise::Supervised;
 
 /// The time between two passes over the work list, by default.
 pub const PASS: Duration = Duration::from_millis(500);
@@ -96,6 +109,9 @@ const WORK_LIST: &str = "weft.nodes.AssignmentsOfNode";
 
 /// The instances view.
 const INSTANCES: &str = "weft.workloads.Instances";
+
+/// What the node runs with how: the host user, prestart, stop and restart of a process workload.
+const RUNS: &str = "weft.workloads.NodeInstanceRuns";
 
 /// The command that records an instance `Running`.
 const RUNNING: &str = "weft.workloads.RecordInstanceRunning";
@@ -121,6 +137,10 @@ pub struct Follower<'a> {
     pass: Duration,
     /// The passes from a refused start to the next start of the same process.
     retry_after: u64,
+    /// The node's own records (`weft.node`) of the processes of process workloads.
+    records: &'a (dyn NodeRecords + Sync),
+    /// The processes of process workloads that ran and that this run still holds.
+    supervised: Mutex<Vec<Supervised>>,
 }
 
 /// The instances of this run that [`Follower::pass`] reads and writes.
@@ -194,7 +214,18 @@ impl<'a> Follower<'a> {
             retries: Mutex::new(Vec::new()),
             pass: PASS,
             retry_after: RETRY_AFTER,
+            records: &UNKEPT,
+            supervised: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The same follower with `records` as the node's own records (`weft.node`). Without them,
+    /// each `StartProcess`, `RestartProcess` and `StopProcess` is refused, logged and reported,
+    /// and the process runs either way.
+    #[must_use]
+    pub fn records(mut self, records: &'a (dyn NodeRecords + Sync)) -> Self {
+        self.records = records;
+        self
     }
 
     /// The same follower with `pass` between two passes and `retry_after` passes from a refused
@@ -206,8 +237,9 @@ impl<'a> Follower<'a> {
         self
     }
 
-    /// The same follower with the `workloads` port: the processes of a `Service` replica start
-    /// through it, every other process through the `exec` port.
+    /// The same follower with the `workloads` port: the processes of a `Service` replica and of
+    /// a process workload start through it, every other process through the `exec` port. Without
+    /// it, the start of a process workload is refused `not-served`.
     #[must_use]
     pub fn workloads(mut self, workloads: &'a (dyn Workloads + Sync)) -> Self {
         self.workloads = Some(workloads);
@@ -244,8 +276,8 @@ impl<'a> Follower<'a> {
         taken: &mut Taken,
     ) -> Result<(), String> {
         self.record_unexited();
-        let instances = match self.work() {
-            Ok(instances) => instances,
+        let (instances, assignments) = match self.work() {
+            Ok(work) => work,
             Err(error) => {
                 eprintln!("weft-agent: pass {pass}: the work list: {error}");
                 return Ok(());
@@ -253,6 +285,9 @@ impl<'a> Follower<'a> {
         };
         self.record_unrecorded(&instances);
         self.retry_due(scope, pass, &instances);
+        // How the workload of each instance on the node runs, read once in a pass that takes an
+        // instance.
+        let mut runs: Option<HashMap<String, Value>> = None;
         for instance in &instances {
             let Some(instance_id) = instance["instance_id"].as_str().map(str::to_owned) else {
                 continue;
@@ -260,6 +295,28 @@ impl<'a> Follower<'a> {
             if taken.done.contains(&instance_id) {
                 continue;
             }
+            let takeable = match instance["state"].as_str() {
+                Some("Scheduled") => true,
+                Some("Starting") => taken.verifying.contains(&instance_id),
+                _ => false,
+            };
+            if !takeable {
+                continue;
+            }
+            if runs.is_none() {
+                match self.runs() {
+                    Ok(read) => runs = Some(read),
+                    Err(error) => {
+                        eprintln!("weft-agent: pass {pass}: {error}");
+                        break;
+                    }
+                }
+            }
+            let run = runs
+                .as_ref()
+                .and_then(|runs| runs.get(&instance_id))
+                .cloned()
+                .unwrap_or(Value::Null);
             match instance["state"].as_str() {
                 Some("Scheduled") => {
                     taken.verifying.insert(instance_id.clone());
@@ -283,21 +340,34 @@ impl<'a> Follower<'a> {
             }
             taken.verifying.remove(&instance_id);
             taken.done.insert(instance_id.clone());
-            self.start(scope, pass, instance, instance_id)?;
+            self.start(scope, pass, instance, &run, instance_id)?;
         }
-        Ok(())
+        self.tend(&assignments)
     }
 
-    /// Starts the processes of `instance`, each on a thread of `scope`.
+    /// Starts the processes of `instance`, whose workload runs as `run` (its row of
+    /// `weft.workloads.NodeInstanceRuns`, `null` when absent), each on a thread of `scope`.
     fn start<'scope>(
         &'scope self,
         scope: &'scope Scope<'scope, '_>,
         pass: u64,
         instance: &Value,
+        run: &Value,
         instance_id: String,
     ) -> Result<(), String> {
-        if let Some(workloads) = self.workloads.filter(|_| !instance["service_id"].is_null()) {
-            return self.start_workloads(scope, pass, instance, instance_id, workloads);
+        let process_workload = supervise::is_process(run);
+        if process_workload || !instance["service_id"].is_null() {
+            if let Some(workloads) = self.workloads {
+                return self.start_workloads(scope, pass, instance, run, instance_id, workloads);
+            }
+        }
+        if process_workload {
+            // A process workload runs on the host as itself, never as an exec in a sandbox.
+            self.write(|report| report.started(&instance_id, pass))?;
+            eprintln!(
+                "weft-agent: {instance_id} is a process workload and no workloads port runs it"
+            );
+            return self.write(|report| report.refused(&instance_id, "not-served"));
         }
         let processes = processes(instance);
         self.write(|report| report.started(&instance_id, pass))?;
@@ -319,17 +389,19 @@ impl<'a> Follower<'a> {
         Ok(())
     }
 
-    /// Starts the processes of the `Service` replica `instance` through `workloads`, each
-    /// supervised to `running` on a thread of `scope`.
+    /// Starts the processes of `instance` (a `Service` replica, or a process workload as `run`
+    /// describes it) through `workloads`, each supervised to `running` on a thread of `scope`.
+    /// A process of a process workload that ran is then held ([`Follower::tend`]).
     fn start_workloads<'scope>(
         &'scope self,
         scope: &'scope Scope<'scope, '_>,
         pass: u64,
         instance: &Value,
+        run: &Value,
         instance_id: String,
         workloads: &'scope (dyn Workloads + Sync),
     ) -> Result<(), String> {
-        let specs = workload_specs(instance);
+        let specs = workload_specs(instance, run);
         self.write(|report| report.started(&instance_id, pass))?;
         let start = Arc::new(Start {
             instance_id,
@@ -343,31 +415,40 @@ impl<'a> Follower<'a> {
         }
         for (key, spec) in specs {
             let start = Arc::clone(&start);
-            scope.spawn(move || self.supervise(workloads, &start, &key, &spec));
+            let held = Supervised::new(&start, instance, run, key.clone());
+            scope.spawn(move || self.supervise(workloads, &start, &key, &spec, held));
         }
         Ok(())
     }
 
     /// Starts `spec` under `key` through `workloads` and observes it once a pass until it ran
     /// (`running`, or `exited` before the agent saw it `running`); a refusal, or an end in
-    /// `failed`, `stopped` or `unknown`, is one report line and the instance is not recorded
-    /// `Running`.
+    /// `failed`, `stopped` or `unknown`, is one report line (a failed start also one line with
+    /// its failure), the instance is not recorded `Running`, and the process ended otherwise
+    /// than with exit 0 ([`Follower::ended`]). A process that ran is `held` from then on
+    /// ([`Follower::tend`]): its exits are seen there.
     fn supervise(
         &self,
         workloads: &(dyn Workloads + Sync),
         start: &Arc<Start>,
         key: &WorkloadKey,
         spec: &WorkloadSpec,
+        held: Supervised,
     ) {
         let instance_id = &start.instance_id;
         let mut answer = workloads.start(key, spec);
         loop {
             let code = match answer {
-                Ok(Observation {
-                    state: WorkloadState::Running | WorkloadState::Exited,
-                    ..
-                }) => {
+                Ok(
+                    observation @ Observation {
+                        state: WorkloadState::Running | WorkloadState::Exited,
+                        ..
+                    },
+                ) => {
                     self.ran(start);
+                    if let Err(error) = self.hold(held, &observation) {
+                        eprintln!("weft-agent: {instance_id}: {error}");
+                    }
                     return;
                 }
                 Ok(Observation {
@@ -378,35 +459,48 @@ impl<'a> Follower<'a> {
                     answer = workloads.observe(key);
                     continue;
                 }
-                Ok(Observation { state, .. }) => format!("workload-{state:?}").to_lowercase(),
+                Ok(Observation { state, failure, .. }) => {
+                    if let Some(failure) = &failure {
+                        if let Err(error) = self.write(|report| {
+                            report.process_failed(instance_id, &key.process, failure)
+                        }) {
+                            eprintln!("weft-agent: {instance_id}: {error}");
+                        }
+                    }
+                    format!("workload-{state:?}").to_lowercase()
+                }
                 Err(error) => workload_refusal_code(&error),
             };
             eprintln!("weft-agent: the workload {key} of {instance_id} did not run: {code}");
             if let Err(error) = self.write(|report| report.refused(instance_id, &code)) {
                 eprintln!("weft-agent: {instance_id}: {error}");
             }
+            self.ended(start, false);
             return;
         }
     }
 
     /// The `Scheduled` and `Starting` instances of the `Active` assignments of this node's work
     /// list, as rows of `weft.workloads.Instances`, each with the `assignment_id` of its
-    /// assignment.
-    fn work(&self) -> Result<Vec<Value>, String> {
+    /// assignment, and those assignments, as rows of the work list.
+    fn work(&self) -> Result<(Vec<Value>, Vec<Value>), String> {
         let assigned = rows(
             self.client
                 .view(WORK_LIST, &[("node_id", self.node_id)])
                 .map_err(|error| format!("{WORK_LIST}: {error}"))?,
             WORK_LIST,
         )?;
-        // Each instance with the assignment that holds it: the key of its workloads.
-        let active: HashMap<Value, Value> = assigned
-            .iter()
+        let assignments: Vec<Value> = assigned
+            .into_iter()
             .filter(|row| row["state"] == "Active" && row["node_id"] == self.node_id)
+            .collect();
+        // Each instance with the assignment that holds it: the key of its workloads.
+        let active: HashMap<Value, Value> = assignments
+            .iter()
             .map(|row| (row["instance_id"].clone(), row["assignment_id"].clone()))
             .collect();
         if active.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), assignments));
         }
         let instances = rows(
             self.client
@@ -414,7 +508,7 @@ impl<'a> Follower<'a> {
                 .map_err(|error| format!("{INSTANCES}: {error}"))?,
             INSTANCES,
         )?;
-        Ok(instances
+        let instances = instances
             .into_iter()
             .filter(|row| row["state"] == "Scheduled" || row["state"] == "Starting")
             .filter_map(|mut row| {
@@ -422,6 +516,22 @@ impl<'a> Follower<'a> {
                 row["assignment_id"] = assignment_id;
                 Some(row)
             })
+            .collect();
+        Ok((instances, assignments))
+    }
+
+    /// How the workload of each instance on this node runs, by instance: the rows of
+    /// `weft.workloads.NodeInstanceRuns`.
+    fn runs(&self) -> Result<HashMap<String, Value>, String> {
+        let runs = rows(
+            self.client
+                .view(RUNS, &[("node_id", self.node_id)])
+                .map_err(|error| format!("{RUNS}: {error}"))?,
+            RUNS,
+        )?;
+        Ok(runs
+            .into_iter()
+            .filter_map(|row| Some((row["instance_id"].as_str()?.to_owned(), row)))
             .collect())
     }
 
@@ -781,11 +891,13 @@ fn processes(instance: &Value) -> Vec<Process> {
         .collect()
 }
 
-/// The processes of a `Service` replica's instance row as workloads of the `workloads` port:
-/// each under the key of the instance's assignment and the process's name, with its command and
-/// environment; the port's defaults for the rest (no prestart step, the default stop, no restart
-/// by the place).
-fn workload_specs(instance: &Value) -> Vec<(WorkloadKey, WorkloadSpec)> {
+/// The processes of an instance row as workloads of the `workloads` port: each under the key of
+/// the instance's assignment and the process's name, with its command and environment, and what
+/// `run` (the instance's row of `weft.workloads.NodeInstanceRuns`) names of its workload: the
+/// host user, the stop, and for the `Main` process the prestart steps
+/// ([`supervise::run_spec`]). The port's defaults for what `run` does not name; never a restart
+/// by the place (the agent decides restarts, `follow::supervise`).
+fn workload_specs(instance: &Value, run: &Value) -> Vec<(WorkloadKey, WorkloadSpec)> {
     let assignment = instance["assignment_id"].as_str().unwrap_or_default();
     process_rows(instance)
         .iter()
@@ -795,7 +907,7 @@ fn workload_specs(instance: &Value) -> Vec<(WorkloadKey, WorkloadSpec)> {
             for (name, value) in environment(process) {
                 spec = spec.env(name, value);
             }
-            (key, spec)
+            (key, supervise::run_spec(spec, process, run))
         })
         .collect()
 }

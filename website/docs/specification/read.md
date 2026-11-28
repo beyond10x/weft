@@ -15,7 +15,7 @@ repository. It is the source every planned implementation is held to.
 | `ess/<n>-<layer>/<domain>.yaml` | weft's own domain files: one file per domain, one directory per [layer](layers.md). |
 | `ess/cloud/<n>-<layer>/<domain>.yaml` | cloudspec's blocks, vendored and never edited by hand (`task vendor-update`, `ess/cloud/cloud.lock`). A domain may be split over a vendored file and one of weft's own. |
 | `ess/9-actors/actors.yaml` | Every actor and the commands and views it may use. No other file declares actors. |
-| `ess/components.yaml` | The four components, which domains each owns, and the reconciliation bindings. |
+| `ess/components.yaml` | The three components, which domains each owns, and the reconciliation bindings. |
 | `protocols/node-channel.yaml` | The session between `weft-control` and `weft-node` (`ess-protospec/1`). |
 | `protocols/exec-channel.yaml` | Exec, attach, logs and port forward into an instance (`ess-protospec/1`). |
 | `surfaces/http/`, `surfaces/cli/` | Planned: the user API (`ess-http/1`) and the CLI (`ess-cli/2`). Not written yet. |
@@ -124,8 +124,7 @@ and publishes all its events:
 | Component | Domains |
 |---|---|
 | `weft-api` | `access`, `accounts`, `scope`, `artifacts`, `architecture`, `formations` |
-| `weft-control` | `infrastructure`, `inventory`, `topology`, `cluster`, `resources`, `workloads`, `claims`, `scheduling`, `nodes`, `identity`, `secrets`, `observability`, `limits`, `deployments`, `pipelines`, `services`, `catalog`, `metering` |
-| `weft-node` | `node` |
+| `weft-control` | `infrastructure`, `inventory`, `topology`, `cluster`, `resources`, `workloads`, `claims`, `scheduling`, `nodes`, `node`, `identity`, `secrets`, `observability`, `limits`, `deployments`, `pipelines`, `services`, `catalog`, `metering` |
 | `weft-edge` | `edge` |
 
 `weft.shared` (types only) and `weft.actors` (actors only) belong to no component. `weft-api`

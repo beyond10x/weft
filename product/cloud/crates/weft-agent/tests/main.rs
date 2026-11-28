@@ -2,6 +2,7 @@
 
 mod follow_adversary;
 mod follow_bookkeeping;
+mod process;
 mod seeds;
 
 /// `join` (`story:skeleton-node-join-session`): `weft-agent` joins the node `ProvisionPoolNode`

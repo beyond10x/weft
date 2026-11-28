@@ -12,7 +12,7 @@
     },
     {
       "area": "Specification",
-      "detail": "weft-api, weft-control, weft-node and weft-edge in ess/components.yaml, with the reconciliation loops as bindings.",
+      "detail": "weft-api, weft-control and weft-edge in ess/components.yaml, with the reconciliation loops as bindings.",
       "href": "/docs/specification/read#components-and-bindings",
       "label": "Components and bindings",
       "status": "shipped"
@@ -82,14 +82,14 @@
     },
     {
       "area": "Implementation",
-      "detail": "The node agent of the weft-node component, on substrate. A walking skeleton, weft-agent, joins a node and opens its session.",
+      "detail": "The node agent of the worker plane, on substrate; its records (weft.node) are weft-control's. A walking skeleton, weft-agent, joins a node and opens its session.",
       "href": "/docs/run/control-host-and-node",
       "label": "Node agent",
       "status": "planned"
     },
     {
       "area": "Implementation",
-      "detail": "weft-api, weft-control, weft-node and weft-edge as the services that run weft, each owning its domains of the specification.",
+      "detail": "weft-api, weft-control and weft-edge as the services that run weft, each owning its domains of the specification.",
       "href": "/docs/concepts/components",
       "label": "Server components",
       "status": "planned"

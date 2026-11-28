@@ -1,7 +1,7 @@
 //! The three goldens are accepted, with the digests cloudspec wrote, recomputed here.
 
 use serde_json::{json, Value};
-use weft_cloudspec::{canonical, digest, Submission};
+use weft_cloudspec::{canonical, digest, Placement, Submission};
 
 use crate::golden;
 
@@ -120,4 +120,23 @@ fn canonical_json_sorts_keys_by_their_utf8_bytes_with_no_white_space() {
     );
     assert_eq!(canonical(&Value::Null), "null");
     assert_eq!(digest(b"null"), NO_BINDING);
+}
+
+/// `story:slot-node-pool-placement`: the host-daemon golden places scope `workstation` on host
+/// `workstation` and scope `build-node` on pool `build`; its scope-less keys, a workload part and
+/// an unknown key have no placement.
+#[test]
+fn the_placement_of_a_scope_part_is_read_by_name() {
+    let s = accepted("host-daemon");
+    assert_eq!(
+        s.placement("workstation"),
+        Some(Placement::Host("workstation".to_owned()))
+    );
+    assert_eq!(
+        s.placement("build-node"),
+        Some(Placement::Pool("build".to_owned()))
+    );
+    assert_eq!(s.placement("node-daemon"), None);
+    assert_eq!(s.placement("no-such-part"), None);
+    assert_eq!(accepted("snippet").placement("jobs"), None);
 }

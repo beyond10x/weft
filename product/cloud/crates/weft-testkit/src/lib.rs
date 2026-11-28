@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde_json::Value;
 use weft_client::Client;
 
+pub mod cloudspec;
 pub mod in_process;
 pub mod node_agent;
 pub mod steps;

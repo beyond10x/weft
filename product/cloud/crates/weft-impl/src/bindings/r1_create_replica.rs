@@ -48,6 +48,7 @@ fn deliver(system: &mut System, event: &SystemEvent) -> Option<Invoked> {
         replica_index: Some(requested.replica_index),
         warm_pool_id: None,
         service_id: Some(requested.service_id.clone()),
+        scope_node_id: None,
     };
     Some(
         match invoke(system, |system| system.weft_control.create_instance(input)) {

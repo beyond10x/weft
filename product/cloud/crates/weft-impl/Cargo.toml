@@ -21,7 +21,6 @@ weft-api = { path = "../../../../target/generated/crates/weft-api" }
 weft-cloudspec = { path = "../weft-cloudspec" }
 weft-control = { path = "../../../../target/generated/crates/weft-control" }
 weft-edge = { path = "../../../../target/generated/crates/weft-edge" }
-weft-node = { path = "../../../../target/generated/crates/weft-node" }
 weft-system = { path = "../../../../target/generated/crates/weft-system" }
 weft-types = { path = "../../../../target/generated/crates/weft-types" }
 

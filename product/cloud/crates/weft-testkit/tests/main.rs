@@ -4,6 +4,8 @@ mod cloudspec_apply;
 mod cloudspec_snippet;
 mod cloudspec_submit;
 mod job_run;
+mod node_records;
+mod placement;
 mod plan_apply;
 mod plan_from_source;
 mod ratchet;
@@ -2765,6 +2767,7 @@ mod definitions {
                 service_id: Some(weft_types::shared::ServiceId(Uuid(
                     w.ids.service_id.clone(),
                 ))),
+                scope_node_id: None,
             };
             let answer =
                 CreateInstanceBehavior::create_instance(&mut ports, input).expect("an outcome");
