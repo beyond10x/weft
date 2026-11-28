@@ -295,13 +295,13 @@ pages:
       - name: workloads
         component: collection
         title: Workloads
-        reads: {view: weft.workloads.WorkloadList, key: workload_id, params: {formation_id: params.formation_id}}
+        # A workload names no formation; the formation's workloads are its assignments
+        # (weft.architecture.AssignWorkload, story:cloud-blocks-layer-refactor-pin).
+        reads: {view: weft.architecture.FormationWorkloads, key: component_workload_id, params: {formation_id: params.formation_id}}
         columns:
           - {field: component}
-          - {field: package_kind, label: Package, as: badge, tone: info}
-          - {field: shape, as: badge, tone: neutral}
-          - {field: isolation}
-          - {field: state, as: badge, tone_by: lifecycle}
+          - {field: environment_id, label: Environment}
+          - {field: formation_revision_id, label: Revision}
         row_actions:
           - {name: open, navigate: {to: workloads.detail, params: {workload_id: row.workload_id}}, label: Open}
       - name: environments
@@ -321,9 +321,10 @@ pages:
     params: {formation_id: FormationId}
     switch_to: [formations.detail, formations.config]
     actor: weft.actors.Deployer
-    # Border routes (weft.edge.FormationBorder) and endpoints (weft.edge.Endpoints) are not shown:
-    # the vendored spec moved them to weft.edge, owned by weft-edge, which is not `reached_by:
-    # network` (OPEN in ess/components.yaml at weft-edge), so no HTTP surface serves them.
+    # Endpoints (weft.edge.Endpoints) are not shown: the vendored spec moved them to weft.edge, owned
+    # by weft-edge, which is not `reached_by: network` (OPEN in ess/components.yaml at weft-edge), so
+    # no HTTP surface serves them. The border routes moved back to weft.architecture
+    # (story:cloud-blocks-layer-refactor-pin), served by weft-api.
     header:
       switch: [formations.detail, formations.network, formations.config]
     sections:
@@ -339,6 +340,16 @@ pages:
         row_actions:
           - {name: remove, does: weft.architecture.RemoveLink, bind: {formation_id: params.formation_id, scope_id: actor.scope_id, link_id: row.link_id}, label: Remove, confirm: {title: Remove this link, confirm_label: Remove}}
         states: {empty: {message: No component calls another.}}
+      - name: border
+        component: collection
+        title: Border routes
+        reads: {view: weft.architecture.FormationBorder, key: route_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: host}
+          - {field: path}
+          - {field: component_name, label: Component}
+          - {field: port, as: number}
+        states: {empty: {message: Nothing of this formation is reachable from outside.}}
 
   formations.config:
     kind: detail_page
@@ -360,46 +371,31 @@ pages:
         title: Mounts
         reads: {view: weft.architecture.ConfigMounts, key: mount_id, params: {formation_id: params.formation_id}}
         columns: [{field: config_id, label: Config}, {field: component_id, label: Component}, {field: kind, as: badge, tone: info}, {field: target}]
-      - name: bindings
-        component: collection
-        title: Managed service bindings
-        reads: {view: weft.services.FormationServiceBindings, key: binding_id, params: {formation_id: params.formation_id}}
-        columns:
-          - {field: service_instance_id, label: Service}
-          - {field: component}
-          - {field: mode, as: badge, tone: info}
-          - {field: state, as: badge, tone_by: lifecycle}
-        row_actions:
-          - {name: unbind, does: weft.services.UnbindService, bind: {binding_id: row.binding_id, scope_id: actor.scope_id}, label: Unbind, confirm: {title: Unbind this service, confirm_label: Unbind}}
 
   workloads:
     kind: list_page
     title: Workloads
     nav: {synonyms: [components, deployments, apps]}
     actor: weft.actors.Deployer
-    state:
-      formation: {type: FormationId, class: page_state, store: url}
     sections:
       - name: filters
         component: filter_bar
-        binds: [state.formation, state.search]
+        binds: [state.search]
         search: {binds: state.search, placeholder: Search component or package}
-        choices:
-          - {name: formation, component: choice, reads: {view: weft.architecture.Formations, params: {scope_id: actor.scope_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
       - name: list
         component: collection
-        reads: {view: weft.workloads.WorkloadList, key: workload_id, params: {formation_id: state.formation}, filter: row contains state.search}
+        reads: {view: weft.workloads.WorkloadList, key: workload_id, params: {scope_id: actor.scope_id}, filter: row contains state.search}
         columns:
           - {field: component}
           - {field: package_kind, label: Package, as: badge, tone: info}
           - {field: shape, as: badge, tone: neutral}
           - {field: isolation}
-          - {field: environment_id, label: Environment}
+          - {field: identity, label: Identity}
           - {field: state, as: badge, tone_by: lifecycle}
         row_actions:
           - {name: open, navigate: {to: workloads.detail, params: {workload_id: row.workload_id}}, label: Open}
           - {name: retire, does: weft.workloads.RetireWorkload, bind: {workload_id: row.workload_id}, label: Retire, visible: "row.state == Defined", confirm: {title: Retire this workload, confirm_label: Retire}}
-        states: {empty: {title: Pick a formation, message: Workloads are listed per formation.}}
+        states: {empty: {message: No workload is defined in this account.}}
 
   workloads.detail:
     kind: detail_page
@@ -812,7 +808,6 @@ pages:
         fields:
           - name
           - {field: plan_id, label: Plan, as: choice, choice: {component: choice, reads: {view: weft.catalog.OfferingPlans, params: {offering_id: params.offering_id}}, value: plan_id, label: name, style: radio}}
-          - {field: formation_id, label: Formation, as: choice, choice: {component: choice, reads: {view: weft.architecture.Formations, params: {scope_id: actor.scope_id}}, value: formation_id, label: name}}
         submit: {label: Provision}
 
   managed:
@@ -875,8 +870,10 @@ pages:
         component: collection
         title: Bindings
         reads: {view: weft.services.ServiceBindingList, key: binding_id, params: {service_instance_id: params.service_instance_id}}
-        columns: [{field: formation_id, label: Formation}, {field: component}, {field: mode, as: badge, tone: info}, {field: state, as: badge, tone_by: lifecycle}]
-        states: {empty: {message: No component is bound to this service.}}
+        columns: [{field: identity, label: Workload identity}, {field: mode, as: badge, tone: info}, {field: state, as: badge, tone_by: lifecycle}]
+        row_actions:
+          - {name: unbind, does: weft.services.UnbindService, bind: {binding_id: row.binding_id, scope_id: actor.scope_id}, label: Unbind, confirm: {title: Unbind this service, confirm_label: Unbind}}
+        states: {empty: {message: No workload is bound to this service.}}
       - name: backups
         component: collection
         title: Backups
@@ -911,8 +908,7 @@ pages:
         columns:
           - {field: name, label: Secret}
           - {field: scope, as: badge, tone: info}
-          - {field: formation_id, label: Formation}
-          - {field: environment_id, label: Environment}
+          - {field: path, label: Path}
           - {field: backend_id, label: Backend, label_from: {view: weft.secrets.SecretBackends, field: name, key: backend_id}}
           - {field: state, as: badge, tone_by: lifecycle}
         expand:

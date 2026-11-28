@@ -113,6 +113,10 @@ types:
   - name: weft.shared.DeviceId
     kind: newtype
     of: Uuid
+  # cloudspec: the identifier of weft.inventory.NodeCapacity.
+  - name: weft.shared.NodeCapacityId
+    kind: newtype
+    of: Uuid
   # weft@6798e7d:ess/0-foundation/shared.yaml:95
   - name: weft.shared.VolumeId
     kind: newtype
@@ -197,6 +201,10 @@ types:
     of: Uuid
   # weft@6798e7d:ess/0-foundation/shared.yaml:215
   - name: weft.shared.ComponentId
+    kind: newtype
+    of: Uuid
+  # cloudspec: the identifier of weft.architecture.ComponentWorkload.
+  - name: weft.shared.ComponentWorkloadId
     kind: newtype
     of: Uuid
   # weft@6798e7d:ess/0-foundation/shared.yaml:218

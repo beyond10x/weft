@@ -9,6 +9,7 @@ views:
   weft.inventory.ResourceClasses: infrastructure.yaml
   weft.inventory.NodeDevices: infrastructure.yaml
   weft.inventory.FreeDevices: infrastructure.yaml
+  weft.inventory.NodeCapacities: infrastructure.yaml
   weft.nodes.NodeObservations: infrastructure.yaml
   weft.nodes.NodeSessions: infrastructure.yaml
   weft.nodes.NodeDrains: infrastructure.yaml

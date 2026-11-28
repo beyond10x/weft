@@ -191,11 +191,12 @@ mod join {
         assert_eq!(new["state"], json!("Open"), "{new}");
     }
 
-    /// A stand-in control host on loopback: it answers `JoinNode` `joined` and
-    /// `RecordNodeObservation` `ready`, and each `hello` with what `hello` gives for its number
-    /// (from 0): `Some((status, body))`, or `None` to close the connection unanswered. Each
-    /// `hello`'s arrival instant is pushed to the second returned list, each
-    /// `RecordNodeObservation`'s input to the third.
+    /// A stand-in control host on loopback: it answers `JoinNode` `joined`,
+    /// `RecordNodeObservation` `ready` and `ReportNodeCapacity` `reported`, and each `hello` with
+    /// what `hello` gives for its number (from 0): `Some((status, body))`, or `None` to close the
+    /// connection unanswered. Each `hello`'s arrival instant is pushed to the second returned
+    /// list, the input of each `RecordNodeObservation` and `ReportNodeCapacity` to the third, in
+    /// the order they arrive.
     #[allow(clippy::type_complexity, reason = "three handles of one test fixture")]
     fn stand_in(
         hello: impl Fn(usize) -> Option<(u16, Value)> + Send + 'static,
@@ -247,6 +248,13 @@ mod join {
                             .push(serde_json::from_slice(&body).unwrap_or(Value::Null));
                         Some((202, json!({"outcome": "ready", "published": []})))
                     }
+                    "/weft/commands/ReportNodeCapacity" => {
+                        observed
+                            .lock()
+                            .expect("the observations lock")
+                            .push(serde_json::from_slice(&body).unwrap_or(Value::Null));
+                        Some((202, json!({"outcome": "reported", "published": []})))
+                    }
                     "/node/hello" => {
                         let number = {
                             let mut seen = seen.lock().expect("the arrivals lock");
@@ -273,7 +281,8 @@ mod join {
 
     /// The node's observation is what its `NodeFacts` port answered, and nothing else: a stub
     /// port that answers what the local adapter never does (level `MicroVm`, 3 CPUs) is what
-    /// `RecordNodeObservation` carries, and a fact the port withholds is reported `false`.
+    /// `RecordNodeObservation` and `ReportNodeCapacity` carry, at one instant, and a fact the port
+    /// withholds is reported `false`.
     #[test]
     fn the_observation_is_what_the_node_facts_port_answered() {
         use weft_platform::node::{
@@ -329,10 +338,16 @@ mod join {
         let _ = std::fs::remove_file(&report);
         assert!(ended.is_err(), "the refused hello ends the run: {ended:?}");
         let observations = observations.lock().expect("the observations lock").clone();
-        assert_eq!(observations.len(), 1, "{observations:?}");
+        assert_eq!(observations.len(), 2, "{observations:?}");
+        assert_eq!(observations[0].get("capacity"), None, "{observations:?}");
         assert_eq!(
-            observations[0]["capacity"],
+            observations[1]["capacity"],
             json!([{"resource_class": "cpu", "amount": 3}])
+        );
+        assert_eq!(observations[1]["node_id"], json!("node-1"));
+        assert_eq!(
+            observations[1]["observed_at"],
+            observations[0]["observed_at"]
         );
         assert_eq!(
             observations[0]["isolation_facts"],
@@ -406,7 +421,7 @@ mod join {
         let _ = std::fs::remove_file(&report);
         assert!(ended.is_err(), "the refused hello ends the run: {ended:?}");
         let observations = observations.lock().expect("the observations lock").clone();
-        assert_eq!(observations.len(), 1, "{observations:?}");
+        assert_eq!(observations.len(), 2, "{observations:?}");
         assert_eq!(
             observations[0]["isolation_facts"],
             json!({

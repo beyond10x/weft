@@ -13,16 +13,17 @@ use weft_impl::context::{mint, timestamp};
 use weft_impl::Row;
 use weft_types::artifacts::{ArtifactData, ArtifactKind, ArtifactSnapshot, ArtifactState};
 use weft_types::infrastructure::{NodeData, NodeRole, NodeSnapshot, NodeState};
+use weft_types::inventory::{NodeCapacityData, NodeCapacitySnapshot, NodeCapacityState};
 use weft_types::nodes::{
     AssignmentData, AssignmentSnapshot, AssignmentState, DesiredState, NodeSessionData,
     NodeSessionSnapshot, NodeSessionState,
 };
 use weft_types::primitives::Uuid;
 use weft_types::shared::{
-    ArtifactDigest, AssignmentId, CloudId, ComponentName, EnvironmentId, FormationId,
-    FormationRevisionId, InstanceId, IsolationFacts, IsolationLevel, NodeId, NodeSessionId,
-    PlacementDecisionId, PriorityClassName, ProcessName, ResourceAmount, ResourceClassName,
-    RuntimeId, ScopeId, ServiceId, WorkloadId, ZoneName,
+    ArtifactDigest, AssignmentId, CloudId, ComponentName, InstanceId, IsolationFacts,
+    IsolationLevel, NodeCapacityId, NodeId, NodeSessionId, PlacementDecisionId, PriorityClassName,
+    ProcessName, ResourceAmount, ResourceClassName, RuntimeId, ScopeId, ServiceId, WorkloadId,
+    WorkloadIdentity, ZoneName,
 };
 use weft_types::workloads::{
     DesiredRun, InstanceData, InstanceHealth, InstanceSnapshot, InstanceState, PackageKind,
@@ -145,10 +146,6 @@ fn placed(
             role: NodeRole::Worker,
             join_token_expires_at: now.clone(),
             join_token_used: true,
-            capacity: Some(vec![ResourceAmount {
-                resource_class: ResourceClassName("cpu".to_owned()),
-                amount: 1,
-            }]),
             isolation_facts: Some(IsolationFacts {
                 kvm_present: false,
                 cgroups_delegated: true,
@@ -157,6 +154,18 @@ fn placed(
                 levels: vec![IsolationLevel::Container],
             }),
             observed_at: Some(now.clone()),
+        },
+    }));
+    rows.push(Row::NodeCapacity(NodeCapacitySnapshot {
+        state: NodeCapacityState::Reported,
+        data: NodeCapacityData {
+            capacity_id: NodeCapacityId(Uuid(mint())),
+            node_id: node_id.clone(),
+            capacity: vec![ResourceAmount {
+                resource_class: ResourceClassName("cpu".to_owned()),
+                amount: 1,
+            }],
+            observed_at: now.clone(),
         },
     }));
     rows.push(Row::NodeSession(NodeSessionSnapshot {
@@ -203,9 +212,7 @@ fn placed(
         data: WorkloadData {
             workload_id: workload_id.clone(),
             scope_id: scope_id.clone(),
-            formation_id: FormationId(Uuid(mint())),
-            formation_revision_id: FormationRevisionId(Uuid(mint())),
-            environment_id: EnvironmentId(Uuid(mint())),
+            identity: WorkloadIdentity(format!("{}/web", scope_id.0 .0)),
             component: ComponentName("web".to_owned()),
             package_kind: PackageKind::Snippet,
             artifact_digest: artifact_digest.clone(),
@@ -215,6 +222,12 @@ fn placed(
             upgrade: None,
             volumes: None,
             ports: None,
+            limits: None,
+            process_priority: None,
+            stop: None,
+            prestart: None,
+            restart: None,
+            environment_files: None,
             shape: ShapeKind::Service,
             settings: ShapeSettings::Service(ServiceSettings { stateful: false }),
             claims: Vec::new(),

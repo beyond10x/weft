@@ -730,6 +730,7 @@ mod node_channel_adversary {
     use weft_impl::context::{instant, timestamp};
     use weft_testkit::steps::{self, Provisioned};
     use weft_testkit::ControlHost;
+    use weft_testkit::InProcess;
     use weft_types::primitives::Timestamp;
 
     const CONTROL_PLANE: &str = "weft.actors.ControlPlane";
@@ -786,7 +787,7 @@ mod node_channel_adversary {
             .body
     }
 
-    fn observe(client: &Client, node_id: &str, cpus: u64) -> Value {
+    fn observe(client: &Client, node_id: &str) -> Value {
         client
             .command(
                 "weft.infrastructure.RecordNodeObservation",
@@ -794,7 +795,6 @@ mod node_channel_adversary {
                 json!({}),
                 json!({
                     "node_id": node_id,
-                    "capacity": [{"resource_class": "cpu", "amount": cpus}],
                     "isolation_facts": {
                         "kvm_present": false,
                         "cgroups_delegated": true,
@@ -807,6 +807,36 @@ mod node_channel_adversary {
             )
             .expect("the control host answers")
             .body
+    }
+
+    /// `weft.inventory.ReportNodeCapacity` of `cpus` CPUs as the node agent, observed now: the
+    /// capacity `RecordNodeObservation` carried before the blocks split it out of the node
+    /// (story:cloud-blocks-layer-refactor-pin).
+    fn report_capacity(client: &Client, node_id: &str, cpus: u64) -> Value {
+        client
+            .command(
+                "weft.inventory.ReportNodeCapacity",
+                steps::NODE_AGENT,
+                json!({}),
+                json!({
+                    "node_id": node_id,
+                    "capacity": [{"resource_class": "cpu", "amount": cpus}],
+                    "observed_at": timestamp(time::OffsetDateTime::now_utc()).0,
+                }),
+            )
+            .expect("the control host answers")
+            .body
+    }
+
+    /// The `cpu` amounts of the capacity reports of `node_id`, in the order the store keeps them.
+    fn reported_cpus(process: &InProcess, node_id: &str) -> Vec<i64> {
+        use weft_types::behaviour::NodeCapacityStorage;
+        NodeCapacityStorage::list(&process.ports())
+            .into_iter()
+            .filter(|row| row.data.node_id.0 .0 == node_id)
+            .flat_map(|row| row.data.capacity)
+            .map(|amount| amount.amount)
+            .collect()
     }
 
     fn at(text: &Value) -> time::OffsetDateTime {
@@ -973,7 +1003,6 @@ mod node_channel_adversary {
                 role: NodeRole::Worker,
                 join_token_expires_at: timestamp(time::OffsetDateTime::now_utc()),
                 join_token_used: true,
-                capacity: None,
                 isolation_facts: None,
                 observed_at: None,
             },
@@ -1025,47 +1054,66 @@ mod node_channel_adversary {
     }
 
     /// `RecordNodeObservation` in each outcome this story decides: `no-such-node`, `not-joined`
-    /// (Provisioning), `ready` (Joining), `observed` (Ready, Cordoned) with what was observed
-    /// written, and a Cordoned node stays Cordoned. The existing cases reach only `ready`,
-    /// through the agent.
+    /// (Provisioning), `ready` (Joining), `observed` (Ready, Cordoned), and a Cordoned node
+    /// stays Cordoned. The existing cases reach only `ready`, through the agent. The capacity is
+    /// `ReportNodeCapacity`'s since the blocks split it out of the node
+    /// (story:cloud-blocks-layer-refactor-pin): `no-such-node` for a node no row records, and
+    /// one `weft.inventory.NodeCapacity` row per report of a node, whatever its state.
     #[test]
-    fn record_node_observation_takes_each_outcome_and_writes_what_was_observed() {
+    fn record_node_observation_takes_each_outcome_and_capacity_is_reported_apart() {
         let cordoned = weft_impl::context::mint();
-        let host = ControlHost::start_seeded(vec![node_row(
+        let process = InProcess::start_seeded(vec![node_row(
             &cordoned,
             weft_types::infrastructure::NodeState::Cordoned,
         )]);
-        let client = host.client();
+        let client = process.client();
 
-        let unknown = observe(&client, &weft_impl::context::mint(), 1);
+        let unknown_node = weft_impl::context::mint();
+        let unknown = observe(client, &unknown_node);
         assert_eq!(unknown["outcome"], json!("no-such-node"), "{unknown}");
+        let unknown = report_capacity(client, &unknown_node, 1);
+        assert_eq!(unknown["outcome"], json!("no-such-node"), "{unknown}");
+        assert!(reported_cpus(&process, &unknown_node).is_empty());
 
-        let cloud_id = steps::create_cloud(&client);
-        steps::declare_zone(&client, &cloud_id, "z1");
-        let pool = steps::create_node_pool(&client);
-        let provisioning = steps::provision_pool_node(&client, &pool);
-        let body = observe(&client, &provisioning.node_id, 1);
+        let cloud_id = steps::create_cloud(client);
+        steps::declare_zone(client, &cloud_id, "z1");
+        let pool = steps::create_node_pool(client);
+        let provisioning = steps::provision_pool_node(client, &pool);
+        let body = observe(client, &provisioning.node_id);
         assert_eq!(body["outcome"], json!("not-joined"), "{body}");
-        let untouched = row(&client, NODES, "node_id", &provisioning.node_id);
+        let untouched = row(client, NODES, "node_id", &provisioning.node_id);
         assert_eq!(untouched["state"], json!("Provisioning"), "{untouched}");
-        assert!(untouched["capacity"].is_null(), "{untouched}");
+        assert!(untouched["isolation_facts"].is_null(), "{untouched}");
 
-        let node = steps::provision_pool_node(&client, &pool);
-        let body = steps::join_node(&client, &node.node_id, &node.join_token);
+        let node = steps::provision_pool_node(client, &pool);
+        let body = steps::join_node(client, &node.node_id, &node.join_token);
         assert_eq!(body["outcome"], json!("joined"), "{body}");
-        let body = observe(&client, &node.node_id, 2);
+        let body = observe(client, &node.node_id);
         assert_eq!(body["outcome"], json!("ready"), "{body}");
-        let body = observe(&client, &node.node_id, 7);
+        let body = observe(client, &node.node_id);
         assert_eq!(body["outcome"], json!("observed"), "{body}");
-        let ready = row(&client, NODES, "node_id", &node.node_id);
+        let ready = row(client, NODES, "node_id", &node.node_id);
         assert_eq!(ready["state"], json!("Ready"), "{ready}");
-        assert_eq!(ready["capacity"][0]["amount"], json!(7), "{ready}");
+        assert_eq!(
+            ready["isolation_facts"]["levels"],
+            json!(["Container"]),
+            "{ready}"
+        );
+        for cpus in [2, 7] {
+            let body = report_capacity(client, &node.node_id, cpus);
+            assert_eq!(body["outcome"], json!("reported"), "{body}");
+        }
+        let mut cpus = reported_cpus(&process, &node.node_id);
+        cpus.sort_unstable();
+        assert_eq!(cpus, vec![2, 7]);
 
-        let body = observe(&client, &cordoned, 3);
+        let body = observe(client, &cordoned);
         assert_eq!(body["outcome"], json!("observed"), "{body}");
-        let kept = row(&client, NODES, "node_id", &cordoned);
+        let kept = row(client, NODES, "node_id", &cordoned);
         assert_eq!(kept["state"], json!("Cordoned"), "{kept}");
-        assert_eq!(kept["capacity"][0]["amount"], json!(3), "{kept}");
+        let body = report_capacity(client, &cordoned, 3);
+        assert_eq!(body["outcome"], json!("reported"), "{body}");
+        assert_eq!(reported_cpus(&process, &cordoned), vec![3]);
     }
 }
 
@@ -1154,7 +1202,10 @@ mod definitions {
         assert_eq!(artifact["kind"], json!("Snippet"), "{artifact}");
 
         // 2. The workload of the Snippet runtime with its one Main process, and its service.
-        let workloads = view("weft.workloads.WorkloadList", &in_formation);
+        let workloads = view(
+            "weft.workloads.WorkloadList",
+            &[("scope_id", &path.scope_id)],
+        );
         let workload = row(&workloads, "workload_id", &ids.workload_id);
         assert_eq!(workload["package_kind"], json!("Snippet"), "{workload}");
         // `WorkloadList` has no `processes`; the workload's `WorkloadDetail` shows them.
@@ -1220,10 +1271,7 @@ mod definitions {
         let workloads = || {
             rows(
                 &client
-                    .view(
-                        "weft.workloads.WorkloadList",
-                        &[("formation_id", &formation_id)],
-                    )
+                    .view("weft.workloads.WorkloadList", &[("scope_id", scope_id)])
                     .ok_body(200),
             )
         };
@@ -1264,14 +1312,15 @@ mod definitions {
         use weft_impl::Ports;
         use weft_testkit::steps::{self, input, Definitions, Path};
         use weft_types::behaviour::{
-            AccountStorage, ArtifactStorage, ClusterStorage, ComponentStorage, EnvironmentStorage,
-            FormationRevisionStorage, FormationStorage, QuotaStorage, RuntimeStorage, ScopeStorage,
-            ServiceStorage, WorkloadStorage,
+            AccountStorage, ArtifactStorage, ClusterStorage, ComponentStorage,
+            ComponentWorkloadStorage, EnvironmentStorage, FormationRevisionStorage,
+            FormationStorage, QuotaStorage, RuntimeStorage, ScopeStorage, ServiceStorage,
+            WorkloadStorage,
         };
         use weft_types::primitives::Uuid;
         use weft_types::shared::{
-            AccountId, ArtifactDigest, ClusterId, EnvironmentId, FormationId, RuntimeId, ScopeId,
-            WorkloadId,
+            AccountId, ArtifactDigest, ClusterId, ComponentId, ComponentWorkloadId, EnvironmentId,
+            FormationId, FormationRevisionId, RuntimeId, ScopeId, WorkloadId,
         };
         use weft_types::workloads::obligations::CreateInstanceBehavior;
 
@@ -1281,6 +1330,7 @@ mod definitions {
         const CREATE_ENVIRONMENT: &str = "weft.architecture.CreateEnvironment";
         const REGISTER_ARTIFACT: &str = "weft.artifacts.RegisterArtifact";
         const DEFINE_WORKLOAD: &str = "weft.workloads.DefineWorkload";
+        const ASSIGN_WORKLOAD: &str = "weft.architecture.AssignWorkload";
         const DEFINE_SERVICE: &str = "weft.workloads.DefineService";
         const PIN_FORMATION: &str = "weft.cluster.PinFormation";
         const RECORD_ACCOUNT_SCOPE: &str = "weft.accounts.RecordAccountScope";
@@ -1461,17 +1511,19 @@ mod definitions {
                 id
             }
 
-            /// `AddComponent` of a component `name` to `acme`'s formation `formation`.
-            fn component(&self, formation: &str, name: &str) {
+            /// `AddComponent` of a component `name` to `acme`'s formation `formation`: its
+            /// identity.
+            fn component(&self, formation: &str, name: &str) -> String {
                 let input =
                     json!({"formation_id": formation, "scope_id": self.scope(), "name": name});
-                self.accepts(
+                let body = self.accepts(
                     steps::DEPLOYER,
                     &self.caller,
                     ADD_COMPONENT,
                     &input,
                     "added",
                 );
+                published(&body, "component_id")
             }
 
             /// A copy of environment `of` under a new identity, changed by `change`: its
@@ -1612,6 +1664,10 @@ mod definitions {
 
         fn workloads(ports: &Ports) -> usize {
             WorkloadStorage::list(ports).len()
+        }
+
+        fn assignments(ports: &Ports) -> usize {
+            ComponentWorkloadStorage::list(ports).len()
         }
 
         fn services(ports: &Ports) -> usize {
@@ -2245,7 +2301,7 @@ mod definitions {
                 "invalid-restart-policy",
             );
             // Settings tagged with another shape: refused with the input refusals, ahead of
-            // every row read (here, a formation that does not exist).
+            // every row read (here, a runtime that does not exist).
             let job_settings = json!({
                 "shape": "job",
                 "value": {"parallelism": 1, "gang": false, "max_retries": 0, "backoff": "PT1S"},
@@ -2259,7 +2315,7 @@ mod definitions {
                 &w.caller,
                 with(
                     &with(&base, "/settings", job_settings),
-                    "/formation_id",
+                    "/runtime_id",
                     json!(mint()),
                 ),
                 "settings-shape-mismatch",
@@ -2271,77 +2327,14 @@ mod definitions {
                 "settings-shape-mismatch",
             );
 
-            // Existence, in declaration order, ahead of every predicate: another account's
-            // formation and no runtime answer `no-runtime`.
-            let globex = steps::create_formation(&w.client, &w.other, &w.other_scope);
-            steps::add_component(&w.client, &w.other, &globex, &w.other_scope);
-            refuses(
-                &w.caller,
-                with(&base, "/formation_id", json!(mint())),
-                "formation-missing",
-            );
-            refuses(
-                &w.caller,
-                with(&base, "/environment_id", json!(mint())),
-                "environment-missing",
-            );
-            refuses(
-                &w.caller,
-                with(&base, "/formation_revision_id", json!(mint())),
-                "revision-missing",
-            );
+            // Existence, then the predicates on the runtime. The workload names its component
+            // by its `identity` only; the formation, environment, revision and component are
+            // `AssignWorkload`'s (story:cloud-blocks-layer-refactor-pin,
+            // `assign_workload_answers_each_guard_in_declaration_order`).
             refuses(
                 &w.caller,
                 with(&base, "/runtime_id", json!(mint())),
                 "no-runtime",
-            );
-            let foreign_without_runtime = with(
-                &with(&base, "/formation_id", json!(globex)),
-                "/runtime_id",
-                json!(mint()),
-            );
-            refuses(&w.caller, foreign_without_runtime, "no-runtime");
-            // A component the formation does not have: after `no-runtime`, ahead of the
-            // predicates (another account's formation without the component answers it too).
-            let absent = with(&base, "/component", json!("absent"));
-            refuses(&w.caller, absent.clone(), "component-missing");
-            refuses(
-                &w.caller,
-                with(&absent, "/runtime_id", json!(mint())),
-                "no-runtime",
-            );
-            refuses(
-                &w.caller,
-                with(&absent, "/formation_id", json!(globex)),
-                "component-missing",
-            );
-
-            // The predicates on the related rows.
-            refuses(
-                &w.caller,
-                with(&base, "/formation_id", json!(globex)),
-                "formation-foreign",
-            );
-            let other = w.formation("other", true);
-            // A component of another formation is not one of this formation's.
-            w.component(&other, "elsewhere");
-            refuses(
-                &w.caller,
-                with(&base, "/component", json!("elsewhere")),
-                "component-missing",
-            );
-            let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.scope());
-            let other_environment =
-                steps::create_environment(&w.client, &w.caller, &other, w.scope());
-            refuses(
-                &w.caller,
-                with(&base, "/environment_id", json!(other_environment)),
-                "environment-foreign",
-            );
-            refuses(
-                &w.caller,
-                with(&base, "/formation_revision_id", json!(other_revision)),
-                "revision-foreign",
             );
             let retired = w.runtime(&["Snippet"], "Container");
             let mut ports = w.ports();
@@ -2353,54 +2346,6 @@ mod definitions {
                 &w.caller,
                 with(&base, "/runtime_id", json!(retired)),
                 "runtime-retired",
-            );
-            // A retired environment, then a retired formation: after the foreign checks, ahead
-            // of the runtime's state.
-            let retired_environment = w.environment(&w.ids.environment_id, |row| {
-                row.state = weft_types::architecture::EnvironmentState::Retired
-            });
-            let in_retired_environment = with(&base, "/environment_id", json!(retired_environment));
-            refuses(
-                &w.caller,
-                in_retired_environment.clone(),
-                "environment-retired",
-            );
-            refuses(
-                &w.caller,
-                with(&in_retired_environment, "/runtime_id", json!(retired)),
-                "environment-retired",
-            );
-            let in_other = with(
-                &with(&base, "/formation_id", json!(other)),
-                "/formation_revision_id",
-                json!(other_revision),
-            );
-            let in_other = with(&in_other, "/environment_id", json!(other_environment));
-            w.retire_formation(&other);
-            refuses(&w.caller, in_other.clone(), "formation-retired");
-            refuses(
-                &w.caller,
-                with(&in_other, "/runtime_id", json!(retired)),
-                "formation-retired",
-            );
-            let other_retired_environment = w.environment(&other_environment, |row| {
-                row.state = weft_types::architecture::EnvironmentState::Retired
-            });
-            refuses(
-                &w.caller,
-                with(
-                    &in_other,
-                    "/environment_id",
-                    json!(other_retired_environment),
-                ),
-                "formation-retired",
-            );
-            // Another account's retired formation answers as another account's.
-            w.retire_formation(&globex);
-            refuses(
-                &w.caller,
-                with(&base, "/formation_id", json!(globex)),
-                "formation-foreign",
             );
             let image = w.runtime(&["Image", "Wasm"], "Container");
             refuses(
@@ -2518,6 +2463,170 @@ mod definitions {
                 Some(weft_types::workloads::RunAs {
                     user: "deployer".to_owned()
                 })
+            );
+        }
+
+        /// `AssignWorkload`, which holds the checks of the composition `DefineWorkload` made
+        /// before the blocks split the workload from its formation
+        /// (story:cloud-blocks-layer-refactor-pin): each guard in declaration order, then
+        /// `assigned` with what it writes, and `already-assigned` for the same component of the
+        /// revision in the environment.
+        #[test]
+        fn assign_workload_answers_each_guard_in_declaration_order() {
+            let w = World::new();
+            let refuses = |caller: &Value, input: Value, outcome: &str| {
+                w.refuses(
+                    steps::DEPLOYER,
+                    caller,
+                    ASSIGN_WORKLOAD,
+                    &input,
+                    outcome,
+                    assignments,
+                );
+            };
+            // A second component of the definitions' formation and a workload for it, not
+            // assigned yet.
+            let component = w.component(&w.ids.formation_id, "second");
+            let workload = steps::define_workload(
+                &w.client,
+                &w.caller,
+                with(&w.workload_request(), "/component", json!("second")),
+            );
+            let base = json!({
+                "formation_id": w.ids.formation_id,
+                "scope_id": w.scope(),
+                "formation_revision_id": w.ids.revision_id,
+                "environment_id": w.ids.environment_id,
+                "component_id": component,
+                "workload_id": workload,
+            });
+
+            // The input guard.
+            refuses(&w.other, base.clone(), "not-callers-scope");
+
+            // Existence, in declaration order, ahead of every predicate: another account's
+            // formation passes it.
+            let globex = steps::create_formation(&w.client, &w.other, &w.other_scope);
+            let missing = [
+                "/formation_id",
+                "/environment_id",
+                "/formation_revision_id",
+                "/component_id",
+                "/workload_id",
+            ]
+            .iter()
+            .fold(base.clone(), |input, pointer| {
+                with(&input, pointer, json!(mint()))
+            });
+            refuses(&w.caller, missing.clone(), "no-such-formation");
+            let missing = with(&missing, "/formation_id", json!(globex));
+            refuses(&w.caller, missing.clone(), "no-such-environment");
+            let missing = with(&missing, "/environment_id", json!(w.ids.environment_id));
+            refuses(&w.caller, missing.clone(), "no-such-revision");
+            let missing = with(&missing, "/formation_revision_id", json!(w.ids.revision_id));
+            refuses(&w.caller, missing.clone(), "no-such-component");
+            let missing = with(&missing, "/component_id", json!(component));
+            refuses(&w.caller, missing, "no-such-workload");
+
+            // The predicates on those rows, in declaration order.
+            refuses(
+                &w.caller,
+                with(&base, "/formation_id", json!(globex)),
+                "formation-of-other-scope",
+            );
+            let other = w.formation("other", false);
+            let other_component = w.component(&other, "elsewhere");
+            let other_revision = steps::commit_revision(&w.client, &w.caller, &other, w.scope());
+            let other_environment =
+                steps::create_environment(&w.client, &w.caller, &other, w.scope());
+            refuses(
+                &w.caller,
+                with(&base, "/environment_id", json!(other_environment)),
+                "environment-of-other-formation",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/formation_revision_id", json!(other_revision)),
+                "revision-of-other-formation",
+            );
+            refuses(
+                &w.caller,
+                with(&base, "/component_id", json!(other_component)),
+                "component-of-other-formation",
+            );
+            let globex_scope = ScopeId(Uuid(w.other_scope.clone()));
+            let foreign = w.workload(&workload, |row| row.data.scope_id = globex_scope);
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(foreign)),
+                "workload-of-other-scope",
+            );
+            // A retired formation, ahead of a retired environment; then a retired environment.
+            let in_other = json!({
+                "formation_id": other,
+                "scope_id": w.scope(),
+                "formation_revision_id": other_revision,
+                "environment_id": other_environment,
+                "component_id": other_component,
+                "workload_id": workload,
+            });
+            w.retire_formation(&other);
+            refuses(&w.caller, in_other.clone(), "formation-retired");
+            let other_retired_environment = w.environment(&other_environment, |row| {
+                row.state = weft_types::architecture::EnvironmentState::Retired
+            });
+            refuses(
+                &w.caller,
+                with(
+                    &in_other,
+                    "/environment_id",
+                    json!(other_retired_environment),
+                ),
+                "formation-retired",
+            );
+            let retired_environment = w.environment(&w.ids.environment_id, |row| {
+                row.state = weft_types::architecture::EnvironmentState::Retired
+            });
+            refuses(
+                &w.caller,
+                with(&base, "/environment_id", json!(retired_environment)),
+                "environment-retired",
+            );
+
+            // Assigned, once for the component of the revision in the environment.
+            let body = w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                ASSIGN_WORKLOAD,
+                &base,
+                "assigned",
+            );
+            let id = ComponentWorkloadId(Uuid(published(&body, "component_workload_id")));
+            let row = ComponentWorkloadStorage::get(&w.ports(), &id).expect("the assignment row");
+            assert_eq!(
+                row.state,
+                weft_types::architecture::ComponentWorkloadState::Assigned
+            );
+            assert_eq!(
+                row.data.formation_id,
+                FormationId(Uuid(w.ids.formation_id.clone()))
+            );
+            assert_eq!(
+                row.data.formation_revision_id,
+                FormationRevisionId(Uuid(w.ids.revision_id.clone()))
+            );
+            assert_eq!(
+                row.data.environment_id,
+                EnvironmentId(Uuid(w.ids.environment_id.clone()))
+            );
+            assert_eq!(row.data.component_id, ComponentId(Uuid(component)));
+            assert_eq!(row.data.workload_id, WorkloadId(Uuid(workload.clone())));
+            refuses(&w.caller, base.clone(), "already-assigned");
+            let another = w.workload(&workload, |_| {});
+            refuses(
+                &w.caller,
+                with(&base, "/workload_id", json!(another)),
+                "already-assigned",
             );
         }
 
@@ -2763,8 +2872,8 @@ mod definitions {
             };
             use weft_types::primitives::Uuid;
             use weft_types::shared::{
-                ArtifactDigest, ComponentName, EnvironmentId, FormationRevisionId, IsolationLevel,
-                ServiceId, WorkloadId,
+                ArtifactDigest, ComponentName, FormationRevisionId, IsolationLevel, ServiceId,
+                WorkloadId,
             };
 
             use super::{
@@ -2872,12 +2981,9 @@ mod definitions {
                 assert_eq!(row.data.shape, weft_types::workloads::ShapeKind::Service);
                 assert_eq!(row.data.component, ComponentName("strong".to_owned()));
                 assert_eq!(
-                    row.data.environment_id,
-                    EnvironmentId(Uuid(w.ids.environment_id.clone()))
-                );
-                assert_eq!(
-                    row.data.formation_revision_id,
-                    FormationRevisionId(Uuid(w.ids.revision_id.clone()))
+                    json!(row.data.identity.0),
+                    request["identity"],
+                    "the workload identity sent"
                 );
                 assert_eq!(
                     row.data.artifact_digest,

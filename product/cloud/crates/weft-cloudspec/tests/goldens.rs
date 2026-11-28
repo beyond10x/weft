@@ -7,7 +7,7 @@ use weft_cloudspec::digest;
 use crate::{fixtures, root, scratch};
 
 /// The commit of cloudspec the goldens are taken from.
-const COMMIT: &str = "f57337466c7c6c73863bbdc8bd02bedafc8f913d";
+const COMMIT: &str = "59129ebfcdbef65bbde498b749fb91c6ff5563b2";
 
 /// The lock of `dir`: its commit, and `(sha256 hex, file)` per golden in the lock's order.
 fn lock(dir: &Path) -> (String, Vec<(String, String)>) {

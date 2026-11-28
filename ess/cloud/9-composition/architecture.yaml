@@ -140,8 +140,8 @@ entities:
       - {name: environments, kind: owns, target: weft.architecture.Environment, cardinality: many, via: formation_id}
       - {name: components, kind: owns, target: weft.architecture.Component, cardinality: many, via: formation_id}
       - {name: links, kind: owns, target: weft.architecture.Link, cardinality: many, via: formation_id}
-      - {name: endpoints, kind: owns, target: weft.edge.Endpoint, cardinality: many, via: formation_id}
-      - {name: routes, kind: owns, target: weft.edge.Route, cardinality: many, via: formation_id}
+      - {name: routes, kind: owns, target: weft.architecture.Route, cardinality: many, via: formation_id}
+      - {name: component_workloads, kind: owns, target: weft.architecture.ComponentWorkload, cardinality: many, via: formation_id}
       - {name: configs, kind: owns, target: weft.architecture.Config, cardinality: many, via: formation_id}
       - {name: config_mounts, kind: owns, target: weft.architecture.ConfigMount, cardinality: many, via: formation_id}
       - {name: config_overrides, kind: owns, target: weft.architecture.ConfigOverride, cardinality: many, via: formation_id}
@@ -296,6 +296,70 @@ entities:
       initial: Declared
       states: [Declared]
       terminal: [Declared]
+
+  # Section 3, `Border`: "`Route`s (host and path to a component and port; what a Kubernetes
+  # Ingress says)". The host is the endpoint's. cloudspec (layer rule): moved here from
+  # weft.edge (layer 7). A route sends traffic to a component of the formation, which only the
+  # composition knows; the route names the endpoint of the edge, the edge names no route.
+  # weft@6798e7d:ess/4-applications/formations.yaml:361
+  - name: weft.architecture.Route
+    naming:
+      summary: Host and path of a public endpoint, sent to one border component on one port.
+    identity:
+      name: route_id
+      type: weft.shared.RouteId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: endpoint_id
+        type: weft.shared.EndpointId
+      # A path prefix such as `/api`. OPEN: prefix or exact match; taken: prefix.
+      - name: path
+        type: String
+      - name: component_id
+        type: weft.shared.ComponentId
+      - name: port
+        type: weft.edge.Port
+    relations:
+      - {name: endpoint, kind: references, target: weft.edge.Endpoint, cardinality: one, via: endpoint_id}
+      - {name: component, kind: references, target: weft.architecture.Component, cardinality: one, via: component_id}
+    lifecycle:
+      initial: Declared
+      states: [Declared]
+      terminal: [Declared]
+
+  # Sketch lines 205-211 and section 3 line 164: one Workload is one component of one formation
+  # revision applied to one environment. cloudspec (layer rule): the composition records that
+  # fact. weft's Workload carried formation_id, formation_revision_id, environment_id and the
+  # component name; weft.workloads (layer 5) must not know the composition, so the workload
+  # carries only its scope, its component name and its workload identity, and this row ties it to
+  # the component, revision and environment it realizes.
+  - name: weft.architecture.ComponentWorkload
+    naming:
+      summary: The workload that realizes one component of one revision of a formation in one of its environments.
+    identity:
+      name: component_workload_id
+      type: weft.shared.ComponentWorkloadId
+    fields:
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: formation_revision_id
+        type: weft.shared.FormationRevisionId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: component_id
+        type: weft.shared.ComponentId
+      - name: workload_id
+        type: weft.shared.WorkloadId
+    relations:
+      - {name: formation_revision, kind: references, target: weft.architecture.FormationRevision, cardinality: one, via: formation_revision_id}
+      - {name: environment, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
+      - {name: component, kind: references, target: weft.architecture.Component, cardinality: one, via: component_id}
+      - {name: workload, kind: references, target: weft.workloads.Workload, cardinality: one, via: workload_id}
+    lifecycle:
+      initial: Assigned
+      states: [Assigned]
+      terminal: [Assigned]
 
   # Section 3: "`Config`: named non-secret data (files, key-value pairs) of the
   # formation ... What a Kubernetes ConfigMap says." `data` maps a key (or a file name) to its
@@ -458,6 +522,27 @@ errors:
   # weft@6798e7d:ess/4-applications/formations.yaml:530
   - name: weft.architecture.RoutesRemain
     summary: A route still names this component or endpoint, and nothing changed.
+  # cloudspec (layer rule): the route errors moved here from weft.edge with weft.architecture.Route.
+  # weft@6798e7d:ess/4-applications/formations.yaml:528
+  - name: weft.architecture.NotOnBorder
+    summary: The component is not on the formation's border, so no route may reach it, and nothing changed.
+  # weft@6798e7d:ess/4-applications/formations.yaml:534
+  - name: weft.architecture.NoSuchEndpoint
+    summary: No endpoint of the formation's scope has this id, and nothing changed.
+  # weft@6798e7d:ess/4-applications/formations.yaml:554
+  - name: weft.architecture.NoSuchRoute
+    summary: No route of this formation has this id, and nothing changed.
+  # weft@6798e7d:ess/4-applications/formations.yaml:556
+  - name: weft.architecture.RouteExists
+    summary: The endpoint already routes this path, and nothing was created.
+  # cloudspec (layer rule): the refusals of weft's DefineWorkload that read the composition, for
+  # weft.architecture.AssignWorkload.
+  - name: weft.architecture.NoSuchRevision
+    summary: No revision of this formation has this id, and nothing changed.
+  - name: weft.architecture.NoSuchWorkload
+    summary: No workload of the formation's scope has this id, and nothing changed.
+  - name: weft.architecture.WorkloadAlreadyAssigned
+    summary: A workload is already assigned to this component in this revision and environment, and nothing changed.
   # weft@6798e7d:ess/4-applications/formations.yaml:558
   - name: weft.architecture.NoSuchConfig
     summary: No config of this formation has this id, and nothing changed.
@@ -568,6 +653,30 @@ events:
     fields:
       - {name: link_id, type: weft.shared.LinkId}
       - {name: formation_id, type: weft.shared.FormationId}
+  # cloudspec (layer rule): moved here from weft.edge with weft.architecture.Route.
+  # weft@6798e7d:ess/4-applications/formations.yaml:666
+  - name: weft.architecture.RouteAdded
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: path, type: String}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: port, type: weft.edge.Port}
+  # weft@6798e7d:ess/4-applications/formations.yaml:674
+  - name: weft.architecture.RouteRemoved
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: formation_id, type: weft.shared.FormationId}
+  # cloudspec (layer rule): the composition's half of weft's WorkloadDefined.
+  - name: weft.architecture.WorkloadAssigned
+    fields:
+      - {name: component_workload_id, type: weft.shared.ComponentWorkloadId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
   # Config events carry names and ids, not the data: a config is non-secret, but events stay
   # small and the data is read through the Configs view.
   # weft@6798e7d:ess/4-applications/formations.yaml:680
@@ -1181,7 +1290,7 @@ commands:
         error: weft.architecture.ComponentInUse
       - name: routed
         when_related:
-          entity: weft.edge.Route
+          entity: weft.architecture.Route
           where: component_id == input.component_id
           exists: true
         error: weft.architecture.ComponentInUse
@@ -1215,8 +1324,16 @@ commands:
       display: Put a component on the border
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: component_id, type: weft.shared.ComponentId}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
         error: weft.architecture.NoSuchFormation
@@ -1226,6 +1343,11 @@ commands:
       - name: no-such-component
         when_related: {via: input.component_id, exists: false}
         error: weft.architecture.NoSuchComponent
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}
         error: weft.architecture.FormationStateConflict
@@ -1283,7 +1405,7 @@ commands:
         error: weft.architecture.NoSuchComponent
       - name: routed
         when_related:
-          entity: weft.edge.Route
+          entity: weft.architecture.Route
           where: component_id == input.component_id
           exists: true
         error: weft.architecture.RoutesRemain
@@ -1310,12 +1432,20 @@ commands:
       display: Allow a link
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: caller_component_id, type: weft.shared.ComponentId}
       - {name: target_component_id, type: weft.shared.ComponentId}
       - {name: protocol, type: weft.architecture.LinkProtocol}
       - {name: port, type: weft.edge.Port}
       - {name: data, type: Optional<weft.architecture.DataDirection>}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
         error: weft.architecture.NoSuchFormation
@@ -1325,6 +1455,11 @@ commands:
       - name: no-such-target
         when_related: {via: input.target_component_id, exists: false}
         error: weft.architecture.NoSuchComponent
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}
         error: weft.architecture.FormationStateConflict
@@ -1413,6 +1548,222 @@ commands:
             link_id: input.link_id
             formation_id: input.formation_id
 
+  # Section 3, `Border`: "host and path to a component and port". Only a component on the
+  # border may be routed to (section 3, `Border`: "Everything else is internal"). cloudspec (layer
+  # rule): moved here from weft.edge with weft.architecture.Route; the endpoint is an endpoint of
+  # the edge in the formation's scope (weft: of the formation).
+  # weft@6798e7d:ess/4-applications/formations.yaml:1760
+  - name: weft.architecture.AddRoute
+    naming:
+      display: Add a route
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - {name: path, type: String}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: port, type: weft.edge.Port}
+    outcomes:
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.architecture.NoSuchFormation
+      - name: no-such-endpoint
+        when_related: {via: input.endpoint_id, exists: false}
+        error: weft.architecture.NoSuchEndpoint
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.architecture.NoSuchComponent
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.architecture.FormationStateConflict
+      # An endpoint of another scope than the formation's answers like a missing one.
+      - name: foreign-endpoint
+        when_related:
+          entity: weft.edge.Endpoint
+          where:
+            all:
+              - endpoint_id == input.endpoint_id
+              - not:
+                  exists:
+                    as: f
+                    in: {entity: weft.architecture.Formation}
+                    that: {all: [{f.scope_id: {eq: {fact: scope_id}}}, f.formation_id == input.formation_id]}
+          exists: true
+        error: weft.architecture.NoSuchEndpoint
+      - name: foreign-component
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.architecture.NoSuchComponent
+      - name: not-on-border
+        when_related: {via: input.component_id, predicate: on_border == false}
+        error: weft.architecture.NotOnBorder
+      - name: exists
+        when_related:
+          entity: weft.architecture.Route
+          where:
+            all:
+              - endpoint_id == input.endpoint_id
+              - path == input.path
+          exists: true
+        error: weft.architecture.RouteExists
+      - name: added
+        creates: weft.architecture.Route
+        instance: route_id
+        sets:
+          formation_id: input.formation_id
+          endpoint_id: input.endpoint_id
+          path: input.path
+          component_id: input.component_id
+          port: input.port
+        emits: [weft.architecture.RouteAdded]
+        payload:
+          weft.architecture.RouteAdded:
+            route_id: {generated: true}
+            formation_id: input.formation_id
+            endpoint_id: input.endpoint_id
+            path: input.path
+            component_id: input.component_id
+            port: input.port
+
+  # Section 3, `Border`. cloudspec (layer rule): moved here from weft.edge.
+  # weft@6798e7d:ess/4-applications/formations.yaml:1820
+  - name: weft.architecture.RemoveRoute
+    naming:
+      display: Remove a route
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      # Isolation pass 2: the account the request acts in, so the formation can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: route_id, type: weft.shared.RouteId}
+    outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing formation (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.architecture.NoSuchFormation
+      - name: unknown-route
+        unknown_instance: true
+        error: weft.architecture.NoSuchRoute
+      - name: no-such-route
+        when_related: {via: input.route_id, exists: false}
+        error: weft.architecture.NoSuchRoute
+      # Isolation pass 2: a formation of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchFormation
+      - name: retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.architecture.FormationStateConflict
+      - name: foreign-route
+        when_related: {via: input.route_id, predicate: formation_id != input.formation_id}
+        error: weft.architecture.NoSuchRoute
+      - name: removed
+        deletes: weft.architecture.Route
+        instance: route_id
+        emits: [weft.architecture.RouteRemoved]
+        payload:
+          weft.architecture.RouteRemoved:
+            route_id: input.route_id
+            formation_id: input.formation_id
+
+  # Sketch lines 205-211 and section 3: a workload is one of the formation's components, applied
+  # to one environment at one revision. cloudspec (layer rule): the refusals of weft's
+  # DefineWorkload that read the composition (a formation, environment or revision of another
+  # scope or another formation, a component the formation does not have, a retired formation or
+  # environment) move here; weft.workloads.DefineWorkload defines the workload in its scope, and
+  # this command ties it to the component. A new revision assigns the workload that replaces the
+  # old one.
+  # OPEN: whether the workload's component name must equal the component's name; a guard here
+  # reads one related row at a time, so the two names are not compared.
+  - name: weft.architecture.AssignWorkload
+    naming:
+      display: Assign a workload to a component
+    input:
+      - {name: formation_id, type: weft.shared.FormationId}
+      # Isolation pass 2: the scope the request acts in, so the formation and the workload can be
+      # tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+    outcomes:
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
+      # hardening pass 1 W1 (weft's DefineWorkload): the formation, its environment and its
+      # revision are the scope's, so a workload never joins another scope's formation. Missing and
+      # foreign answer alike; every existence check answers before every predicate.
+      - name: no-such-formation
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.architecture.NoSuchFormation
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.architecture.NoSuchEnvironment
+      - name: no-such-revision
+        when_related: {via: input.formation_revision_id, exists: false}
+        error: weft.architecture.NoSuchRevision
+      - name: no-such-component
+        when_related: {via: input.component_id, exists: false}
+        error: weft.architecture.NoSuchComponent
+      - name: no-such-workload
+        when_related: {via: input.workload_id, exists: false}
+        error: weft.architecture.NoSuchWorkload
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchFormation
+      - name: environment-of-other-formation
+        when_related: {via: input.environment_id, predicate: formation_id != input.formation_id}
+        error: weft.architecture.NoSuchEnvironment
+      - name: revision-of-other-formation
+        when_related: {via: input.formation_revision_id, predicate: formation_id != input.formation_id}
+        error: weft.architecture.NoSuchRevision
+      - name: component-of-other-formation
+        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
+        error: weft.architecture.NoSuchComponent
+      - name: workload-of-other-scope
+        when_related: {via: input.workload_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchWorkload
+      # A retired formation or environment takes no new workload (a retired formation takes no
+      # edit and no commit). After the foreign checks, so another scope's state is not read.
+      - name: formation-retired
+        when_related: {via: input.formation_id, predicate: state == Retired}
+        error: weft.architecture.FormationStateConflict
+      - name: environment-retired
+        when_related: {via: input.environment_id, predicate: state == Retired}
+        error: weft.architecture.EnvironmentStateConflict
+      - name: already-assigned
+        when_related:
+          entity: weft.architecture.ComponentWorkload
+          where:
+            all:
+              - formation_revision_id == input.formation_revision_id
+              - environment_id == input.environment_id
+              - component_id == input.component_id
+          exists: true
+        error: weft.architecture.WorkloadAlreadyAssigned
+      - name: assigned
+        creates: weft.architecture.ComponentWorkload
+        instance: component_workload_id
+        sets:
+          formation_id: input.formation_id
+          formation_revision_id: input.formation_revision_id
+          environment_id: input.environment_id
+          component_id: input.component_id
+          workload_id: input.workload_id
+        emits: [weft.architecture.WorkloadAssigned]
+        payload:
+          weft.architecture.WorkloadAssigned:
+            component_workload_id: {generated: true}
+            formation_id: input.formation_id
+            formation_revision_id: input.formation_revision_id
+            environment_id: input.environment_id
+            component_id: input.component_id
+            workload_id: input.workload_id
+
   # Section 3, `Config`.
   # weft@6798e7d:ess/4-applications/formations.yaml:1865
   - name: weft.architecture.CreateConfig
@@ -1420,11 +1771,24 @@ commands:
       display: Create a config
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: name, type: weft.architecture.ConfigName}
       - {name: data, type: "Map<String, String>"}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
+        error: weft.architecture.NoSuchFormation
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
         error: weft.architecture.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}
@@ -1567,11 +1931,19 @@ commands:
       display: Mount a config into a component
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: component_id, type: weft.shared.ComponentId}
       - {name: config_id, type: weft.shared.ConfigId}
       - {name: kind, type: weft.architecture.MountKind}
       - {name: target, type: String}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
         error: weft.architecture.NoSuchFormation
@@ -1581,6 +1953,11 @@ commands:
       - name: no-such-config
         when_related: {via: input.config_id, exists: false}
         error: weft.architecture.NoSuchConfig
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}
         error: weft.architecture.FormationStateConflict
@@ -1671,10 +2048,18 @@ commands:
       display: Set a config's values for an environment
     input:
       - {name: formation_id, type: weft.shared.FormationId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: config_id, type: weft.shared.ConfigId}
       - {name: environment_id, type: weft.shared.EnvironmentId}
       - {name: data, type: "Map<String, String>"}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.architecture.NoSuchFormation
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
         error: weft.architecture.NoSuchFormation
@@ -1684,6 +2069,11 @@ commands:
       - name: no-such-environment
         when_related: {via: input.environment_id, exists: false}
         error: weft.architecture.NoSuchEnvironment
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: formation-of-other-scope
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.architecture.NoSuchFormation
       - name: retired
         when_related: {via: input.formation_id, predicate: state == Retired}
         error: weft.architecture.FormationStateConflict
@@ -2113,6 +2503,68 @@ views:
         field: {related: {via: caller_component_id, field: name}}
       - {name: protocol, type: weft.architecture.LinkProtocol}
       - {name: port, type: weft.edge.Port}
+  # cloudspec (layer rule): moved here from weft.edge with weft.architecture.Route.
+  # Topology: the border's routes, with the endpoint's host and the component's name (section 3,
+  # `Border`). The border's components are FormationComponents rows with `on_border`.
+  # weft@6798e7d:ess/4-applications/formations.yaml:2538
+  - name: weft.architecture.FormationBorder
+    source: weft.architecture.Route
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - name: host
+        type: Optional<weft.edge.Host>
+        field: {related: {via: endpoint_id, field: host}}
+      - {name: path, type: String}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - name: component_name
+        type: Optional<weft.shared.ComponentName>
+        field: {related: {via: component_id, field: name}}
+      - {name: port, type: weft.edge.Port}
+
+  # cloudspec (layer rule): moved here from weft.edge with weft.architecture.Route.
+  # Reachability of a component, from outside (section 3, `Border`): every host and path
+  # routed to it. No row, not reachable from outside.
+  # weft@6798e7d:ess/4-applications/formations.yaml:2607
+  - name: weft.architecture.ComponentRoutes
+    source: weft.architecture.Route
+    consistency: read_your_writes
+    params:
+      - {name: component_id, type: weft.shared.ComponentId}
+    filter: component_id == param.component_id
+    fields:
+      - {name: route_id, type: weft.shared.RouteId}
+      - {name: endpoint_id, type: weft.shared.EndpointId}
+      - name: host
+        type: Optional<weft.edge.Host>
+        field: {related: {via: endpoint_id, field: host}}
+      - {name: path, type: String}
+      - {name: port, type: weft.edge.Port}
+
+  # Sketch section 4: the workloads of a formation (weft's workloads.WorkloadList by formation).
+  # cloudspec (layer rule): the composition's record of which workload realizes which component in
+  # which revision and environment; weft.workloads.WorkloadList lists the workloads of a scope.
+  - name: weft.architecture.FormationWorkloads
+    source: weft.architecture.ComponentWorkload
+    consistency: read_your_writes
+    params:
+      - {name: formation_id, type: weft.shared.FormationId}
+    filter: formation_id == param.formation_id
+    fields:
+      - {name: component_workload_id, type: weft.shared.ComponentWorkloadId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: component_id, type: weft.shared.ComponentId}
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+        field: {related: {via: component_id, field: name}}
+      - {name: workload_id, type: weft.shared.WorkloadId}
 
   # Section 3, `Config`.
   # weft@6798e7d:ess/4-applications/formations.yaml:2623

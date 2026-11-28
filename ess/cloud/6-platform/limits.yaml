@@ -17,8 +17,10 @@ entities:
   # has a scope: an account and everything below it, or one formation in it, or one component of
   # that formation. Every limit on the account path of a unit of work applies to it; the
   # strictest decides.
-  # Each limit `references` its account and formation (integration pass, 2026-11-26).
-  # That formation_id lies in scope_id is checked by the Set commands (hardening pass 1 W5).
+  # Each limit `references` its account (integration pass, 2026-11-26). cloudspec (layer rule): the
+  # formation is named by its workload-identity prefix (`formation_path`, the scope and formation
+  # segments), not by the composition's id, so a layer-6 block names no layer-9 record; that it
+  # lies in scope_id is an external check of the Set commands (hardening pass 1 W5).
   # UNMAPPED: that component is a component of that formation is `formations`' record; no guard
   # checks it.
   # OPEN: may an admin of an account change or remove a limit that a TenantOwner or the admin of
@@ -40,8 +42,8 @@ entities:
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
+      - name: formation_path
+        type: Optional<weft.shared.WorkloadIdentity>
       - name: component
         type: Optional<weft.shared.ComponentName>
       - name: max_seconds
@@ -50,10 +52,9 @@ entities:
         type: Timestamp
     relations:
       - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
-      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
     invariants:
       - max_seconds >= 1
-      - any: ["not defined(component)", "defined(formation_id)"]
+      - any: ["not defined(component)", "defined(formation_path)"]
     lifecycle:
       initial: Active
       states: [Active, Removed]
@@ -80,8 +81,8 @@ entities:
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
+      - name: formation_path
+        type: Optional<weft.shared.WorkloadIdentity>
       - name: component
         type: Optional<weft.shared.ComponentName>
       - name: max_concurrent
@@ -92,11 +93,10 @@ entities:
         type: Timestamp
     relations:
       - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
-      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
     invariants:
       - max_concurrent >= 1
       - in_use >= 0
-      - any: ["not defined(component)", "defined(formation_id)"]
+      - any: ["not defined(component)", "defined(formation_path)"]
     lifecycle:
       initial: Active
       states: [Active, Removed]
@@ -122,8 +122,8 @@ entities:
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
+      - name: formation_path
+        type: Optional<weft.shared.WorkloadIdentity>
       - name: component
         type: Optional<weft.shared.ComponentName>
       - name: max_requests
@@ -134,11 +134,10 @@ entities:
         type: Timestamp
     relations:
       - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
-      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
     invariants:
       - max_requests >= 1
       - window_seconds >= 1
-      - any: ["not defined(component)", "defined(formation_id)"]
+      - any: ["not defined(component)", "defined(formation_path)"]
     lifecycle:
       initial: Active
       states: [Active, Removed]
@@ -180,7 +179,7 @@ events:
     fields:
       - {name: deadline_id, type: weft.shared.DeadlineId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_seconds, type: Integer}
   # weft@6798e7d:ess/8-economy/metering.yaml:814
@@ -197,7 +196,7 @@ events:
     fields:
       - {name: concurrency_id, type: weft.shared.ConcurrencyId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_concurrent, type: Integer}
   # weft@6798e7d:ess/8-economy/metering.yaml:859
@@ -224,7 +223,7 @@ events:
     fields:
       - {name: rate_id, type: weft.shared.RateId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_requests, type: Integer}
       - {name: window_seconds, type: Integer}
@@ -248,7 +247,7 @@ commands:
       display: Set a deadline
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_seconds, type: Integer}
     outcomes:
@@ -262,22 +261,21 @@ commands:
         error: weft.limits.InvalidLimit
       - name: component-without-formation
         when:
-          all: ["defined(component)", "not defined(formation_id)"]
+          all: ["defined(component)", "not defined(formation_path)"]
         error: weft.limits.ComponentWithoutFormation
-      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
-      # formation of another account answers like a missing one, so its existence is not disclosed.
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account. weft
+      # read the composition's Formation row; cloudspec (layer rule): a layer-6 block reads no
+      # layer-9 record, so the formation path is checked outside this domain. A formation of
+      # another account still answers like a missing one.
       - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.limits.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        external: the formation path names no formation of the limit's scope (composition domain)
         error: weft.limits.NotFound
       - name: set
         creates: weft.limits.Deadline
         instance: deadline_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
+          formation_path: input.formation_path
           component: input.component
           max_seconds: input.max_seconds
           set_at: {generated: true}
@@ -286,7 +284,7 @@ commands:
           weft.limits.DeadlineSet:
             deadline_id: {generated: true}
             scope_id: input.scope_id
-            formation_id: input.formation_id
+            formation_path: input.formation_path
             component: input.component
             max_seconds: input.max_seconds
 
@@ -360,7 +358,7 @@ commands:
       display: Set a concurrency limit
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_concurrent, type: Integer}
     outcomes:
@@ -374,22 +372,21 @@ commands:
         error: weft.limits.InvalidLimit
       - name: component-without-formation
         when:
-          all: ["defined(component)", "not defined(formation_id)"]
+          all: ["defined(component)", "not defined(formation_path)"]
         error: weft.limits.ComponentWithoutFormation
-      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
-      # formation of another account answers like a missing one, so its existence is not disclosed.
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account. weft
+      # read the composition's Formation row; cloudspec (layer rule): a layer-6 block reads no
+      # layer-9 record, so the formation path is checked outside this domain. A formation of
+      # another account still answers like a missing one.
       - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.limits.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        external: the formation path names no formation of the limit's scope (composition domain)
         error: weft.limits.NotFound
       - name: set
         creates: weft.limits.Concurrency
         instance: concurrency_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
+          formation_path: input.formation_path
           component: input.component
           max_concurrent: input.max_concurrent
           in_use: 0
@@ -399,7 +396,7 @@ commands:
           weft.limits.ConcurrencySet:
             concurrency_id: {generated: true}
             scope_id: input.scope_id
-            formation_id: input.formation_id
+            formation_path: input.formation_path
             component: input.component
             max_concurrent: input.max_concurrent
 
@@ -541,7 +538,7 @@ commands:
       display: Set a rate limit
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_requests, type: Integer}
       - {name: window_seconds, type: Integer}
@@ -559,22 +556,21 @@ commands:
         error: weft.limits.InvalidLimit
       - name: component-without-formation
         when:
-          all: ["defined(component)", "not defined(formation_id)"]
+          all: ["defined(component)", "not defined(formation_path)"]
         error: weft.limits.ComponentWithoutFormation
-      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
-      # formation of another account answers like a missing one, so its existence is not disclosed.
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account. weft
+      # read the composition's Formation row; cloudspec (layer rule): a layer-6 block reads no
+      # layer-9 record, so the formation path is checked outside this domain. A formation of
+      # another account still answers like a missing one.
       - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.limits.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        external: the formation path names no formation of the limit's scope (composition domain)
         error: weft.limits.NotFound
       - name: set
         creates: weft.limits.Rate
         instance: rate_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
+          formation_path: input.formation_path
           component: input.component
           max_requests: input.max_requests
           window_seconds: input.window_seconds
@@ -584,7 +580,7 @@ commands:
           weft.limits.RateSet:
             rate_id: {generated: true}
             scope_id: input.scope_id
-            formation_id: input.formation_id
+            formation_path: input.formation_path
             component: input.component
             max_requests: input.max_requests
             window_seconds: input.window_seconds
@@ -669,7 +665,7 @@ commands:
       display: Admit new work against the limits
     input:
       - {name: scope_path, type: List<weft.shared.ScopeId>}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: formation_path, type: weft.shared.WorkloadIdentity}
       - {name: component, type: weft.shared.ComponentName}
       - {name: max_seconds, type: Integer}
     outcomes:
@@ -682,7 +678,7 @@ commands:
             all:
               - state == Active
               - exists: {in: input.scope_path, as: a, that: scope_id == a}
-              - any: ["not defined(formation_id)", formation_id == input.formation_id]
+              - any: ["not defined(formation_path)", formation_path == input.formation_path]
               - any: ["not defined(component)", component == input.component]
               - max_seconds < input.max_seconds
           exists: true
@@ -704,7 +700,7 @@ views:
     fields:
       - {name: deadline_id, type: weft.shared.DeadlineId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_seconds, type: Integer}
       - {name: set_at, type: Timestamp}
@@ -721,7 +717,7 @@ views:
     fields:
       - {name: concurrency_id, type: weft.shared.ConcurrencyId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_concurrent, type: Integer}
       - {name: in_use, type: Integer}
@@ -739,7 +735,7 @@ views:
     fields:
       - {name: rate_id, type: weft.shared.RateId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: formation_path, type: Optional<weft.shared.WorkloadIdentity>}
       - {name: component, type: Optional<weft.shared.ComponentName>}
       - {name: max_requests, type: Integer}
       - {name: window_seconds, type: Integer}

@@ -19,7 +19,6 @@ vars:
   zone: z1
   per_pool: 2
   isolation_facts: {kvm_present: true, cgroups_delegated: true, egress_denied: true, gpu_passthrough: false, levels: [Container, MicroVm]}
-  capacity: [{resource_class: cpu, amount: 32}]
 
 chain:
   - weft.cluster.AddClusterNodePool
@@ -103,7 +102,7 @@ setup:
     input: {node_pool_id: "${pool_drain}", join_token_expires_at: "2026-01-01T06:00:00Z"}
     expect: provisioned
   - {label: join-drain, repeat: "${per_pool}", command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_${i}}", join_token: "${token_${i}}"}, expect: joined}
-  - {label: observe-drain, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: observe-drain, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_${i}}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
 
 ticks: 4
 

@@ -3,21 +3,25 @@
 //!
 //! 1. the input guard `no-claims`;
 //! 2. every existence check before every predicate, in declaration order: `unknown-scope` (no
-//!    `weft.scope.Scope` of the identity, in any state), `unknown-formation`,
-//!    `unknown-priority`, and `unknown-gang` where a gang is named;
-//! 3. the predicates in declaration order: `formation-of-other-scope`, `retired-priority`,
-//!    `already-requested` (a `Pending` or `Unschedulable` request of the instance),
-//!    `gang-closed` (not `Forming`), `gang-of-other-scope`;
-//! 4. `requested`: a `Pending` request in the scope, with the priority class's value,
+//!    `weft.scope.Scope` of the identity, in any state), `unknown-priority`, and `unknown-gang`
+//!    where a gang is named;
+//! 3. the predicates in declaration order: `retired-priority`, `already-requested` (a `Pending`
+//!    or `Unschedulable` request of the instance), `gang-closed` (not `Forming`),
+//!    `gang-of-other-scope`;
+//! 4. the external branches of scope isolation, decided from the rows of the same store:
+//!    `no-such-instance` (no `weft.workloads.Instance` of the identity), `instance-of-other-scope`
+//!    (the instance's `scope_id` is not the request's), `identity-not-instances` (an `identity`
+//!    is given and the instance's workload does not hold it, or the workload row is missing);
+//! 5. `requested`: a `Pending` request in the scope, with the priority class's value,
 //!    preemption and grace, and `requested_at` from the clock.
 //!
-//! The blocks dropped the checks of the instance (it exists, it is the scope's, its workload
-//! runs in the formation) and the request's tenant and cluster: `weft.scheduling.PlaceInstance`
-//! ties the request to its tenant and its cluster when the scheduler places it.
+//! story:cloud-blocks-layer-refactor-pin: the request names no formation (cloudspec layer
+//! rule); `weft.scheduling.PlaceInstance` ties the request to its tenant, its formation (through
+//! `weft.architecture.ComponentWorkload`) and its cluster when the scheduler places it.
 
 use weft_types::behaviour::{
-    Context, FormationStorage, GangStorage, PriorityClassStorage, SchedulingRequestStorage,
-    ScopeStorage,
+    Context, GangStorage, InstanceStorage, PriorityClassStorage, SchedulingRequestStorage,
+    ScopeStorage, WorkloadStorage,
 };
 use weft_types::infrastructure::PriorityClassState;
 use weft_types::obligation::UnmetObligation;
@@ -46,9 +50,6 @@ impl SubmitSchedulingRequestBehavior for Ports {
         if ScopeStorage::get(self, &input.scope_id).is_none() {
             return Ok(SubmitSchedulingRequestOutcome::UnknownScope { error: NotFound });
         }
-        let Some(formation) = FormationStorage::get(self, &input.formation_id) else {
-            return Ok(SubmitSchedulingRequestOutcome::UnknownFormation { error: NotFound });
-        };
         let Some(class) = PriorityClassStorage::get(self, &input.priority) else {
             return Ok(SubmitSchedulingRequestOutcome::UnknownPriority {
                 error: UnknownPriorityClass,
@@ -64,9 +65,6 @@ impl SubmitSchedulingRequestBehavior for Ports {
             None => None,
         };
 
-        if formation.data.scope_id != input.scope_id {
-            return Ok(SubmitSchedulingRequestOutcome::FormationOfOtherScope { error: NotFound });
-        }
         if class.state == PriorityClassState::Retired {
             return Ok(SubmitSchedulingRequestOutcome::RetiredPriority {
                 error: PriorityClassIsRetired,
@@ -98,6 +96,22 @@ impl SubmitSchedulingRequestBehavior for Ports {
             });
         }
 
+        let Some(instance) = InstanceStorage::get(self, &input.instance_id) else {
+            return Ok(SubmitSchedulingRequestOutcome::NoSuchInstance { error: NotFound });
+        };
+        if instance.data.scope_id != input.scope_id {
+            return Ok(SubmitSchedulingRequestOutcome::InstanceOfOtherScope { error: NotFound });
+        }
+        if let Some(identity) = &input.identity {
+            let holds = WorkloadStorage::get(self, &instance.data.workload_id)
+                .is_some_and(|workload| &workload.data.identity == identity);
+            if !holds {
+                return Ok(SubmitSchedulingRequestOutcome::IdentityNotInstances {
+                    error: RequestMismatch,
+                });
+            }
+        }
+
         let request_id = SchedulingRequestId(Uuid(mint()));
         let requested = SchedulingRequested {
             request_id: request_id.clone(),
@@ -115,7 +129,6 @@ impl SubmitSchedulingRequestBehavior for Ports {
                     request_id,
                     instance_id: input.instance_id,
                     scope_id: input.scope_id,
-                    formation_id: input.formation_id,
                     claims: input.claims,
                     min_isolation: input.min_isolation,
                     zones: input.zones,

@@ -5,10 +5,11 @@ views:
   weft.cluster.ClustersOfAccount: formations.yaml
   weft.architecture.Environments: formations.yaml
   weft.architecture.FormationComponents: formations.yaml
+  weft.architecture.FormationWorkloads: formations.yaml
   weft.architecture.FormationRevisions: formations.yaml
   weft.architecture.FormationLinks: formations.yaml
   weft.edge.Endpoints: formations.yaml
-  weft.edge.FormationBorder: formations.yaml
+  weft.architecture.FormationBorder: formations.yaml
   weft.architecture.Configs: formations.yaml
   weft.architecture.ConfigMounts: formations.yaml
   weft.architecture.ScaleSettings: formations.yaml
@@ -51,5 +52,5 @@ views:
   weft.observability.Alerts: metering.yaml
   weft.observability.AlertRules: metering.yaml
 derived:
-  weft.services.FormationServiceBindings:
+  weft.services.WorkloadServiceBindings:
     same_as: weft.services.ServiceBindingList

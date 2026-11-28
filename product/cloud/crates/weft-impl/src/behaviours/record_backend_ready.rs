@@ -6,8 +6,8 @@
 //!    row of the input's instance), `no-such-workload` (no `weft.workloads.Workload` row of the
 //!    input's workload), `other-workload` (the instance is another workload's);
 //! 2. the row-set guard `known`: a `weft.edge.RouteBackend` of the instance exists;
-//! 3. `added` otherwise: a new `Ready` backend of the instance, with the workload's formation,
-//!    environment and component, and `BackendSetChanged` with `ready: true`.
+//! 3. `added` otherwise: a new `Ready` backend of the instance, with the workload's component-level
+//!    `identity` and component, and `BackendSetChanged` with `ready: true`.
 
 use weft_types::behaviour::{InstanceStorage, RouteBackendStorage, WorkloadStorage};
 use weft_types::edge::obligations::RecordBackendReadyBehavior;
@@ -60,8 +60,7 @@ impl RecordBackendReadyBehavior for Ports {
                     backend_id: backend_id.clone(),
                     instance_id: input.instance_id.clone(),
                     workload_id: input.workload_id.clone(),
-                    formation_id: workload.data.formation_id,
-                    environment_id: workload.data.environment_id,
+                    identity: workload.data.identity,
                     component: workload.data.component,
                 },
             },

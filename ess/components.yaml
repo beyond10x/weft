@@ -154,6 +154,8 @@ components:
         # commands of weft.architecture and weft.formations
         - weft.architecture.AddComponent
         - weft.architecture.AddLink
+        - weft.architecture.AddRoute
+        - weft.architecture.AssignWorkload
         - weft.architecture.AddToBorder
         - weft.architecture.ChangeConfig
         - weft.architecture.ChangeConfigOverride
@@ -171,6 +173,7 @@ components:
         - weft.architecture.RemoveConfigOverride
         - weft.architecture.RemoveFromBorder
         - weft.architecture.RemoveLink
+        - weft.architecture.RemoveRoute
         - weft.architecture.RemoveScale
         - weft.architecture.RetireEnvironment
         - weft.architecture.RetireFormation
@@ -250,7 +253,10 @@ components:
         - weft.architecture.FormationRetired
         - weft.architecture.LinkAdded
         - weft.architecture.LinkRemoved
+        - weft.architecture.RouteAdded
+        - weft.architecture.RouteRemoved
         - weft.architecture.RevisionCommitted
+        - weft.architecture.WorkloadAssigned
         - weft.architecture.ScaleChanged
         - weft.architecture.ScaleRemoved
         - weft.architecture.ScaleSet
@@ -442,6 +448,7 @@ components:
         # commands of weft.inventory
         - weft.inventory.DefineResourceClass
         - weft.inventory.ReportDevice
+        - weft.inventory.ReportNodeCapacity
         - weft.inventory.ReportDeviceFault
         - weft.inventory.ReportDeviceRemoved
         - weft.inventory.ReportDeviceSliced
@@ -801,6 +808,7 @@ components:
         - weft.inventory.DeviceReset
         - weft.inventory.DeviceSliced
         - weft.inventory.DeviceWiped
+        - weft.inventory.NodeCapacityReported
         - weft.inventory.ResourceClassDefined
         - weft.inventory.ResourceClassRetired
         # events of weft.metering
@@ -1060,11 +1068,12 @@ components:
   # endpoint events, workloads readiness events, its own BackendSetChanged) and EdgeGateway's own
   # commands.
   # Publishes: WakeRequested (r8-edge-wake, R8) and BackendSetChanged (r8-edge-forward).
-  # Story cloud-blocks-vendor and -policies: the vendored weft.edge holds the routes and endpoints
-  # weft.formations held, so their user commands (AddRoute, RemoveRoute, AddEndpoint,
-  # RemoveEndpoint) are accepted and their events published here. OPEN: this component is not
-  # reached by network, so those four user commands have no HTTP surface; weft-api would forward
-  # them (the OPEN of D1 at the top), or weft-edge would be `reached_by: network`.
+  # Story cloud-blocks-vendor and -policies: the vendored weft.edge holds the endpoints
+  # weft.formations held, so their user commands (AddEndpoint, RemoveEndpoint) are accepted and
+  # their events published here. OPEN: this component is not reached by network, so those two
+  # user commands have no HTTP surface; weft-api would forward them (the OPEN of D1 at the top),
+  # or weft-edge would be `reached_by: network`. Story cloud-blocks-layer-refactor-pin: the routes
+  # moved to weft.architecture (cloudspec layer rule), so AddRoute and RemoveRoute are weft-api's.
   # OPEN: the public traffic it serves is no command of the model, so the component is reached in
   # process here; a request is the EdgeGateway's HoldRequest only when its service sleeps.
   - component: weft-edge
@@ -1077,9 +1086,7 @@ components:
     accepts:
       commands:
         - weft.edge.DropRouteHeldRequests
-        - weft.edge.RemoveRoute
         - weft.edge.RemoveEndpoint
-        - weft.edge.AddRoute
         - weft.edge.AddEndpoint
         - weft.edge.ForwardHeldRequests
         - weft.edge.HoldRequest
@@ -1106,8 +1113,6 @@ components:
         - weft.edge.HeldRequestDropped
         - weft.edge.HeldRequestForwarded
         - weft.edge.HeldRequestMissed
-        - weft.edge.RouteAdded
-        - weft.edge.RouteRemoved
         - weft.edge.WakeRequested
 
 # Reconciliation loops, § 14 lines 584-618, in the four forms of lines 594-606 (edge, level, time,
@@ -1224,6 +1229,7 @@ bindings:
       command: weft.workloads.SetWorkloadReplicas
     mapping:
       workload_id: event.workload_id
+      scope_id: event.scope_id
       replicas: event.replicas
     delivery: at_least_once
     on_failure:
@@ -1287,7 +1293,7 @@ bindings:
     mapping:
       instance_id: event.instance_id
       scope_id: event.scope_id
-      formation_id: event.formation_id
+      identity: event.identity
       claims: event.claims
       min_isolation: event.minimum_isolation
       zones: event.zones
@@ -2287,6 +2293,7 @@ bindings:
       command: weft.workloads.WakeService
     mapping:
       service_id: event.service_id
+      scope_id: event.scope_id
       source: EdgeRequest
       deadline_at: event.deadline_at
     delivery: at_least_once
@@ -2320,7 +2327,7 @@ bindings:
   - id: edge-drop-held-on-route-removed
     summary: Answer the requests held on a removed route by name.
     when:
-      event: weft.edge.RouteRemoved
+      event: weft.architecture.RouteRemoved
     invoke:
       command: weft.edge.DropRouteHeldRequests
     mapping:
@@ -2338,7 +2345,7 @@ bindings:
       command: weft.edge.RequestCertificate
     mapping:
       endpoint_id: event.endpoint_id
-      formation_id: event.formation_id
+      scope_id: event.scope_id
       host: event.host
     delivery: at_least_once
     on_failure:
