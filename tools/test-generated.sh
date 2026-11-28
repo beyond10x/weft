@@ -4,9 +4,9 @@
 #
 # Usage: tools/test-generated.sh
 #
-# On the fixture specification tools/sim/tests/fixture-from/ (synthesizes in about a second; the
-# fixture tools/sim/tests/fixture/ is refused by ESS's Rust target, its domain `box` being a Rust
-# keyword), with a cache under target/generated-selftest/:
+# On the fixture specification tests/fixtures/synth-spec/ (one entity, synthesizes in about a
+# second; weft-sim's fixture tests/fixture-from until weft-sim moved to cloudspec), with a cache
+# under target/generated-selftest/:
 #   cold        no cache: synthesized, both digest files hold, nothing else left behind;
 #   warm        the cache is reused without calling ess (an ess that fails is given);
 #   changed     a changed specification file or tools/synth-input.sh makes the cache stale: an ess
@@ -35,7 +35,7 @@ set -u
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root" || exit 2
-fixture=tools/sim/tests/fixture-from
+fixture=tests/fixtures/synth-spec
 work=target/generated-selftest
 spec=$work/spec
 cache=$work/cache

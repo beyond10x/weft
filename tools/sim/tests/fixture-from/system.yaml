@@ -1,9 +1,0 @@
-format: ess/37
-system: demo
-version: v1
-
-summary: A one-entity model for the explore --from test.
-
-domains:
-  - demo.shelf
-  - demo.actors

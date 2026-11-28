@@ -5,9 +5,6 @@ subjects:
   specification:
     kind: codebase
     audiences: [developer, coding-agent]
-  simulator:
-    kind: codebase
-    audiences: [developer, coding-agent]
   repository:
     kind: development-workflow
     audiences: [developer, coding-agent]
@@ -135,20 +132,6 @@ assessments:
         scope: run
         identity: [kind, command]
 
-  simulator-tests:
-    subject: simulator
-    assessor: command-timing@1
-    target: {kind: revision, environments: [local]}
-    observation:
-      kind: snapshot
-      command: task sim-test
-      coverage: {skipped: {max: 0}}
-    measurements:
-      test-time:
-        kind: sampled
-        output: duration
-        scope: test
-
   repository-facts:
     subject: repository
     assessor: repo-facts@1
@@ -259,10 +242,6 @@ requirements:
     assessment: explore-from-setup
     measurement: explore-time
     condition: {operator: lte, value: 300, unit: s}
-  test-within-budget:
-    assessment: simulator-tests
-    measurement: test-time
-    condition: {operator: lte, value: 60, unit: s}
   repo-gate-time-not-worse:
     assessment: repository-facts
     measurement: gate-seconds
@@ -319,7 +298,6 @@ gates:
       - no-new-unsupported-answers
       - no-lost-outcomes
       - explore-within-budget
-      - test-within-budget
       - repo-gate-time-not-worse
       - repo-test-step-within-budget
       - repo-slowest-test-within-budget

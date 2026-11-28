@@ -1,9 +1,0 @@
-format: ess/37
-system: demo
-version: v1
-
-summary: A two-entity model for the weft-sim tests.
-
-domains:
-  - demo.box
-  - demo.actors

@@ -49,8 +49,8 @@ These hold for any implementation, because the specification and its gate hold t
 The setup steps a full cloud needs, in order, are written out as the setup of
 [`sim/experiments/full-setup.yaml`](https://github.com/beyond10x/weft/blob/main/sim/experiments/full-setup.yaml):
 create the cloud, declare zones, register runtimes, create node pools, provision and join nodes,
-open their sessions, create the default cluster, then tenants, accounts and quotas. weft-sim runs that setup against the specification
-today ([run weft-sim](../simulator/run.md#simulate)).
+open their sessions, create the default cluster, then tenants, accounts and quotas. cloudspec-sim runs that setup against the specification
+today ([run cloudspec-sim](../simulator/run.md#simulate)).
 
 ## Placements (planned)
 

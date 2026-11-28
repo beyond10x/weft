@@ -98,19 +98,16 @@ else
   fi
 fi
 
-# repo.test-binaries-per-crate (M12): the most integration-test targets of one crate, over the
-# root workspace and weft-sim. Each cargo call must succeed: a value of one workspace alone is no
-# value of both.
-cmd="cargo metadata --no-deps (root, tools/sim) | jq: most test targets of one crate"
+# repo.test-binaries-per-crate (M12): the most integration-test targets of one crate of the root
+# workspace. A failed cargo call gives no value.
+cmd="cargo metadata --no-deps | jq: most test targets of one crate"
 meta() { cargo metadata --no-deps --offline --format-version 1 "$@" 2>> "$out/metadata.log"; }
 : > "$out/metadata.log"
 if ! have cargo || ! have jq; then
   unavailable repo.test-binaries-per-crate "cargo or jq is not on PATH" "$cmd"
 elif ! root_meta=$(meta); then
   unavailable repo.test-binaries-per-crate "cargo metadata of the root failed, log $out/metadata.log" "$cmd"
-elif ! sim_meta=$(meta --manifest-path tools/sim/Cargo.toml); then
-  unavailable repo.test-binaries-per-crate "cargo metadata of tools/sim failed, log $out/metadata.log" "$cmd"
-elif ! bins=$(printf '%s\n%s\n' "$root_meta" "$sim_meta" |
+elif ! bins=$(printf '%s\n' "$root_meta" |
   jq -se '[.[].packages[] | [.targets[] | select(.kind | index("test"))] | length] | max | numbers'); then
   unavailable repo.test-binaries-per-crate "no crate in cargo metadata" "$cmd"
 else
@@ -165,14 +162,14 @@ fi
 # SCCACHE_DIR, SCCACHE_CACHE_SIZE), or an empty compiler wrapper: RUSTC_WRAPPER or
 # CARGO_BUILD_RUSTC_WRAPPER set to "", '' or nothing in a shell line, YAML or TOML, and
 # rustc-wrapper = "" in a cargo config. The planning store's prose, this file and the fixtures of
-# its test (tools/sim/tests/ratchet) name the patterns.
+# its test (product/cloud/crates/weft-testkit/tests/ratchet) name the patterns.
 pattern="RUSTC_WRAPPER(=(\"\"|''|[[:space:]]|[;&|)]|\$)|:[[:space:]]*(\"\"|''|#|\$)|[[:space:]]+=[[:space:]]*(\"\"|''))"
 pattern="$pattern|rustc-wrapper[[:space:]]*=[[:space:]]*(\"\"|'')|SCCACHE_(SERVER_PORT|DIR|CACHE_SIZE)"
-cmd="git grep -nE '$pattern' -- . ':!.engineering' ':!tools/kpis.d/10-repository.sh' ':!tools/sim/tests/ratchet' | count"
+cmd="git grep -nE '$pattern' -- . ':!.engineering' ':!tools/kpis.d/10-repository.sh' ':!product/cloud/crates/weft-testkit/tests/ratchet' | count"
 if [ -z "$git_ok" ]; then
   unavailable repo.cache-bypass "git cannot read the tree, log $out/git.log" "$cmd"
 else
-  found=$(git grep -nE "$pattern" -- . ':!.engineering' ':!tools/kpis.d/10-repository.sh' ':!tools/sim/tests/ratchet')
+  found=$(git grep -nE "$pattern" -- . ':!.engineering' ':!tools/kpis.d/10-repository.sh' ':!product/cloud/crates/weft-testkit/tests/ratchet')
   if [ "$?" -le 1 ]; then
     printf '%s\n' "$found" > "$out/cache-bypass.txt"
     kpi repo.cache-bypass "$(printf '%s\n' "$found" | count)" lines "$cmd"

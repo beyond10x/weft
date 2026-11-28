@@ -59,5 +59,5 @@ name its own receipt time could postpone its own loss. The negative run grants s
 $ task check
 ```
 
-runs the checks above, the test of the CI path filter and weft-sim's tests. See
-[the gate](../operate/troubleshoot.md#the-gate).
+runs the checks above, the test of the CI path filter, the docs claims and the tests of the root
+workspace. See [the gate](../operate/troubleshoot.md#the-gate).

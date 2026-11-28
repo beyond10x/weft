@@ -298,7 +298,7 @@ mod exec {
     }
 }
 
-/// `boundary` (`docs/platform-ports.md` § 12.5, the rules this story needs): substrate's SDK is
+/// `boundary` (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 12.5, the rules this story needs): substrate's SDK is
 /// named only by the local adapter. It reads files under `product/` only, no build.
 mod boundary {
     use std::fs;

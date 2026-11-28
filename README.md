@@ -29,7 +29,7 @@ Status: specification first. No code exists yet.
 | [`docs/domain-sketch.md`](docs/domain-sketch.md) | The design every specification file follows |
 | [`ess/`](ess/) | The ESS specification: 23 domains in 10 layers, components and bindings |
 | [`product/cloud/crates/`](product/cloud/crates/) | weft's Rust crates; the code ESS generates from `ess/` is synthesized into `target/generated/`, not committed |
-| [`tools/sim/`](tools/sim/) | weft-sim: explores and simulates the specification in memory |
+| [cloudspec-sim](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim) | Explores and simulates the specification in memory; a crate of cloudspec (weft-sim until 2026-11-28), installed by `task sim-install` at the revision `CLOUDSPEC_REV` of `Taskfile.yml` |
 | [`sim/experiments/`](sim/experiments/) | Experiments: a full setup, faults, duplicate delivery, topology |
 | [`docs/hardening/`](docs/hardening/) | The hardening passes and what each changed |
 | [`quality/ratchet.yaml`](quality/ratchet.yaml) | The KPIs a change may not make worse |
@@ -39,10 +39,11 @@ Status: specification first. No code exists yet.
 slot task check
 ```
 
-validates the specification, its layers and stamped time, and runs weft-sim's tests.
+validates the specification, its layers and stamped time, and runs the tests of the root workspace.
 
 ```console
 task sim-explore-from
 ```
 
-explores every command from the full setup and checks the system invariants.
+installs cloudspec-sim at the pinned revision, explores every command from the full setup and checks
+the system invariants.

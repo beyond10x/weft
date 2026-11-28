@@ -19,7 +19,7 @@ expect() {
 expect 0 "" .engineering/planning/design/components.md docs/hardening/pass-2.md README.md
 expect 0 "" .engineering/project.yaml
 expect 1 "" ess/5-runtime/nodes.yaml
-expect 1 "" docs/hardening/pass-2.md tools/sim/src/main.rs
+expect 1 "" docs/hardening/pass-2.md product/cloud/crates/weft-bin/src/main.rs
 expect 1 "" .github/workflows/gate.yml
 expect 1 "" Taskfile.yml
 expect 1 "" ""
@@ -78,11 +78,14 @@ fixture 0 - docs/unmarked.md
 # No PLANNING_ONLY_BASE and no origin/main to find the merge base with: the base cannot be read,
 # so the change is not planning-only.
 fixture 1 unset docs/plain.md
-# The fixture page of weft-sim's player is held byte for byte only by a weft-sim test of the gate
-# (`task sim-test`): a change to it alone must run the gate.
-expect 1 "" website/ux/fixtures/sim-player.html
-expect 1 "" website/docs/index.md website/ux/fixtures/sim-player-markup.html
+# The fixture pages of the simulator's player are copies of cloudspec-sim's pages
+# (crates/cloudspec-sim/tests/pages of beyond10x/cloudspec), which cloudspec's tests hold byte for
+# byte; in weft only the docs build's Playwright run reads them. A change to them alone skips the
+# code gate and builds the docs.
+expect 0 "" website/ux/fixtures/sim-player.html
+expect 0 "" website/docs/index.md website/ux/fixtures/sim-player-markup.html
 expect 0 "" website/ux/fixtures/overflow.html website/ux/sim-player.spec.ts
+expect 1 --docs website/ux/fixtures/sim-player.html
 expect 0 --docs .engineering/project.yaml README.md docs/hardening/pass-2.md
 expect 1 --docs website/docs/index.md
 expect 1 --docs README.md website/package.json

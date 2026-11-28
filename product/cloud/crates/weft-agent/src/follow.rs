@@ -526,7 +526,7 @@ fn rows(answer: Answer, view: &str) -> Result<Vec<Value>, String> {
 /// snippet's invocation, a job's task) runs to its end under the port's default limits.
 ///
 /// An exec is not a long-lived workload: substrate has none on the host driver (substrate gap 1,
-/// `docs/platform-ports.md` § 10), so a replica still ends after 24 hours. Running it until it is
+/// cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 10), so a replica still ends after 24 hours. Running it until it is
 /// stopped is `story:ports-node-workloads-local` (the `workloads` port).
 fn limits(instance: &Value) -> Limits {
     if instance["service_id"].is_null() {
