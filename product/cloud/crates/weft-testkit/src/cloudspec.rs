@@ -33,12 +33,25 @@ pub fn golden(name: &str) -> Vec<u8> {
 ///
 /// When the golden is not the JSON this expects.
 pub fn submission_with_part(key: &str, part: &Value) -> Vec<u8> {
+    submission_with_parts(&[(key, part.clone())])
+}
+
+/// The `snippet` golden with its one workload part replaced by `parts` (each under its key,
+/// beside the golden's scope `jobs`; a part of the same key replaces it), its coverage marking
+/// each part `mapped`, and the architecture digest of the copy, so the submission route takes it.
+///
+/// # Panics
+///
+/// When the golden is not the JSON this expects.
+pub fn submission_with_parts(parts: &[(&str, Value)]) -> Vec<u8> {
     let mut doc: Value = serde_json::from_slice(&golden("snippet")).expect("the golden is JSON");
-    let parts = doc["architecture"]["parts"]
+    let held = doc["architecture"]["parts"]
         .as_object_mut()
         .expect("the golden has parts");
-    parts.remove("hello");
-    parts.insert(key.to_owned(), part.clone());
+    held.remove("hello");
+    for (key, part) in parts {
+        held.insert((*key).to_owned(), part.clone());
+    }
     let entries = doc["coverage"]["steps"][0]["entries"]
         .as_array_mut()
         .expect("the golden has coverage entries");
@@ -47,8 +60,11 @@ pub fn submission_with_part(key: &str, part: &Value) -> Vec<u8> {
             .as_str()
             .is_some_and(|object| object.starts_with("parts.hello"))
     });
-    entries
-        .push(json!({"note": "a test part", "object": format!("parts.{key}"), "status": "mapped"}));
+    for (key, _) in parts {
+        entries.push(
+            json!({"note": "a test part", "object": format!("parts.{key}"), "status": "mapped"}),
+        );
+    }
     doc["digests"]["architecture"] = json!(weft_cloudspec::digest(
         weft_cloudspec::canonical(&doc["architecture"]).as_bytes()
     ));

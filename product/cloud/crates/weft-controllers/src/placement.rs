@@ -15,6 +15,11 @@
 //! - One placement per request in flight: a request whose `InstancePlaced` the bindings hold
 //!   for another attempt (`r4-bind-placement`) is skipped until it is answered; in the control
 //!   host an `InstancePlaced` is otherwise bound in the unit of work that published it.
+//! - An instance of a workload whose selector records a placement (`story:slot-node-pool-placement`,
+//!   [`weft_impl::placement::Placed`]) has only the nodes it may run on as candidates: its scope
+//!   node, or for a workload `per` another scope a node of its own scope. It is never offered
+//!   another node (decision D-S2 A). For a workload of a pool scope the input's `node_pool_id` is
+//!   that pool, so `PlaceInstance` refuses `node-pool-differs` on a node outside it.
 //! - A gang member is skipped: a gang is placed and bound whole (`weft.scheduling.BindGang`),
 //!   which this step does not do.
 //! - A request whose attempt placed nothing waits before its next attempt ([`crate::waits`]),
@@ -24,16 +29,17 @@
 
 use serde_json::{json, Value};
 use weft_impl::context::timestamp;
+use weft_impl::placement::Placed;
 use weft_impl::System;
 use weft_system::SystemEvent;
 use weft_types::accounts::AccountSnapshot;
 use weft_types::actor::Actor;
-use weft_types::behaviour::{AccountStorage, InstanceStorage};
+use weft_types::behaviour::{AccountStorage, InstanceStorage, WorkloadStorage};
 use weft_types::cluster::{ClusterState, Clusters};
 use weft_types::infrastructure::NodeState;
 use weft_types::scheduling::{PendingRequests, WorkloadFormations};
-use weft_types::shared::{ClusterId, FormationId, IsolationLevel, TenantId};
-use weft_types::workloads::InstanceSnapshot;
+use weft_types::shared::{ClusterId, FormationId, IsolationLevel, NodeId, TenantId};
+use weft_types::workloads::{InstanceSnapshot, WorkloadSnapshot};
 
 use crate::waits::Waits;
 use crate::{outcome, send, Context, Sent};
@@ -148,6 +154,22 @@ fn ties(
     })
 }
 
+/// The placement the workload of `row`'s instance records ([`Placed`]) and the instance's scope
+/// node; `None` for an instance of a workload with no placement (every node is a candidate).
+fn placement_of(
+    row: &PendingRequests,
+    instances: &[InstanceSnapshot],
+    workloads: &[WorkloadSnapshot],
+) -> Option<(Placed, Option<NodeId>)> {
+    let instance = instances
+        .iter()
+        .find(|instance| instance.data.instance_id == row.instance_id)?;
+    let workload = workloads
+        .iter()
+        .find(|workload| workload.data.workload_id == instance.data.workload_id)?;
+    Placed::of(&workload.data.settings).map(|placed| (placed, instance.data.scope_node_id.clone()))
+}
+
 /// One attempt per pending request that is due: the commands sent. A view the system cannot
 /// read sends nothing.
 pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
@@ -165,6 +187,8 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
     // of weft-control names an instance's workload across scopes.
     let accounts = AccountStorage::list(context.ports);
     let instances = InstanceStorage::list(context.ports);
+    // The workload rows likewise, for the placement a workload's selector records.
+    let workloads = WorkloadStorage::list(context.ports);
     let Ok(assignments) = system.weft_control.workload_formations() else {
         return Vec::new();
     };
@@ -188,6 +212,7 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
         let Some(of) = ties(row, &instances, &assignments, &clusters, &accounts) else {
             continue;
         };
+        let placement = placement_of(row, &instances, &workloads);
         let candidates: Vec<_> = admitted(row.min_isolation)
             .iter()
             .flat_map(|level| {
@@ -201,6 +226,15 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
                                 .is_some_and(|facts| facts.levels.contains(level))
                     })
                     .map(move |node| (*level, node))
+            })
+            .filter(|(_, node)| {
+                placement.as_ref().is_none_or(|(placed, scope_node)| {
+                    placed.runs_on(
+                        scope_node.as_ref(),
+                        &node.node_id,
+                        node.node_pool_id.as_ref(),
+                    )
+                })
             })
             .collect();
         if candidates.is_empty() {
@@ -216,7 +250,11 @@ pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
                 "cluster_id": of.cluster_id.0 .0,
                 "formation_id": of.formation_id.0 .0,
                 "node_id": node.node_id.0 .0,
-                "node_pool_id": node.node_pool_id.as_ref().map(|pool| Value::from(pool.0 .0.clone())),
+                "node_pool_id": placement
+                    .as_ref()
+                    .and_then(|(placed, _)| placed.pool())
+                    .or(node.node_pool_id.as_ref())
+                    .map(|pool| Value::from(pool.0 .0.clone())),
                 "zone": node.zone.0,
                 "isolation": level_name(level),
                 "bindings": [],

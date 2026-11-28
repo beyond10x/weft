@@ -277,6 +277,7 @@ pub fn assigned(
             service_id: None,
             replica_counted_out: false,
             warm_pool_id: None,
+            scope_node_id: None,
             restored_from: None,
             desired: DesiredRun::Run,
             ready: false,

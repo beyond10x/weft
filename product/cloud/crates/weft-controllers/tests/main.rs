@@ -12,7 +12,9 @@
 //!   hand-run bindings of R4, in-process on a world whose node is made schedulable ([`ready`]);
 //! - [`place_instance`] and [`assign`]: `weft.scheduling.PlaceInstance` and `weft.nodes.Assign`,
 //!   each guard in the selection precedence of its contract;
-//! - [`open_scope`]: `weft.scope.OpenScope` with a placement (`placement-form`).
+//! - [`open_scope`]: `weft.scope.OpenScope` with a placement (`placement-form`);
+//! - [`per_node`]: the level step of one instance per node of a placed scope, `CreateInstance`
+//!   with a scope node, and the candidates of an instance of a placed workload.
 
 /// What both modules share: a control host in this process after the operator and tenant path
 /// and the workload definitions, and readers of its views and log.
@@ -609,6 +611,7 @@ mod obligations {
             replica_index: Some(0),
             warm_pool_id: None,
             service_id: Some(ServiceId(Uuid(w.ids.service_id.clone()))),
+            scope_node_id: None,
         }
     }
 
@@ -4176,5 +4179,253 @@ mod open_scope {
             .find(|row| row.data.name == name)
             .expect("the scope row");
         assert_eq!(row.data.placement, leased);
+    }
+}
+
+/// `story:slot-node-pool-placement`: the level step of one instance per node
+/// ([`weft_controllers::per_node`]), `weft.workloads.CreateInstance` with a scope node, and the
+/// Scheduler's step offering an instance of a placed workload only the nodes it may run on, on a
+/// world whose node is made schedulable ([`ready`]).
+mod per_node {
+    use std::collections::BTreeMap;
+
+    use weft_controllers::per_node::CREATE_INSTANCE;
+    use weft_impl::context::mint;
+    use weft_impl::placement::{HOST, PER_POOL, POOL};
+    use weft_impl::Ports;
+    use weft_types::architecture::ComponentWorkloadSnapshot;
+    use weft_types::behaviour::{
+        ComponentWorkloadStorage, InstanceStorage, NodeStorage, WorkloadStorage,
+    };
+    use weft_types::infrastructure::NodeState;
+    use weft_types::primitives::Uuid;
+    use weft_types::shared::{ComponentWorkloadId, NodeId, NodePoolId, WorkloadId};
+    use weft_types::workloads::obligations::CreateInstanceBehavior;
+    use weft_types::workloads::{
+        CreateInstance, CreateInstanceOutcome, DaemonSettings, InstanceState, ShapeKind,
+        ShapeSettings,
+    };
+
+    use super::ready::{another_node, Ready};
+    use super::world::request_lines;
+
+    /// A copy of the world's workload as a `Daemon` with `selector`, its one process running
+    /// `command` with `environment`, assigned to the world's formation like the original: its
+    /// identity.
+    fn daemon(
+        r: &Ready,
+        selector: &[(&str, &str)],
+        command: &[&str],
+        environment: &[(&str, &str)],
+    ) -> WorkloadId {
+        let mut ports = r.ports();
+        let original = WorkloadId(Uuid(r.w.ids.workload_id.clone()));
+        let mut row = WorkloadStorage::get(&ports, &original).expect("the workload row");
+        let workload = WorkloadId(Uuid(mint()));
+        row.data.workload_id = workload.clone();
+        row.data.shape = ShapeKind::Daemon;
+        row.data.settings = ShapeSettings::Daemon(DaemonSettings {
+            node_selector: selector
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect(),
+        });
+        row.data.processes[0].command = command.iter().map(|word| (*word).to_owned()).collect();
+        row.data.processes[0].environment = environment
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect();
+        WorkloadStorage::put(&mut ports, row);
+        let mut assignment: ComponentWorkloadSnapshot = ComponentWorkloadStorage::list(&ports)
+            .into_iter()
+            .find(|row| row.data.workload_id == original)
+            .expect("the original's assignment");
+        assignment.data.component_workload_id = ComponentWorkloadId(Uuid(mint()));
+        assignment.data.workload_id = workload.clone();
+        ComponentWorkloadStorage::put(&mut ports, assignment);
+        workload
+    }
+
+    /// A copy of the world's node under the identity `id`, Ready with its capacity and an open
+    /// session, in the pool `pool` (the world's pool where `None`) and in state `state`.
+    fn node(r: &Ready, id: &str, pool: Option<&str>, state: NodeState) -> NodeId {
+        let ports = r.ports();
+        let node = another_node(&ports, &r.node, id);
+        let mut writer = ports.clone();
+        let mut row = NodeStorage::get(&ports, &node).expect("the node row");
+        if let Some(pool) = pool {
+            row.data.node_pool_id = Some(NodePoolId(Uuid(pool.to_owned())));
+        }
+        row.state = state;
+        NodeStorage::put(&mut writer, row);
+        node
+    }
+
+    /// An instance as the cases compare it: its scope node, the node it is placed on, its command
+    /// and its environment.
+    type Seen = (
+        Option<String>,
+        Option<String>,
+        Vec<String>,
+        BTreeMap<String, String>,
+    );
+
+    /// The instances of `workload`, sorted.
+    fn instances(ports: &Ports, workload: &WorkloadId) -> Vec<Seen> {
+        let mut rows: Vec<_> = InstanceStorage::list(ports)
+            .into_iter()
+            .filter(|row| &row.data.workload_id == workload)
+            .map(|row| {
+                (
+                    row.data.scope_node_id.map(|node| node.0 .0),
+                    row.data.node_id.map(|node| node.0 .0),
+                    row.data.processes[0].command.clone(),
+                    row.data.processes[0].environment.clone(),
+                )
+            })
+            .collect();
+        rows.sort();
+        rows
+    }
+
+    /// The `CreateInstance` request lines of one tick.
+    fn tick(r: &Ready) -> usize {
+        let seq = r.w.process.last_seq();
+        r.w.process.host().tick();
+        request_lines(&r.w.process.log_after(seq), CREATE_INSTANCE).len()
+    }
+
+    fn id(node: &NodeId) -> Option<String> {
+        Some(node.0 .0.clone())
+    }
+
+    /// Outcome 2: each `Ready` node of the pool gets one instance of a workload placed on the pool
+    /// and the next tick places each on its own node; a `Joining` node of the pool and a `Ready`
+    /// node of another pool get none; further ticks send no `CreateInstance` and make no second
+    /// instance.
+    #[test]
+    fn each_ready_node_of_the_pool_gets_one_instance_on_itself_and_never_a_second() {
+        let r = Ready::new();
+        let pool = r.w.path.node_pool_id.clone();
+        let second = node(&r, &mint(), None, NodeState::Ready);
+        node(&r, &mint(), None, NodeState::Joining);
+        node(&r, &mint(), Some(&mint()), NodeState::Ready);
+        let workload = daemon(&r, &[(POOL, &pool)], &["serve"], &[]);
+
+        assert_eq!(tick(&r), 2);
+        let mut scope_nodes: Vec<_> = instances(&r.ports(), &workload)
+            .into_iter()
+            .map(|row| row.0)
+            .collect();
+        let mut wanted = vec![id(&r.node), id(&second)];
+        scope_nodes.sort();
+        wanted.sort();
+        assert_eq!(scope_nodes, wanted);
+
+        for _ in 0..3 {
+            assert_eq!(tick(&r), 0);
+        }
+        let rows = instances(&r.ports(), &workload);
+        assert_eq!(rows.len(), 2, "{rows:?}");
+        for row in &rows {
+            assert_eq!(row.1, row.0, "an instance off its scope node: {rows:?}");
+        }
+    }
+
+    /// Outcome 3: a workload placed on a host and `per` the pool gets one instance per pool node,
+    /// each `${instance}` of its command and environment written as that node's name, all placed
+    /// on the host.
+    #[test]
+    fn a_per_instance_names_its_scope_node_and_runs_on_its_own_scope_s_host() {
+        let r = Ready::new();
+        let pool = r.w.path.node_pool_id.clone();
+        let second = node(&r, &mint(), None, NodeState::Ready);
+        let host = node(&r, &mint(), Some(&mint()), NodeState::Ready);
+        let workload = daemon(
+            &r,
+            &[(HOST, &host.0 .0), (PER_POOL, &pool)],
+            &["refresh", "${instance}", "60"],
+            &[("NODE", "node-${instance}")],
+        );
+
+        assert_eq!(tick(&r), 2);
+        for _ in 0..2 {
+            tick(&r);
+        }
+        let rows = instances(&r.ports(), &workload);
+        let mut wanted: Vec<_> = [&r.node, &second]
+            .into_iter()
+            .map(|node| {
+                let name = node.0 .0.clone();
+                (
+                    Some(name.clone()),
+                    id(&host),
+                    vec!["refresh".to_owned(), name.clone(), "60".to_owned()],
+                    BTreeMap::from([("NODE".to_owned(), format!("node-{name}"))]),
+                )
+            })
+            .collect();
+        wanted.sort();
+        assert_eq!(rows, wanted);
+    }
+
+    /// `CreateInstance` with a scope node: an unknown node answers `no-scope-node`; a second
+    /// instance of the same workload and node answers `scope-node-live` while the first is live,
+    /// and is created once the first has `Exited`; another node of the same workload is created.
+    #[test]
+    fn create_instance_makes_one_live_instance_per_workload_and_scope_node() {
+        let r = Ready::new();
+        let pool = r.w.path.node_pool_id.clone();
+        let workload = daemon(&r, &[(POOL, &pool)], &["serve"], &[]);
+        let second = node(&r, &mint(), None, NodeState::Ready);
+        let input = |node: &NodeId| CreateInstance {
+            workload_id: workload.clone(),
+            job_id: None,
+            task_index: None,
+            invocation_id: None,
+            box_id: None,
+            session_id: None,
+            replica_index: None,
+            warm_pool_id: None,
+            service_id: None,
+            scope_node_id: Some(node.clone()),
+        };
+        let mut ports = r.ports();
+        let unknown =
+            CreateInstanceBehavior::create_instance(&mut ports, input(&NodeId(Uuid(mint()))))
+                .expect("an outcome");
+        assert!(
+            matches!(unknown, CreateInstanceOutcome::NoScopeNode { .. }),
+            "{unknown:?}"
+        );
+
+        let first = CreateInstanceBehavior::create_instance(&mut ports, input(&r.node))
+            .expect("an outcome");
+        let CreateInstanceOutcome::Created { instance_created } = first else {
+            panic!("not created: {first:?}");
+        };
+        let again = CreateInstanceBehavior::create_instance(&mut ports, input(&r.node))
+            .expect("an outcome");
+        assert!(
+            matches!(again, CreateInstanceOutcome::ScopeNodeLive { .. }),
+            "{again:?}"
+        );
+        let other = CreateInstanceBehavior::create_instance(&mut ports, input(&second))
+            .expect("an outcome");
+        assert!(
+            matches!(other, CreateInstanceOutcome::Created { .. }),
+            "{other:?}"
+        );
+
+        let mut row =
+            InstanceStorage::get(&ports, &instance_created.instance_id).expect("the instance");
+        row.state = InstanceState::Exited;
+        InstanceStorage::put(&mut ports, row);
+        let after = CreateInstanceBehavior::create_instance(&mut ports, input(&r.node))
+            .expect("an outcome");
+        assert!(
+            matches!(after, CreateInstanceOutcome::Created { .. }),
+            "{after:?}"
+        );
     }
 }

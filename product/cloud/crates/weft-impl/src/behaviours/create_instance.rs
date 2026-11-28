@@ -3,16 +3,19 @@
 //!
 //! 1. every existence check before every predicate, in declaration order: `no-workload`, then,
 //!    for each owner the input names, `no-job`, `no-invocation`, `no-box`, `no-session`,
-//!    `no-warm-pool`, `no-service`;
+//!    `no-warm-pool`, `no-service`, and `no-scope-node` for a scope node;
 //! 2. the predicates in declaration order: `workload-retired`; each named owner of another
 //!    workload (`foreign-job`, `foreign-invocation`, `foreign-box`, `foreign-session`,
 //!    `foreign-warm-pool`, `foreign-service`); `replica-live`, only for a replica's request
 //!    (service and index given): a live instance (`Pending`, `Scheduled`, `Starting`,
-//!    `Running`, `Paused`) of the same service and index;
+//!    `Running`, `Paused`) of the same service and index; `scope-node-live`, only for a scope
+//!    node (`story:slot-node-pool-placement`): a live instance of the same workload and node;
 //! 3. `created` otherwise: a `Pending` instance with the workload's scope, artifact, isolation
 //!    as its minimum, processes and restart policy, and `InstanceCreated` with the workload's
 //!    identity, claims and priority and the zones of the formation an assignment
-//!    (`weft.architecture.ComponentWorkload`) ties the workload to (none: any zone).
+//!    (`weft.architecture.ComponentWorkload`) ties the workload to (none: any zone). With a
+//!    scope node the instance names it, and each `${instance}` of its processes' commands and
+//!    environment values is the node's name ([`crate::placement::with_instance`]).
 //!
 //! The blocks take `CreateInstance` out of the outcome group `quota`: an instance is created
 //! without a quota check, and `weft.scheduling.PlaceInstance` (`quota-exceeded`, weft's run-time
@@ -20,7 +23,7 @@
 
 use weft_types::behaviour::{
     BoxStorage, ComponentWorkloadStorage, FormationStorage, InstanceStorage, InvocationStorage,
-    JobStorage, ServiceStorage, SessionStorage, WarmPoolStorage, WorkloadStorage,
+    JobStorage, NodeStorage, ServiceStorage, SessionStorage, WarmPoolStorage, WorkloadStorage,
 };
 use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
@@ -28,13 +31,13 @@ use weft_types::shared::{InstanceId, WorkloadId};
 use weft_types::workloads::obligations::CreateInstanceBehavior;
 use weft_types::workloads::{
     CreateInstance, CreateInstanceOutcome, DesiredRun, ForeignOwner, InstanceCreated, InstanceData,
-    InstanceHealth, InstanceSnapshot, InstanceState, NotFound, ReplicaLive, ServiceNotFound,
-    WorkloadIsRetired, WorkloadNotFound, WorkloadState,
+    InstanceHealth, InstanceSnapshot, InstanceState, NotFound, ReplicaLive, ScopeNodeLive,
+    ServiceNotFound, WorkloadIsRetired, WorkloadNotFound, WorkloadState,
 };
 
 use crate::context::mint;
-use crate::quota;
 use crate::Ports;
+use crate::{placement, quota};
 
 impl CreateInstanceBehavior for Ports {
     fn create_instance(
@@ -92,6 +95,11 @@ impl CreateInstanceBehavior for Ports {
             },
             None => None,
         };
+        if let Some(node) = &input.scope_node_id {
+            if NodeStorage::get(self, node).is_none() {
+                return Ok(CreateInstanceOutcome::NoScopeNode { error: NotFound });
+            }
+        }
 
         if workload.state == WorkloadState::Retired {
             return Ok(CreateInstanceOutcome::WorkloadRetired {
@@ -139,6 +147,17 @@ impl CreateInstanceBehavior for Ports {
                 return Ok(CreateInstanceOutcome::ReplicaLive { error: ReplicaLive });
             }
         }
+        if let Some(node) = &input.scope_node_id {
+            if InstanceStorage::list(self).iter().any(|row| {
+                quota::live(row.state)
+                    && row.data.workload_id == input.workload_id
+                    && row.data.scope_node_id.as_ref() == Some(node)
+            }) {
+                return Ok(CreateInstanceOutcome::ScopeNodeLive {
+                    error: ScopeNodeLive,
+                });
+            }
+        }
 
         let workload = workload.data;
 
@@ -150,6 +169,10 @@ impl CreateInstanceBehavior for Ports {
             .and_then(|row| FormationStorage::get(self, &row.data.formation_id))
             .map(|formation| formation.data.zones)
             .unwrap_or_default();
+        let processes = match &input.scope_node_id {
+            Some(node) => placement::with_instance(workload.processes, &placement::node_name(node)),
+            None => workload.processes,
+        };
         let instance_id = InstanceId(Uuid(mint()));
         let created = InstanceCreated {
             instance_id: instance_id.clone(),
@@ -185,11 +208,12 @@ impl CreateInstanceBehavior for Ports {
                     service_id: input.service_id,
                     replica_counted_out: false,
                     warm_pool_id: input.warm_pool_id,
+                    scope_node_id: input.scope_node_id,
                     restored_from: None,
                     desired: DesiredRun::Run,
                     ready: false,
                     health: InstanceHealth::Unknown,
-                    processes: workload.processes,
+                    processes,
                     restart_policy: workload.restart_policy,
                     restarts: 0,
                     restarts_in_window: 0,

@@ -90,6 +90,7 @@ fn deliver(system: &mut System, event: &SystemEvent) -> Option<Invoked> {
             replica_index: None,
             warm_pool_id: None,
             service_id: None,
+            scope_node_id: None,
         };
         match invoke(system, |system| system.weft_control.create_instance(input)) {
             Ok((CreateInstanceOutcome::Created { .. }, events)) => published.extend(events),
