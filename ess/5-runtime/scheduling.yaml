@@ -1150,8 +1150,12 @@ commands:
               - "not defined(isolation_facts)"
               - not: {exists: {in: isolation_facts.levels, as: l, that: "l == input.isolation"}}
         error: weft.scheduling.IsolationNotOffered
-      # Kept external: free capacity is the node's observed capacity minus the sum of the amounts
-      # its live bindings hold; an ESS 0.99.2 guard has no sum over rows.
+      # Kept external: free capacity is the node's observed capacity minus the claims of the
+      # requests of the node's live PlacementDecisions (state Reserved, Bound or Evicting, the
+      # states of shared-kernel) and minus the amounts the node's live bindings (Reserved,
+      # Active) hold, through their claims, where neither one of those decisions nor
+      # input.bindings names the binding: each claim is taken once. A decision holds the node
+      # from `placed` on, before any binding exists. An ESS 0.99.2 guard has no sum over rows.
       - name: no-capacity
         external: the node's free capacity does not cover the claims
         error: weft.scheduling.NoCapacity

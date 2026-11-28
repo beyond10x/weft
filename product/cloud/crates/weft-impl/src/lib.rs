@@ -11,12 +11,14 @@
 //!   binding answer.
 //! - [`bindings`]: the bindings of the path delivered by hand, with their per-refusal policies.
 //! - [`quota`]: the `over-quota` decision of the outcome group `quota`.
+//! - [`conversions`]: the conversions of `ess/components.yaml` the path needs.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 pub mod bindings;
 pub mod context;
+pub mod conversions;
 pub mod log;
 pub mod quota;
 pub mod storage;

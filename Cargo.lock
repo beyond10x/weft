@@ -1437,6 +1437,7 @@ name = "weft-controllers"
 version = "0.1.0"
 dependencies = [
  "serde_json",
+ "time",
  "weft-bin",
  "weft-client",
  "weft-impl",

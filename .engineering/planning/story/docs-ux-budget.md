@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-ux-budget
 kind: story
-status: active
+status: implemented
 title: The docs UX step stays within its budget as pages are added
 relations:
 - decomposes: epic:docs-fidelity
@@ -19,10 +19,11 @@ scope:
   path: website/ux/scenarios.spec.ts
 - confidence: cited
   path: website/ux/site.spec.ts
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 3, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-27T20:35:46Z", actor: "human:operator", revision: 4, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-27T22:37:31Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Context
 

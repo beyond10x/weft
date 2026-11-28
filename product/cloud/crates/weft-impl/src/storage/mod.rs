@@ -9,7 +9,8 @@
 //! of the store and refuses a state file another store holds. The control host log's lines live
 //! in the same file (table `weft.impl.Log`, see [`crate::log`]), so a command's rows and its log
 //! lines commit in one [`Store::transaction`], and so do the events the hand-run bindings hold
-//! for another attempt (table `weft.impl.Held`, see [`crate::bindings`]).
+//! for another attempt (table `weft.impl.Held`, see [`crate::bindings`]) and the waits of the
+//! controllers' steps (table `weft.impl.StepWait`, [`StepWait`]).
 //!
 //! The port's methods cannot fail (`weft_types::behaviour::…Storage`), so a state file SQLite
 //! cannot read or write ends the process with a panic naming the table: a control host whose
@@ -47,6 +48,10 @@ const LOG: &str = "weft.impl.Log";
 /// The table of the events the hand-run bindings hold for another attempt, in the order held.
 const HELD: &str = "weft.impl.Held";
 
+/// The table of the waits of the controllers' steps: per step and subject, the attempts that
+/// failed and the ticks until the next ([`StepWait`]).
+const STEP_WAITS: &str = "weft.impl.StepWait";
+
 /// The state file.
 pub struct Store {
     connection: Mutex<Connection>,
@@ -76,9 +81,10 @@ impl Store {
             ));
         }
         schema.push_str(&format!(
-            "CREATE TABLE IF NOT EXISTS {} (seq INTEGER PRIMARY KEY NOT NULL, line TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY NOT NULL, binding TEXT NOT NULL, event TEXT NOT NULL, attempts INTEGER NOT NULL, wait INTEGER NOT NULL);\nCOMMIT;",
+            "CREATE TABLE IF NOT EXISTS {} (seq INTEGER PRIMARY KEY NOT NULL, line TEXT NOT NULL);\nCREATE TABLE IF NOT EXISTS {} (id INTEGER PRIMARY KEY NOT NULL, binding TEXT NOT NULL, event TEXT NOT NULL, attempts INTEGER NOT NULL, wait INTEGER NOT NULL);\nCREATE TABLE IF NOT EXISTS {} (step TEXT NOT NULL, subject TEXT NOT NULL, attempts INTEGER NOT NULL, wait INTEGER NOT NULL, PRIMARY KEY (step, subject)) WITHOUT ROWID;\nCOMMIT;",
             table(LOG),
-            table(HELD)
+            table(HELD),
+            table(STEP_WAITS)
         ));
         connection.execute_batch(&schema).map_err(fail)?;
         Ok(Self {
@@ -285,6 +291,63 @@ impl Store {
             .and_then(|mut statement| statement.execute([]))
             .unwrap_or_else(|error| failed(HELD, "write", &error));
     }
+
+    /// The waits of the step `step`, by subject.
+    pub fn step_waits(&self, step: &str) -> Vec<StepWait> {
+        self.connection()
+            .prepare_cached(&format!(
+                "SELECT subject, attempts, wait FROM {} WHERE step = ?1 ORDER BY subject",
+                table(STEP_WAITS)
+            ))
+            .and_then(|mut statement| {
+                statement
+                    .query_map(params![step], |row| {
+                        Ok(StepWait {
+                            subject: row.get(0)?,
+                            attempts: row.get(1)?,
+                            wait: row.get(2)?,
+                        })
+                    })?
+                    .collect::<Result<Vec<StepWait>, _>>()
+            })
+            .unwrap_or_else(|error| failed(STEP_WAITS, "list", &error))
+    }
+
+    /// Sets the wait of `subject` of the step `step`: `attempts` failed, the next `wait` ticks on,
+    /// in the open transaction if any.
+    pub fn set_step_wait(&self, step: &str, subject: &str, attempts: u32, wait: u32) {
+        self.connection()
+            .prepare_cached(&format!(
+                "INSERT INTO {} (step, subject, attempts, wait) VALUES (?1, ?2, ?3, ?4) ON CONFLICT (step, subject) DO UPDATE SET attempts = excluded.attempts, wait = excluded.wait",
+                table(STEP_WAITS)
+            ))
+            .and_then(|mut statement| statement.execute(params![step, subject, attempts, wait]))
+            .unwrap_or_else(|error| failed(STEP_WAITS, "write", &error));
+    }
+
+    /// Lets go of the wait of `subject` of the step `step`.
+    pub fn clear_step_wait(&self, step: &str, subject: &str) {
+        self.connection()
+            .prepare_cached(&format!(
+                "DELETE FROM {} WHERE step = ?1 AND subject = ?2",
+                table(STEP_WAITS)
+            ))
+            .and_then(|mut statement| statement.execute(params![step, subject]))
+            .unwrap_or_else(|error| failed(STEP_WAITS, "delete", &error));
+    }
+}
+
+/// The wait of one subject of a controllers' step (table `weft.impl.StepWait`): a subject whose
+/// command failed is attempted again after a wait that doubles, as a held event is
+/// ([`crate::bindings::wait_after`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StepWait {
+    /// The subject's identity (the row of the step's view).
+    pub subject: String,
+    /// How many of its attempts failed in a row.
+    pub attempts: u32,
+    /// The ticks until its next attempt: it is attempted by the tick that finds it at 1.
+    pub wait: u32,
 }
 
 /// An event a hand-run binding holds for another attempt (table `weft.impl.Held`).
