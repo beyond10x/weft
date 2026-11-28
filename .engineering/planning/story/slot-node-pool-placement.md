@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:slot-node-pool-placement
 kind: story
-status: draft
+status: active
 title: A scope placed on a named host or pool runs its workloads there, one instance per node, with per-scope instances and the instance word
 relations:
 - decomposes: epic:slot-node-daemon
@@ -17,7 +17,10 @@ scope:
   path: product/cloud/crates/weft-impl/src/behaviours
 - confidence: inferred
   path: product/cloud/crates/weft-testkit
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T15:34:28Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T15:34:28Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
