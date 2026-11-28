@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T00:17:05Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-controllers",
+  "kind": "story",
+  "revision": 25,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#26, merged 3645ef0",
+    "reference": "https://github.com/beyond10x/weft/pull/26"
+  }
+}

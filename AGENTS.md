@@ -118,11 +118,12 @@ none is written before the specification of what it implements.
 
 ## Gates and bot commits
 
-weft is enrolled in the organization's Gates policy (gates-policy PR 9, baseline `fc11f840`, the
-owner's order of 2026-11-26). Every commit after the baseline is a bot commit; the hooks
-(`b10x-gates install`) and the `Shared source gates` workflow refuse any other author.
+weft is enrolled in the organization's Gates policy (baseline `fc11f840`, the owner's order of
+2026-11-26). Every commit after the baseline is a bot commit; the hooks (`b10x-gates install`) and
+the `Shared source gates` workflow refuse any other author.
 
-- Commit: `b10x-gates bot --repository beyond10x/weft --policy ~/beyond10x/gates-policy/policy.json -- commit -F <file>`.
+- Commit: `b10x-gates bot --repository beyond10x/weft -- commit -F <file>`, with the policy file the
+  operator names in `B10X_GATES_POLICY` (or `--policy <file>`).
 - Push: the same with `-- push …`. Pull requests: `b10x-gates api --method POST --path /repos/beyond10x/weft/pulls …`.
 - `cherry-pick` and `rebase` re-create commits under another author: use `merge` or a new bot commit.
 
