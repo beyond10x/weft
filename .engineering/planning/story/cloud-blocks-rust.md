@@ -12,6 +12,8 @@ relations:
 - depends_on: story:cloud-blocks-runtime-fields
 scope:
 - confidence: cited
+  path: ess/components.yaml
+- confidence: cited
   path: product/cloud/crates/weft-agent/tests
 - confidence: cited
   path: product/cloud/crates/weft-bin/src
@@ -25,7 +27,7 @@ scope:
   path: product/cloud/crates/weft-testkit
 - confidence: cited
   path: quality/ratchet.yaml
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T10:10:15Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
