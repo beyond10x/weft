@@ -7,7 +7,9 @@ status: planned
 weft runs as four server components and one command-line client. The specification declares
 the components in
 [`ess/components.yaml`](https://github.com/beyond10x/weft/blob/main/ess/components.yaml): each
-owns a set of domains and accepts their commands.
+owns a set of domains and accepts their commands. That file places the domains of cloudspec's
+blocks, vendored under [`ess/cloud/`](https://github.com/beyond10x/weft/tree/main/ess/cloud),
+the same way as weft's own.
 
 :::caution[Planned]
 Specified, not built. The components and their contracts are part of the specification, which
@@ -30,9 +32,9 @@ table no longer matches it.
 <!-- generated: components -->
 | Component | What it does | Domains it owns | Commands it accepts |
 |---|---|---|---|
-| `weft-api` | The user API: logins, API tokens and the authorization of every management call; tenants, accounts and principals; formations; the artifacts an account registers. | `weft.access`, `weft.accounts`, `weft.artifacts`, `weft.formations` | 72 |
-| `weft-control` | The control plane: the cluster and its inventory, tenant storage, workloads and their instances, claims, scheduling, the record of each node session, workload identity, secret custody and delivery, telemetry, deployments and releases, the catalog and metering. | `weft.catalog`, `weft.claims`, `weft.cluster`, `weft.deployments`, `weft.identity`, `weft.infrastructure`, `weft.inventory`, `weft.metering`, `weft.nodes`, `weft.observability`, `weft.pipelines`, `weft.resources`, `weft.scheduling`, `weft.secrets`, `weft.workloads` | 345 |
-| `weft-edge` | The edge gateway: the ready instances behind each route of a formation, the requests held while a sleeping service wakes, and the certificate of each public endpoint. | `weft.edge` | 13 |
+| `weft-api` | The user API: logins, API tokens and the authorization of every management call; tenants, accounts and principals, and the scope each account opens; formations; the artifacts an account registers. | `weft.access`, `weft.accounts`, `weft.architecture`, `weft.artifacts`, `weft.formations`, `weft.scope` | 71 |
+| `weft-control` | The control plane: the cluster and its inventory, tenant storage, workloads and their instances, claims, scheduling, the record of each node session, workload identity, secret custody and delivery, telemetry, deployments and releases, the catalog and metering. | `weft.catalog`, `weft.claims`, `weft.cluster`, `weft.deployments`, `weft.identity`, `weft.infrastructure`, `weft.inventory`, `weft.limits`, `weft.metering`, `weft.nodes`, `weft.observability`, `weft.pipelines`, `weft.resources`, `weft.scheduling`, `weft.secrets`, `weft.services`, `weft.topology`, `weft.workloads` | 347 |
+| `weft-edge` | The edge gateway: the ready instances behind each route of a formation, the requests held while a sleeping service wakes, and the certificate of each public endpoint. | `weft.edge` | 17 |
 | `weft-node` | The node agent: the processes of the instances assigned to its node, their restarts and backoff, and the local endpoint where an instance asks for its identity document and its secrets. | `weft.node` | 9 |
 <!-- /generated: components -->
 

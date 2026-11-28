@@ -6,7 +6,10 @@ status: decided
 
 Everything a user owns in weft sits in an account, and every account sits in a tenant. Domains:
 `weft.accounts` and `weft.access`
-([`ess/2-tenancy/`](https://github.com/beyond10x/weft/tree/main/ess/2-tenancy)).
+([`ess/2-tenancy/`](https://github.com/beyond10x/weft/tree/main/ess/2-tenancy)), and `weft.scope`
+from cloudspec's blocks
+([`ess/cloud/3-scope/scope.yaml`](https://github.com/beyond10x/weft/blob/main/ess/cloud/3-scope/scope.yaml),
+vendored).
 
 :::info[Specified, not built]
 This page describes the specification. No running weft enforces it yet.
@@ -31,6 +34,13 @@ acme/research/gpu-lab    sub-account
 A tenant or account name is a DNS label: lower-case letters, digits and `-`, 1 to 63 characters.
 States: `Open`, `Closed`. Nothing crosses from one account to another unless an **export** names
 it: one endpoint of an account shared with one other account of the same tenant (`weft.formations`).
+
+## Scopes
+
+Each account opens one **scope** when it is created, and records which one. A scope is the
+boundary of ownership and isolation: every row an account owns, such as a formation or a
+scheduling request, names its scope; a request acts in one scope, and rows of a scope are
+invisible to a caller acting in another.
 
 ## Principals and roles
 
@@ -71,7 +81,8 @@ System actors are parts of weft acting on their own: `NodeAgent`, `Scheduler`, `
 
 ## Access
 
-A cloud has one access mode, set when it is created:
+A cloud has one access mode, set once right after the cloud is created
+(`weft.infrastructure.ConfigureCloud`):
 
 - `SingleUser`: one implicit admin; the API listens on a local socket only its owner can read. No
   login.

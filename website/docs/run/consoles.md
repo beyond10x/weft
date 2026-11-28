@@ -20,11 +20,11 @@ Actor: `weft.actors.ClusterOperator`, the operator who runs the cloud. Document:
 
 | Page | Shows | Commands |
 |---|---|---|
-| Overview | Counts of nodes, node pools, tenants and requests, the clouds, requests that cannot be placed, agent sessions that are not open, preemptions and drains | Scale the control plane, set the cloud policy |
+| Overview | Counts of nodes, node pools, tenants and requests, the clouds with their access mode and control plane, requests that cannot be placed, agent sessions that are not open, preemptions and drains | Create a cloud, then configure its access mode and control plane; scale the control plane, set the cloud policy |
 | Nodes, node detail | Every node with its zone, pool, role, capacity, isolation facts and state. On one node: its devices, agent sessions, observations, placements, claim bindings and drains | Provision, cordon, uncordon, drain, remove, reset a device, cancel a drain, issue a join token |
 | Node pools | Pools with their desired size drawn between the minimum and the maximum, and their scale requests | Create, edit, scale up and down, delete |
 | Zones, join tokens, inventory | Zones, nodes waiting to join, resource classes and free devices | Declare and retire a zone, issue a join token, provision a pool node, define and retire a resource class |
-| Requests, placements, priority classes | Scheduling requests grouped by state, gangs, placement decisions and priority classes | Define and retire a priority class |
+| Requests, placements, priority classes | Scheduling requests grouped by state with the scope that asked, gangs, placement decisions and priority classes | Define and retire a priority class |
 | Tenants, tenant detail, quotas | Tenants, their account tree, quotas with a usage bar, roles and principals | Create and close a tenant, bind an owner, grant, raise and lower quotas |
 | Platform | Runtimes, translators, trust domains and secret backends | Request a key rotation, retire a runtime or a translator |
 
@@ -37,7 +37,7 @@ list and on usage and cost. A tenant's engineer ships and runs workloads there. 
 | Page | Shows | Commands |
 |---|---|---|
 | Overview | Formations, instances, managed services, spend by meter, alerts and services with their running replicas | |
-| Formations, formation detail | Formations as cards; on one formation its revisions, components, workloads and environments, then its network (links, border, endpoints) and config (configs, mounts, service bindings) | Create, retire, commit a revision, remove a component or link, unbind a service |
+| Formations, formation detail | Formations as cards; on one formation its revisions, components, workloads and environments, then its network (links only for now: the network page has no border-route and endpoint sections until it is decided how weft-edge is reached) and config (configs, mounts, service bindings) | Create, pin to a cluster (a formation is placed nowhere until it is pinned), retire, commit a revision, remove a component or link, unbind a service |
 | Workloads, services, instances | Workloads of a formation, services with a replica bar, instances grouped by state. On one instance: its record, identity documents, log streams with their lines, observations, assignments and exec sessions | Scale a service, retire a workload, pause, resume, snapshot and stop an instance, cancel a job |
 | Releases, release detail | Releases of an environment, plans, rollout steps with a ready-replica bar, drift | Apply or discard a plan, roll back |
 | Catalog, managed services | Offerings and products as cards; managed service instances with bindings, backups and restores | Provision, back up, restore, deprovision |
@@ -83,10 +83,10 @@ The build goes to `target/console/dist`. `preview` serves it on port 4417.
   its own accent color from its document's tokens.
 - **The signed-in actor.** Its roles name actors of the specification. A page shows when the actor
   holds the page's actor; an action shows when its command is granted. An input the caller owns,
-  such as `account_id`, is always the actor's own. Every read of the account console that the
-  specification can scope to one account binds `account_id` to the actor's account. The reads it
-  cannot scope yet are listed in `product/console/test/unscoped-reads.txt`, and that list may only
-  shrink.
+  such as `account_id` or `scope_id`, is always the actor's own. Every read of the account console
+  that the specification can scope binds `scope_id` to the scope the actor's account opened. The
+  reads it cannot scope yet are listed in `product/console/test/unscoped-reads.txt`, and that list
+  may only shrink.
 - **The checks.** `task check` runs `tools/check.d/40-console.sh`. That script checks both
   documents and their host components, then runs the type check and the unit tests, builds once,
   and runs Playwright. Playwright loads every page of both apps. It fails on any axe violation

@@ -27,7 +27,7 @@ Status: specification first. No code exists yet.
 | Where | What |
 |---|---|
 | [`docs/domain-sketch.md`](docs/domain-sketch.md) | The design every specification file follows |
-| [`ess/`](ess/) | The ESS specification: 23 domains in 10 layers, components and bindings |
+| [`ess/`](ess/) | The ESS specification: 28 domains in 10 layers of weft's own files over cloudspec's blocks, vendored under `ess/cloud/`; components and bindings |
 | [`product/cloud/crates/`](product/cloud/crates/) | weft's Rust crates; the code ESS generates from `ess/` is synthesized into `target/generated/`, not committed |
 | [cloudspec-sim](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim) | Explores and simulates the specification in memory; a crate of cloudspec (weft-sim until 2026-11-28), installed by `task sim-install` at the revision `CLOUDSPEC_REV` of `Taskfile.yml` |
 | [`sim/experiments/`](sim/experiments/) | Experiments: a full setup, faults, duplicate delivery, topology |

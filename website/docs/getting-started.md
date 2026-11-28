@@ -30,11 +30,11 @@ $ cd weft
 
 ```shell-session
 $ ess specify validate --path ess --strict-requires
-weft v1 — 25 file(s), valid
+weft v1 — 39 file(s), valid
 ```
 
-25 files: `system.yaml`, `components.yaml` and the 23 domain files listed in
-`ess/ess-inputs.yaml`. [Validate the specification](specification/validate.md) covers the other
+39 files: `system.yaml`, `components.yaml` and the 37 domain files listed in
+`ess/ess-inputs.yaml`. The domain files under `ess/cloud/` are cloudspec's blocks, vendored. [Validate the specification](specification/validate.md) covers the other
 checks of the gate.
 
 ## Install cloudspec-sim

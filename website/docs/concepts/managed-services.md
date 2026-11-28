@@ -6,9 +6,19 @@ status: planned
 
 weft offers two levels of use. You build and deploy your own images as
 [workloads](workloads.md), or you take a ready service from weft by name: a queue, a database, an
-object store. The services weft operates are the **catalog**, domain `weft.catalog`
-([`ess/7-services/catalog.yaml`](https://github.com/beyond10x/weft/blob/main/ess/7-services/catalog.yaml)),
-owned by the component `weft-control` ([components](components.md)).
+object store. The services weft operates are the **catalog**, specified in a domain of cloudspec's
+blocks and one of weft's own:
+
+- `weft.services`, owned by the component `weft-control`, from cloudspec's blocks
+  ([`ess/cloud/8-services/services.yaml`](https://github.com/beyond10x/weft/blob/main/ess/cloud/8-services/services.yaml),
+  vendored): offerings, the service instances provisioned from them, the bindings that give a
+  workload access, and backups and restores.
+- `weft.catalog`, owned by the component `weft-control`, weft's own
+  ([`ess/7-services/catalog.yaml`](https://github.com/beyond10x/weft/blob/main/ess/7-services/catalog.yaml)):
+  the engines behind the offerings, the offering plans, and the products with their versions and
+  installations.
+
+[Components](components.md) says what else `weft-control` does.
 
 :::caution[Planned]
 Specified, not built. The catalog is part of the specification, which `task check` validates
@@ -51,13 +61,13 @@ A plan fixes:
 - `offering_id`: `weft.shared.OfferingId`
 - `name`: `string`
 - `limits`: `list of weft.shared.ResourceAmount`
-- `durability`: `weft.catalog.Durability`
+- `durability`: `weft.services.Durability`
 - `replicas`: `integer`
 <!-- /generated: plans -->
 
 ## Service instances
 
-A **service instance** is one provisioned offering in an account or a formation. weft runs on
+A **service instance** is one provisioned offering in a scope or a formation. weft runs on
 weft: an instance is translated into components of a formation the system owns, on the same
 nodes, with the same isolation and metering as any workload.
 
@@ -115,6 +125,7 @@ older one (a rollback) is allowed, is an open question
 
 ## Related
 
-- [Components](components.md): `weft-control`, which owns the catalog.
+- [Components](components.md): `weft-control`, which owns the catalog (`weft.services` and
+  `weft.catalog`).
 - [Formations](formations.md): what an installation and a service instance run as.
 - [Status](../status.md): what exists today.

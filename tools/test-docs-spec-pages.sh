@@ -4,10 +4,11 @@
 # below, made under target/docs-spec-pages-test/:
 #   component  ess/ with a fifth component (`weft-probe`, which takes `weft.metering`, its commands
 #              and its events over from weft-control): the components table misses a row;
-#   kind       ess/ with a twelfth variant of weft.catalog.OfferingKind (`ledger`): the
+#   kind       ess/ with a twelfth variant of weft.services.OfferingKind (`ledger`, in the copy of
+#              the vendored file ess/cloud/8-services/services.yaml): the
 #              hand-written kinds table misses a row;
 #   mode       the pages with one binding mode taken out of the generated block;
-#   kind-no-text, catalog-owner, cells, placement   see each case below.
+#   kind-no-text, catalog-owner, services-owner, cells, placement   see each case below.
 # Besides the hook, it checks the component cells against the IR and, with
 # tools/docs-check.d/20-planned-banners.sh, that both pages keep their Planned banner.
 # Each case must also print the reason it names, so a hook that fails for another reason (an
@@ -64,11 +65,11 @@ DOCS_SPEC_ESS=$work/component/ess DOCS_SPEC_PAGES=$pages expect component 1 'com
 
 mkdir -p "$work/kind" && cp -R ess "$work/kind/ess" || exit 2
 awk '
-  /^  - name: weft\.catalog\.OfferingKind$/ { on = 1 }
+  /^  - name: weft\.services\.OfferingKind$/ { on = 1 }
   { print }
   on && /^      - queue$/ { print "      - ledger"; on = 0; done = 1 }
   END { if (!done) exit 1 }
-' ess/7-services/catalog.yaml > "$work/kind/ess/7-services/catalog.yaml" || exit 2
+' ess/cloud/8-services/services.yaml > "$work/kind/ess/cloud/8-services/services.yaml" || exit 2
 DOCS_SPEC_ESS=$work/kind/ess DOCS_SPEC_PAGES=$pages expect kind 1 'kinds table: rows differ'
 
 mkdir -p "$work/mode/pages" && cp "$pages/components.md" "$pages/managed-services.md" "$work/mode/pages/" || exit 2
@@ -93,30 +94,42 @@ awk '
 ' "$pages/managed-services.md" > "$work/kind-no-text/pages/managed-services.md" || exit 2
 DOCS_SPEC_ESS=ess DOCS_SPEC_PAGES=$work/kind-no-text/pages expect kind-no-text 1 'kinds table'
 
-# catalog-owner: weft.catalog moves from weft-control to a new component and the generator is run,
-# as an author would. managed-services.md (lines 11 and 114) and components.md (line 88) still say
-# weft-control owns the catalog; the hook must not pass that page.
-mkdir -p "$work/catalog-owner/pages" && cp -R ess "$work/catalog-owner/ess" &&
-  cp "$pages/components.md" "$pages/managed-services.md" "$work/catalog-owner/pages/" || exit 2
-awk '
-  /^  - component: / { comp = $3 }
-  /^    (owns|accepts|publishes):/ { sect = $1 }
-  comp == "weft-control" && /^        - weft\.catalog(\.|$)/ {
-    if (sect == "accepts:") acc = acc $0 "\n"
-    else if (sect == "publishes:") pub = pub $0 "\n"
-    next
-  }
-  /^# Reconciliation loops/ && !done {
-    printf "  - component: weft-services\n    summary: The catalog, moved by the self-test.\n    owns:\n      domains:\n        - weft.catalog\n"
-    printf "    accepts:\n      commands:\n%s    publishes:\n      events:\n%s\n", acc, pub
-    done = 1
-  }
-  { print }
-  END { if (!done) exit 1 }
-' ess/components.yaml > "$work/catalog-owner/ess/components.yaml" || exit 2
-DOCS_SPEC_ESS=$work/catalog-owner/ess DOCS_SPEC_PAGES=$work/catalog-owner/pages tools/docs-spec-pages.sh > "$work/catalog-owner.gen" 2>&1 ||
-  { echo "test-docs-spec-pages: catalog-owner: the generator failed"; sed 's/^/  /' "$work/catalog-owner.gen"; exit 2; }
-DOCS_SPEC_ESS=$work/catalog-owner/ess DOCS_SPEC_PAGES=$work/catalog-owner/pages expect catalog-owner 1 'managed-services.md'
+# move_owner <case> <domain> <component>: a copy of ess/ in which <domain> moves from weft-control
+# to the new <component>, and of both pages with the generator run on it, as an author would. The
+# hand-written lines of managed-services.md and components.md still say weft-control owns it.
+move_owner() {
+  mkdir -p "$work/$1/pages" && cp -R ess "$work/$1/ess" &&
+    cp "$pages/components.md" "$pages/managed-services.md" "$work/$1/pages/" || exit 2
+  awk -v domain="$2" -v to="$3" '
+    BEGIN { item = "        - " domain }
+    /^  - component: / { comp = $3 }
+    /^    (owns|accepts|publishes):/ { sect = $1 }
+    comp == "weft-control" && ($0 == item || index($0, item ".") == 1) {
+      if (sect == "accepts:") acc = acc $0 "\n"
+      else if (sect == "publishes:") pub = pub $0 "\n"
+      next
+    }
+    /^# Reconciliation loops/ && !done {
+      printf "  - component: %s\n    summary: The domain %s, moved by the self-test.\n    owns:\n      domains:\n        - %s\n", to, domain, domain
+      printf "    accepts:\n      commands:\n%s    publishes:\n      events:\n%s\n", acc, pub
+      done = 1
+    }
+    { print }
+    END { if (!done || acc == "") exit 1 }
+  ' ess/components.yaml > "$work/$1/ess/components.yaml" || { echo "test-docs-spec-pages: $1: cannot move $2"; exit 2; }
+  DOCS_SPEC_ESS=$work/$1/ess DOCS_SPEC_PAGES=$work/$1/pages tools/docs-spec-pages.sh > "$work/$1.gen" 2>&1 ||
+    { echo "test-docs-spec-pages: $1: the generator failed"; sed 's/^/  /' "$work/$1.gen"; exit 2; }
+}
+
+# catalog-owner: weft.catalog moves to a new component; the pages still say weft-control owns the
+# catalog, and the hook must not pass them.
+move_owner catalog-owner weft.catalog weft-catalog
+DOCS_SPEC_ESS=$work/catalog-owner/ess DOCS_SPEC_PAGES=$work/catalog-owner/pages expect catalog-owner 1 'for the catalog (weft.catalog)'
+
+# services-owner: the same for the managed services, weft.services (vendored; its owner is named in
+# weft's ess/components.yaml), which managed-services.md also describes.
+move_owner services-owner weft.services weft-services
+DOCS_SPEC_ESS=$work/services-owner/ess DOCS_SPEC_PAGES=$work/services-owner/pages expect services-owner 1 'for the managed services (weft.services)'
 
 # placement-rule: components.md says "weft-control owns every domain with a command the node agent
 # sends over its session or one of the control plane's own actors issues (the scheduler, the

@@ -7,7 +7,9 @@ status: decided
 A workload holds resources through **claims**. Every resource, from a GPU to a public address, is
 a **resource class** with the same five attributes, and the scheduler reads only those. Domains:
 `weft.inventory` (resource classes and devices, operator-owned), `weft.resources` (volumes,
-filesystems, buckets and snapshots of an account) and `weft.claims` (claims and bindings).
+filesystems, buckets and snapshots of a scope) and `weft.claims` (claims and bindings), all three
+from cloudspec's blocks, vendored under
+[`ess/cloud/`](https://github.com/beyond10x/weft/tree/main/ess/cloud).
 
 :::info[Specified, not built]
 This page describes the specification. No running weft binds a claim yet.

@@ -4,9 +4,12 @@ description: The machines of a weft cloud - clouds, zones, node pools and nodes 
 status: decided
 ---
 
-Domains: `weft.infrastructure` (the cloud itself), `weft.nodes` (the control plane's record of
-each node's session), `weft.node` (the node agent's own records), `weft.scheduling` and
-`weft.cluster` (tenant clusters).
+Domains: `weft.infrastructure` (the cloud itself), `weft.topology` (the structure of the cloud's
+nodes), `weft.nodes` (the control plane's record of each node's session), `weft.node` (the node
+agent's own records), `weft.scheduling` and `weft.cluster` (tenant clusters). `weft.topology`
+comes from cloudspec's blocks, vendored under
+[`ess/cloud/`](https://github.com/beyond10x/weft/tree/main/ess/cloud); `weft.infrastructure`
+and `weft.scheduling` are split over a vendored file and one of weft's own.
 
 :::info[Specified, not built]
 This page describes the specification. No release of a control host or node agent exists yet
@@ -17,7 +20,7 @@ This page describes the specification. No release of a control host or node agen
 
 | Entity | What |
 |---|---|
-| Cloud | The installation itself, with its access mode. |
+| Cloud | The installation itself: where it is placed and its policy. Its access mode and the size of its control plane are set right after it is created (`ConfigureCloud`). |
 | Zone | A failure domain. |
 | Node pool | A template for nodes: machine type, image, minimum and maximum size, zone. |
 | Node | One machine: role `control`, `worker` or both, its join, and what its node agent observed. |
@@ -100,6 +103,11 @@ cloudspec-sim drives these loops in its experiments ([run cloudspec-sim](../simu
 ## Clusters
 
 A **cluster** is where workloads deploy. The cloud has a default cluster, owned by no account. An
-account can create clusters of its own, with dedicated node pools and a **topology**: groups of
-pools and the links between groups, including links workloads may not cross. The scheduler keeps
-an instance's peers on the groups the topology allows.
+account can create clusters of its own, with dedicated node pools. A formation runs in a cluster
+only after it is pinned to it (`weft.cluster.PinFormation`); until then no instance of it is
+placed.
+
+The cloud's nodes have a **topology** (`weft.topology`): groups of the cloud's node pools, each
+with its role, and the links between groups, including links workloads may not cross. The
+scheduler refuses a placement on a node whose pool the named group does not list, and one that
+crosses a closed link.
