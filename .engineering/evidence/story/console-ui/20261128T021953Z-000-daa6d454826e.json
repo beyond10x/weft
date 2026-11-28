@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T02:19:53Z",
+  "actor": "human:operator",
+  "artifact": "story:console-ui",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#27, merged 6798e7d",
+    "reference": "https://github.com/beyond10x/weft/pull/27"
+  }
+}
