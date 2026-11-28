@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-snippet-run
 kind: story
-status: draft
+status: active
 title: The snippet golden, submitted, planned and applied, runs to a Succeeded Job on the local node in one control-host test
 relations:
 - decomposes: epic:cloudspec-submission
@@ -16,7 +16,10 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/cloudspec_snippet.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T15:16:18Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T15:16:18Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

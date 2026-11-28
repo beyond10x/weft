@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T15:16:18Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-snippet-run",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the operator's order relayed from the owner: epic cloudspec-submission first; dependencies apply-workloads and job-exit merged on integration/2026-11-28-8 (fab73ae)"
+  }
+}
