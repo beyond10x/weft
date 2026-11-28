@@ -6,6 +6,13 @@
 # itself: JoinNode and RecordNodeObservation (NodeAgent, line 112). Actors are written by the
 # integration pass. The ControlPlane runs the drain of a tenant cluster's dedicated pool
 # (DrainNodePool, DrainNode, RemoveNode, DeleteNodePool; ess/components.yaml, hardening pass 4).
+#
+# cloudspec's blocks (ess/cloud/2-infrastructure/infrastructure.yaml, C3) keep a Cloud's name,
+# placement and policy and cut weft's run-time fields `access_mode` and `control_plane`, with the
+# CreateCloud refusals that read them. weft keeps both on its own row, CloudRuntime, keyed by the
+# cloud's id: ConfigureCloud sets them once after CreateCloud, ScaleControlPlane changes the
+# control plane, and weft.access reads the access mode from it (story
+# cloud-blocks-runtime-fields, 2026-11-28).
 domain: weft.infrastructure
 
 
@@ -19,6 +26,35 @@ types:
     fields:
       - name: replicas
         type: Integer
+
+entities:
+  # Sketch line 438: "`Cluster`: name, placement, access mode, policy", with its ControlPlane
+  # (line 440). The name, placement and policy are cloudspec's Cloud; the access mode and the
+  # control plane are weft's and live here, one row per cloud.
+  # The access mode is set once and never changed (sketch lines 147-151); the control plane
+  # changes through ScaleControlPlane.
+  - name: weft.infrastructure.CloudRuntime
+    naming:
+      summary: weft's run-time settings of one cloud, its access mode and its control plane.
+    identity:
+      name: cloud_id
+      type: weft.shared.CloudId
+    fields:
+      - name: access_mode
+        type: weft.shared.AccessMode
+      - name: control_plane
+        type: weft.infrastructure.ControlPlaneSpec
+    relations:
+      # No command deletes a cloud, so ownership decides nothing yet (as Zone's `cluster`).
+      - name: cloud
+        kind: references
+        target: weft.infrastructure.Cloud
+        cardinality: one
+        via: cloud_id
+    lifecycle:
+      initial: Configured
+      states: [Configured]
+      terminal: [Configured]
 
 errors:
   - name: weft.infrastructure.PoolAlreadyRequested
@@ -36,13 +72,65 @@ errors:
   # Sketch line 578: "`local`: one process is control plane and worker".
   - name: weft.infrastructure.LocalHasOneReplica
     summary: A local cluster runs its control plane in one process, and nothing changed.
+  - name: weft.infrastructure.CloudAlreadyConfigured
+    summary: The cloud's access mode and control plane are set already; they are set once, and nothing changed.
+
 events:
+  - name: weft.infrastructure.CloudConfigured
+    fields:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: access_mode, type: weft.shared.AccessMode}
+      - {name: control_plane, type: weft.infrastructure.ControlPlaneSpec}
   - name: weft.infrastructure.ControlPlaneScaled
     fields:
       - {name: cloud_id, type: weft.shared.CloudId}
       - {name: control_plane, type: weft.infrastructure.ControlPlaneSpec}
 
 commands:
+  # Sketch line 438 (access mode), line 440 (ControlPlane), lines 147-151 and 578 (access mode by
+  # placement). Until the blocks were vendored these were CreateCloud's input and refusals.
+  - name: weft.infrastructure.ConfigureCloud
+    naming:
+      display: Set a cloud's access mode and control plane
+    input:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: access_mode, type: weft.shared.AccessMode}
+      - {name: control_plane, type: weft.infrastructure.ControlPlaneSpec}
+    outcomes:
+      - name: invalid-replica-count
+        when: {control_plane.replicas: {none_of: [1, 3]}}
+        error: weft.infrastructure.InvalidReplicaCount
+      - name: already-configured
+        existing_instance: true
+        error: weft.infrastructure.CloudAlreadyConfigured
+      - name: unknown-cloud
+        when_related: {via: input.cloud_id, exists: false}
+        error: weft.infrastructure.UnknownCloud
+      - name: single-user-outside-local
+        when: access_mode == SingleUser
+        when_related: {via: input.cloud_id, predicate: placement != Local}
+        error: weft.infrastructure.SingleUserOutsideLocal
+      - name: local-needs-single-user
+        when: access_mode == Federated
+        when_related: {via: input.cloud_id, predicate: placement == Local}
+        error: weft.infrastructure.LocalNeedsSingleUser
+      - name: local-has-one-replica
+        when: {control_plane.replicas: 3}
+        when_related: {via: input.cloud_id, predicate: placement == Local}
+        error: weft.infrastructure.LocalHasOneReplica
+      - name: configured
+        creates: weft.infrastructure.CloudRuntime
+        instance: cloud_id
+        sets:
+          access_mode: input.access_mode
+          control_plane: input.control_plane
+        emits: [weft.infrastructure.CloudConfigured]
+        payload:
+          weft.infrastructure.CloudConfigured:
+            cloud_id: input.cloud_id
+            access_mode: input.access_mode
+            control_plane: input.control_plane
+
   # Sketch line 440: "1 or 3 replicas"; line 578: a local cluster is one process.
   # OPEN: whether a move to 3 replicas is refused while the cluster has fewer than 3 nodes of
   # role control or both.
@@ -59,12 +147,17 @@ commands:
       - name: no-such-cluster
         unknown_instance: true
         error: weft.infrastructure.NotFound
+      # ConfigureCloud refuses a cloud that does not exist and nothing deletes one, so this
+      # answers only a row written outside the commands.
+      - name: unknown-cloud
+        when_related: {via: input.cloud_id, exists: false}
+        error: weft.infrastructure.UnknownCloud
       - name: local-has-one-replica
         when: {control_plane.replicas: 3}
-        when_subject: {predicate: placement == Local}
+        when_related: {via: input.cloud_id, predicate: placement == Local}
         error: weft.infrastructure.LocalHasOneReplica
       - name: scaled
-        updates: weft.infrastructure.Cloud
+        updates: weft.infrastructure.CloudRuntime
         instance: cloud_id
         sets:
           control_plane: input.control_plane
@@ -75,6 +168,16 @@ commands:
             control_plane: input.control_plane
 
 views:
+  # Every field and the state, unfiltered, so guards and invariants are observed.
+  - name: weft.infrastructure.CloudRuntimes
+    source: weft.infrastructure.CloudRuntime
+    consistency: read_your_writes
+    fields:
+      - {name: cloud_id, type: weft.shared.CloudId}
+      - {name: access_mode, type: weft.shared.AccessMode}
+      - {name: control_plane, type: weft.infrastructure.ControlPlaneSpec}
+      - {name: state, type: weft.infrastructure.CloudRuntime.State}
+
   # Sketch line 453, hardening pass 4: the live pools made for a tenant cluster's dedicated pool.
   # The ControlPlane joins it with weft.cluster.UnlinkedClusterNodePools on
   # requested_for == cluster_node_pool_id (level step in ess/components.yaml).

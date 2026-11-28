@@ -358,6 +358,7 @@ components:
         - weft.claims.ReleaseClaim
         - weft.claims.ReleaseClaimBindings
         # commands of weft.infrastructure
+        - weft.infrastructure.ConfigureCloud
         - weft.infrastructure.CordonNode
         - weft.infrastructure.CreateCloud
         - weft.infrastructure.CreateNodePool

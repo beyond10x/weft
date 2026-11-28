@@ -49,6 +49,7 @@ actors:
       - weft.cluster.CreateDefaultCluster # integrator, 2026-11-26
       # cluster: every command except JoinNode and RecordNodeObservation.
       - weft.infrastructure.CreateCloud
+      - weft.infrastructure.ConfigureCloud
       - weft.infrastructure.SetCloudPolicy
       - weft.infrastructure.ScaleControlPlane
       - weft.infrastructure.DeclareZone
