@@ -22,6 +22,9 @@
 # E2 for every other binding, ESS story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts
 #   components.yaml is read with explode(.) (anchors and aliases resolved), and every map-valued
 #   `on_failure` still present is set to `retry`.
+#   edge-backend-not-ready and edge-backend-backing-off invoke the implemented
+#   RecordBackendNotReady with `not-ready` flattened to retry; nothing publishes InstanceNotReady
+#   or InstanceBackingOff yet. The change that publishes one moves its binding to the list above.
 #
 # yq: v4.30.8. YQ names a binary to use as it is; else `yq` on PATH when it is v4.30.8; else the
 # release binary, checked against its SHA-256, installed once under target/tools/.
