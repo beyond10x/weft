@@ -471,6 +471,9 @@ commands:
             plan_id: {generated: true}
             environment_id: input.environment_id
             formation_revision_id: {related: {via: input.release_id, field: formation_revision_id}}
+            # cloudspec D7 dropped Plan.rollback_of, so the plan row no longer names the release
+            # it restores; the event still does, from the request.
+            rollback_of: input.release_id
 
   # Section 5 "Release: a FormationRevision applied to an Environment"; the "apply" step of
   # `weft deploy`. A plan with violations, or not yet simulated, is never applied.

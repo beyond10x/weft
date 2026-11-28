@@ -90,13 +90,19 @@ components:
   - component: weft-api
     summary: >-
       The user API: logins, API tokens and the authorization of every management call; tenants,
-      accounts and principals; formations; the artifacts an account registers.
+      accounts and principals, and the scope each account opens; formations; the artifacts an
+      account registers.
+    # Story cloud-blocks-policies: the vendored domains go where weft's copies were. Architecture
+    # holds what weft.formations held (formations keeps only exports); scope sits beside
+    # accounts, whose AccountCreated opens a scope (binding account-opens-scope).
     owns:
       domains:
         - weft.access
         - weft.accounts
+        - weft.architecture
         - weft.artifacts
         - weft.formations
+        - weft.scope
     accepts:
       commands:
         - weft.access.CreateFederationRule
@@ -142,7 +148,10 @@ components:
         # commands of weft.artifacts
         - weft.artifacts.RegisterArtifact
         - weft.artifacts.RevokeArtifact
-        # commands of weft.formations
+        # commands of weft.scope
+        - weft.scope.CloseScope
+        - weft.scope.OpenScope
+        # commands of weft.architecture and weft.formations
         - weft.architecture.AddComponent
         - weft.architecture.AddLink
         - weft.architecture.AddToBorder
@@ -214,7 +223,10 @@ components:
         # events of weft.artifacts
         - weft.artifacts.ArtifactRegistered
         - weft.artifacts.ArtifactRevoked
-        # events of weft.formations
+        # events of weft.scope
+        - weft.scope.ScopeClosed
+        - weft.scope.ScopeOpened
+        # events of weft.architecture and weft.formations
         - weft.formations.AccountExportsRevoked
         - weft.architecture.ComponentAdded
         - weft.architecture.ComponentBordered
@@ -228,8 +240,6 @@ components:
         - weft.architecture.ConfigOverrideSet
         - weft.architecture.ConfigRemoved
         - weft.architecture.ConfigUnmounted
-        - weft.edge.EndpointAdded
-        - weft.edge.EndpointRemoved
         - weft.architecture.EnvironmentCreated
         - weft.architecture.EnvironmentQuotaSet
         - weft.architecture.EnvironmentRetired
@@ -241,8 +251,6 @@ components:
         - weft.architecture.LinkAdded
         - weft.architecture.LinkRemoved
         - weft.architecture.RevisionCommitted
-        - weft.edge.RouteAdded
-        - weft.edge.RouteRemoved
         - weft.architecture.ScaleChanged
         - weft.architecture.ScaleRemoved
         - weft.architecture.ScaleSet
@@ -255,9 +263,14 @@ components:
       The control plane: the cluster and its inventory, tenant storage, workloads and their
       instances, claims, scheduling, the record of each node session, workload identity, secret
       custody and delivery, telemetry, deployments and releases, the catalog and metering.
+    # Story cloud-blocks-policies: the vendored topology, limits and services hold what weft's
+    # cluster, metering and catalog held, whose commands weft-control accepted already.
     owns:
       domains:
         - weft.cluster
+        - weft.limits
+        - weft.services
+        - weft.topology
         - weft.pipelines
         - weft.infrastructure
         - weft.inventory
@@ -716,6 +729,7 @@ components:
         - weft.claims.ClaimDeclared
         - weft.claims.ClaimReleased
         # events of weft.cluster
+        - weft.infrastructure.CloudConfigured
         - weft.infrastructure.CloudCreated
         - weft.infrastructure.CloudPolicySet
         - weft.infrastructure.ControlPlaneScaled
@@ -1041,10 +1055,15 @@ components:
         - weft.node.SecretRequested
 
   # Line 75: "the gateway in front of public endpoints (data plane)"; line 67: "traffic to
-  # endpoints". Acts as EdgeGateway. Accepts no user command: its rows change through the bindings
-  # below (formations route and endpoint events, workloads readiness events, its own
-  # BackendSetChanged) and EdgeGateway's own commands.
+  # endpoints". Acts as EdgeGateway. Its rows change through the bindings below (its own route and
+  # endpoint events, workloads readiness events, its own BackendSetChanged) and EdgeGateway's own
+  # commands.
   # Publishes: WakeRequested (r8-edge-wake, R8) and BackendSetChanged (r8-edge-forward).
+  # Story cloud-blocks-vendor and -policies: the vendored weft.edge holds the routes and endpoints
+  # weft.formations held, so their user commands (AddRoute, RemoveRoute, AddEndpoint,
+  # RemoveEndpoint) are accepted and their events published here. OPEN: this component is not
+  # reached by network, so those four user commands have no HTTP surface; weft-api would forward
+  # them (the OPEN of D1 at the top), or weft-edge would be `reached_by: network`.
   # OPEN: the public traffic it serves is no command of the model, so the component is reached in
   # process here; a request is the EdgeGateway's HoldRequest only when its service sleeps.
   - component: weft-edge
@@ -1081,9 +1100,13 @@ components:
         - weft.edge.CertificateRenewed
         - weft.edge.CertificateRequested
         - weft.edge.CertificateRetired
+        - weft.edge.EndpointAdded
+        - weft.edge.EndpointRemoved
         - weft.edge.HeldRequestDropped
         - weft.edge.HeldRequestForwarded
         - weft.edge.HeldRequestMissed
+        - weft.edge.RouteAdded
+        - weft.edge.RouteRemoved
         - weft.edge.WakeRequested
 
 # Reconciliation loops, § 14 lines 584-618, in the four forms of lines 594-606 (edge, level, time,
@@ -1269,17 +1292,19 @@ bindings:
       priority: event.priority
     delivery: at_least_once
     on_failure:
-      # already-requested: harmless; a repeated delivery of this InstanceCreated.
-      drop: []
+      # already-requested: harmless; a repeated delivery of this InstanceCreated (the vendored
+      # SubmitSchedulingRequest keeps this refusal).
+      drop: [already-requested]
       # unknown-priority and retired-priority are retried until the operator defines the class
       # (cluster.DefinePriorityClass); the workload references it (workloads.yaml
       # Workload.priority_class) but DefineWorkload does not check it (OPEN there). OPEN: no-claims (a workload defined with no claim) is not
       # transient and has no escalation event: scheduling.yaml would add
       # `SchedulingRequestRefused(instance_id, reason)`, or workloads.DefineWorkload would refuse
-      # an empty claim list. unknown-account cannot follow (the workload names an existing
-      # account); unknown-gang, gang-closed and gang-of-other-tenant read a gang_id this binding
-      # leaves absent. A transport failure is retried.
-      retry: {except: []}
+      # an empty claim list. unknown-scope, unknown-formation and formation-of-other-scope cannot
+      # follow (the instance names its workload's scope and formation); unknown-gang, gang-closed
+      # and gang-of-other-scope read a gang_id this binding leaves absent. A transport failure is
+      # retried.
+      retry: {except: [already-requested]}
   # The Scheduler's choice of a node (scheduling.PlaceInstance) is a decision, not a reaction; it
   # stays a command the Scheduler runs for each pending request. R1 continues at R4.
   # The release goes live once its rollout steps saw ready instances: level step
@@ -1451,14 +1476,20 @@ bindings:
       backoff: event.restart
     delivery: at_least_once
     on_failure: &replica-ended-failure
-      # already-counted: harmless; a repeated delivery, the instance is already counted out.
-      drop: []
-      # no-such-service, no-instance, other-service and instance-live cannot follow (the event is
-      # the end of this service's instance). OPEN: count-empty (the count is already 0) means the
-      # count drifted from the live instances; it is not transient and workloads.yaml has no
-      # escalation event (it would add `ReplicaCountDrifted(service_id)`). A transport failure is
-      # retried.
-      retry: {except: []}
+      # count-empty: harmless; the service's count is already 0, so there is nothing to count
+      # out, and a retry would wait for a later replica to raise the count and then lower it for
+      # this one. The vendored RecordReplicaEnded refuses only no-such-service and count-empty: it
+      # cut already-counted, no-instance, other-service and instance-live (cloudspec D7 A, the
+      # instance is weft's run-time record).
+      # OPEN: without already-counted a repeated delivery while the count is above 0 lowers it a
+      # second time; the count then stays one below the live replicas, and the level step on
+      # ServicesBelowScale keeps one replica more than the scale. weft keeps the mark
+      # (Instance.replica_counted_out), but no refusal of the vendored command reads it; cloudspec
+      # would add `already-counted` back, or weft would refuse a repeat before the command runs.
+      drop: [count-empty]
+      # no-such-service cannot follow (the event names this service's instance). A transport
+      # failure is retried.
+      retry: {except: [count-empty]}
 
   # Edge 3 for a failure: every failure backs off, so a replica whose artifact the node rejected
   # does not loop without a wait (docs/open-questions.md "workloads loops", decided).
