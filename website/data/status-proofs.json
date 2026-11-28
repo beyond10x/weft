@@ -11,7 +11,7 @@
     ],
     "Components and bindings": [
       {"file": "ess/components.yaml"},
-      {"command": "awk '/^  - component: /{print $3}' ess/components.yaml", "expect": "weft-api\nweft-control\nweft-node\nweft-edge"},
+      {"command": "awk '/^  - component: /{print $3}' ess/components.yaml", "expect": "weft-api\nweft-control\nweft-edge"},
       {"command": "awk '/^bindings:/{f=1;next} /^[^ #]/{f=0} f&&/^  - id: /{n++} END{exit !n}' ess/components.yaml"}
     ],
     "Layer rule": [

@@ -11,11 +11,11 @@
 #   - weft-control: every domain with a command the node agent sends over its session (line 96,
 #     "weft-node -> weft-control") or one of weft-control's own actors issues (Scheduler,
 #     ReleaseController, ControlPlane; lines 63 and 73: "state store, scheduler, translators,
-#     identity issuer, secret delivery"), as granted in ess/9-actors/actors.yaml.
+#     identity issuer, secret delivery"), as granted in ess/9-actors/actors.yaml. Since D-N1 this
+#     holds weft.node too, the node agent's records of its own node (below).
 #   - weft-api: every other domain of the user's. Line 61 names "Tenants, accounts, formations";
 #     access is weft-api's own (ManagementApi, line 122). The Translator writes formation rows as a
 #     client of weft-api, the way a Deployer does.
-#   - weft-node: weft.node, the node agent's records of its own node (line 74).
 #   - weft-edge: weft.edge, the gateway's records in front of the public endpoints (line 75).
 #
 # D2 (the owner, 2026-11-26, design:components, "A: whole in weft-control"): the sketch's management
@@ -48,6 +48,16 @@
 # while a service wakes (R8) and the certificates of the public endpoints. A worker still "holds no
 # state the control plane does not know" (line 66): every weft.node fact reaches weft-control by
 # a binding below, which weft-control records (and stamps where a time is needed).
+#
+# D-N1 (the owner, 2026-11-28, epic:slot-node-daemon, "A: the control host serves them"): the
+# weft-node component of design:components is gone, and weft.node sits with weft-control. The node
+# agent sends StartProcess, RestartProcess and StopProcess to the control host like every other
+# record it sends (RecordInstanceRunning), as the NodeAgent over the same HTTP surface; their
+# events land in the control host's one store and log, and no relay carries them. Not taken: a
+# component in the agent's process with a store of its own and a relay of its events (the node has
+# no inbound port, line 96, so weft-control could not reach such a store), and the local endpoint
+# of line 100 as a component of its own (it is no process yet; OpenLocalEndpointSession,
+# RequestIdentityDocument and RequestSecret are weft-control's routes like the rest of weft.node).
 #
 # weft.shared (types only) and weft.actors (actors only) have no command and no event; no
 # component owns them.
@@ -295,8 +305,9 @@ components:
   - component: weft-control
     summary: >-
       The control plane: the cluster and its inventory, tenant storage, workloads and their
-      instances, claims, scheduling, the record of each node session, workload identity, secret
-      custody and delivery, telemetry, deployments and releases, the catalog and metering.
+      instances, claims, scheduling, the record of each node session and of the processes each node
+      runs, workload identity, secret custody and delivery, telemetry, deployments and releases,
+      the catalog and metering.
     # Story cloud-blocks-policies: the vendored topology, limits and services hold what weft's
     # cluster, metering and catalog held, whose commands weft-control accepted already.
     owns:
@@ -313,6 +324,8 @@ components:
         - weft.claims
         - weft.scheduling
         - weft.nodes
+        # D-N1 = A: the node agent's records of its own node, sent like its other records.
+        - weft.node
         - weft.identity
         - weft.secrets
         # § 16 (lines 613-642): stored logs, series, alert rules and alerts are decided centrally.
@@ -535,6 +548,16 @@ components:
         - weft.nodes.Stop
         - weft.nodes.SupersedeNodeSession
         - weft.nodes.UsageReported
+        # commands of weft.node (D-N1 = A, see the top)
+        - weft.node.CloseAssignmentEndpointSessions
+        - weft.node.MarkRestartDue
+        - weft.node.OpenLocalEndpointSession
+        - weft.node.RequestIdentityDocument
+        - weft.node.RequestSecret
+        - weft.node.RestartProcess
+        - weft.node.StartProcess
+        - weft.node.StopAssignmentProcesses
+        - weft.node.StopProcess
         # commands of weft.observability
         - weft.observability.AddNotificationTarget
         - weft.observability.CloseInstanceLogStreams
@@ -889,6 +912,16 @@ components:
         - weft.nodes.NodeSessionOpened
         - weft.nodes.NodeSessionSuperseded
         - weft.nodes.UsageReportRecorded
+        # events of weft.node
+        - weft.node.IdentityDocumentRequested
+        - weft.node.LocalEndpointSessionClosed
+        - weft.node.LocalEndpointSessionOpened
+        - weft.node.LocalProcessStarted
+        - weft.node.LocalProcessStopped
+        - weft.node.ProcessBackingOff
+        - weft.node.ProcessRestartDue
+        - weft.node.ProcessRestarted
+        - weft.node.SecretRequested
         # events of weft.observability
         - weft.observability.ScopeAlertRulesDeleted
         - weft.observability.ScopeNotificationTargetsRemoved
@@ -1051,46 +1084,6 @@ components:
     # D1: weft-api forwards the user commands of these domains here over an internal HTTP binding
     # (see the top). Line 96: the node's session also ends here.
     reached_by: network
-
-  # Line 74: "the node agent (worker plane)"; line 65: "starts, observes and stops instances. Holds
-  # no state the control plane does not know"; line 100: the instance's local endpoint.
-  # Acts as NodeAgent (its own processes) and answers Instance (the local endpoint).
-  # Consumes, as bindings below: workloads.AliveCheckFailed (R9), nodes.AssignmentEnded and
-  # nodes.AssignmentReleased (R2, R3). The assignments themselves (R4) reach it over the node
-  # channel (protocols/node-channel.yaml); StartProcess reads weft-control's record of them.
-  # Publishes to weft-control: ProcessRestarted (r9-record-process-restarted).
-  # Reached in process: the node dials out (line 96, "Workers open no inbound port"), and the local
-  # endpoint is reachable from inside its instance only (line 100).
-  - component: weft-node
-    summary: >-
-      The node agent: the processes of the instances assigned to its node, their restarts and
-      backoff, and the local endpoint where an instance asks for its identity document and its
-      secrets.
-    owns:
-      domains:
-        - weft.node
-    accepts:
-      commands:
-        - weft.node.CloseAssignmentEndpointSessions
-        - weft.node.MarkRestartDue
-        - weft.node.OpenLocalEndpointSession
-        - weft.node.RequestIdentityDocument
-        - weft.node.RequestSecret
-        - weft.node.RestartProcess
-        - weft.node.StartProcess
-        - weft.node.StopAssignmentProcesses
-        - weft.node.StopProcess
-    publishes:
-      events:
-        - weft.node.IdentityDocumentRequested
-        - weft.node.LocalEndpointSessionClosed
-        - weft.node.LocalEndpointSessionOpened
-        - weft.node.LocalProcessStarted
-        - weft.node.LocalProcessStopped
-        - weft.node.ProcessBackingOff
-        - weft.node.ProcessRestartDue
-        - weft.node.ProcessRestarted
-        - weft.node.SecretRequested
 
   # Line 75: "the gateway in front of public endpoints (data plane)"; line 67: "traffic to
   # endpoints". Acts as EdgeGateway. Its rows change through the bindings below (its own route and

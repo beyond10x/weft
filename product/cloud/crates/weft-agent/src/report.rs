@@ -161,6 +161,28 @@ impl Report {
         self.line(&json!({"instance_id": instance_id, "process": process, "restarted": restarts}))
     }
 
+    /// The node's records (`weft.node`) refused `record` (`StartProcess`, `RestartProcess`,
+    /// `StopProcess`) of `process` of `instance_id`, or could not be reached, as `refusal` says;
+    /// the process runs either way.
+    ///
+    /// # Errors
+    ///
+    /// What the file system refuses.
+    pub fn record_refused(
+        &mut self,
+        instance_id: &str,
+        process: &str,
+        record: &str,
+        refusal: &str,
+    ) -> io::Result<()> {
+        self.line(&json!({
+            "instance_id": instance_id,
+            "process": process,
+            "record": record,
+            "refused": refusal,
+        }))
+    }
+
     /// The agent stopped `process` of `instance_id`, which ended as `end` says.
     ///
     /// # Errors

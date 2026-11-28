@@ -246,7 +246,7 @@ impl Follower<'_> {
     }
 
     /// `weft.node.RestartProcess` of `process`, after `StartProcess` when its local process is
-    /// not recorded yet. A refusal is logged; the process runs either way.
+    /// not recorded yet. A refusal is logged and reported; the process runs either way.
     fn record_restart(&self, process: &mut Supervised) {
         let Some(local_process_id) = self.local_process(process) else {
             return;
@@ -258,7 +258,18 @@ impl Follower<'_> {
             self.records
                 .restart_process(&local_process_id, self.node_id, in_window, wait)
         {
-            eprintln!("weft-agent: RestartProcess {}: {refusal}", process.key);
+            self.record_refused(process, "RestartProcess", &refusal);
+        }
+    }
+
+    /// Logs and reports that the node's records refused `record` of `process` with `refusal`. A
+    /// report that cannot be written is logged too: the process runs either way.
+    fn record_refused(&self, process: &Supervised, record: &str, refusal: &str) {
+        eprintln!("weft-agent: {record} {}: {refusal}", process.key);
+        if let Err(error) = self.write(|report| {
+            report.record_refused(&process.instance_id, &process.process, record, refusal)
+        }) {
+            eprintln!("weft-agent: {record} {}: {error}", process.key);
         }
     }
 
@@ -273,7 +284,7 @@ impl Follower<'_> {
                 &process.process,
             ) {
                 Ok(id) => process.local_process_id = Some(id),
-                Err(refusal) => eprintln!("weft-agent: StartProcess {}: {refusal}", process.key),
+                Err(refusal) => self.record_refused(process, "StartProcess", &refusal),
             }
         }
         process.local_process_id.clone()
@@ -296,7 +307,7 @@ impl Follower<'_> {
         };
         if let Some(local_process_id) = &process.local_process_id {
             if let Err(refusal) = self.records.stop_process(local_process_id, self.node_id) {
-                eprintln!("weft-agent: StopProcess {}: {refusal}", process.key);
+                self.record_refused(process, "StopProcess", &refusal);
             }
         }
         self.write(|report| report.process_stopped(&process.instance_id, &process.process, end))?;

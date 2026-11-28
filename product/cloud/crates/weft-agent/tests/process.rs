@@ -5,8 +5,8 @@
 //! delay and records it with `weft.node.RestartProcess`, keeps the process down on an exit code
 //! the workload names, and stops it with the workload's grace and kill scope when its assignment
 //! is ordered stopped or released. No substrate daemon runs: the port is the stub. The node's
-//! own records (`weft.node`, reached in process) are weft-impl's behaviours over a state file of
-//! the test ([`LocalRecords`]).
+//! own records (`weft.node`) are the control host's (`story:node-records-on-control-host`),
+//! reached through the agent's production adapter ([`HostRecords`] over `ControlRecords`).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
 use weft_agent::follow::Follower;
-use weft_agent::records::NodeRecords;
+use weft_agent::records::{ControlRecords, NodeRecords};
 use weft_agent::report::Report;
 use weft_client::{Client, Expect};
 use weft_impl::{Ports, Row};
@@ -27,21 +27,11 @@ use weft_platform::node::{
 use weft_platform::Refusal;
 use weft_testkit::cloudspec::{self, ProcessWorld};
 use weft_testkit::ControlHost;
-use weft_types::behaviour::{Generated, WorkloadStorage};
-use weft_types::node::obligations::{
-    RestartProcessBehavior, StartProcessBehavior, StopProcessBehavior,
-};
-use weft_types::node::{
-    RestartProcess, RestartProcessOutcome, StartProcess, StartProcessOutcome, StopProcess,
-    StopProcessOutcome,
-};
-use weft_types::obligation::UnmetObligation;
+use weft_types::behaviour::WorkloadStorage;
 use weft_types::primitives::Uuid;
-use weft_types::shared::{
-    AssignmentId, CloudId, InstanceId, IsolationLevel, LocalProcessId, NodeId, ProcessName,
-};
+use weft_types::shared::{CloudId, IsolationLevel};
 use weft_types::workloads::{
-    KillScope as SpecKill, PrestartStep, ProcessRestart, RestartMode, RestartReason, Stop,
+    KillScope as SpecKill, PrestartStep, ProcessRestart, RestartMode, Stop,
 };
 
 use crate::seeds::{self, HostProcess, Placed};
@@ -85,60 +75,46 @@ fn report_path(name: &str) -> PathBuf {
     path
 }
 
-/// The node's own records (`weft.node`) over a state file of this test: weft-impl's `weft.node`
-/// behaviours, with the guards the specification declares, over the same rows the control host
-/// was seeded with (the assignment and instance `StartProcess` reads). Each call is kept with the
-/// outcome it got.
-struct LocalRecords {
-    node: Mutex<Generated<Ports>>,
+/// The node's own records (`weft.node`) on the control host of the test, through the agent's
+/// production adapter ([`ControlRecords`]): each call is kept with what it answered, the outcome
+/// (`started`, `restarted`, `committed`, `stopped`, …) or `refused: <why>`.
+struct HostRecords {
+    records: ControlRecords<'static>,
     calls: Mutex<Vec<(&'static str, String)>>,
 }
 
-impl LocalRecords {
-    /// Records over `rows`, in a state file of this test process named `name`.
-    fn leaked(name: &str, rows: Vec<Row>) -> &'static Self {
-        let path = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "process-records-{name}-{}.sqlite",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_file(&path);
-        weft_testkit::seed(&path, rows);
-        let ports = Ports::open(&path).expect("the records' state file opens");
+impl HostRecords {
+    /// Records on `host`.
+    fn leaked(host: &ControlHost) -> &'static Self {
+        let client: &'static Client = Box::leak(Box::new(Client::new(host.address())));
         Box::leak(Box::new(Self {
-            node: Mutex::new(Generated::new(ports)),
+            records: ControlRecords::new(client),
             calls: Mutex::default(),
         }))
     }
 
-    /// Each call so far, with the outcome it got (`Started`, `Restarted`, `AssignmentNotHeld`, …).
+    /// Each call so far, with what it answered.
     fn calls(&self) -> Vec<(&'static str, String)> {
         self.calls.lock().expect("the calls").clone()
     }
 
-    /// Keeps `command` with the name of `outcome`: `Ok(answer)` when it is `taken`.
-    fn keep<T: std::fmt::Debug>(
+    /// Keeps `command` with `answered` (`taken` names an accepted answer) and hands it on.
+    fn keep(
         &self,
         command: &'static str,
-        outcome: Result<T, UnmetObligation>,
-        taken: impl FnOnce(&T) -> Option<String>,
+        answered: Result<String, String>,
+        taken: impl FnOnce(&str) -> String,
     ) -> Result<String, String> {
-        let outcome = outcome.map_err(|unmet| format!("{unmet:?}"))?;
-        let debug = format!("{outcome:?}");
-        let name = debug
-            .split([' ', '{', '('])
-            .next()
-            .unwrap_or_default()
-            .to_owned();
-        self.calls.lock().expect("the calls").push((command, name));
-        taken(&outcome).ok_or(debug)
-    }
-
-    fn node(&self) -> std::sync::MutexGuard<'_, Generated<Ports>> {
-        self.node.lock().expect("the records")
+        let kept = match &answered {
+            Ok(answer) => taken(answer),
+            Err(refusal) => format!("refused: {refusal}"),
+        };
+        self.calls.lock().expect("the calls").push((command, kept));
+        answered
     }
 }
 
-impl NodeRecords for LocalRecords {
+impl NodeRecords for HostRecords {
     fn start_process(
         &self,
         node_id: &str,
@@ -146,18 +122,10 @@ impl NodeRecords for LocalRecords {
         instance_id: &str,
         process: &str,
     ) -> Result<String, String> {
-        let outcome = self.node().start_process(StartProcess {
-            node_id: NodeId(Uuid(node_id.to_owned())),
-            assignment_id: AssignmentId(Uuid(assignment_id.to_owned())),
-            instance_id: InstanceId(Uuid(instance_id.to_owned())),
-            process: ProcessName(process.to_owned()),
-        });
-        self.keep("StartProcess", outcome, |outcome| match outcome {
-            StartProcessOutcome::Started {
-                local_process_started,
-            } => Some(local_process_started.local_process_id.0 .0.clone()),
-            _ => None,
-        })
+        let answered = self
+            .records
+            .start_process(node_id, assignment_id, instance_id, process);
+        self.keep("StartProcess", answered, |_| "started".to_owned())
     }
 
     fn restart_process(
@@ -167,30 +135,18 @@ impl NodeRecords for LocalRecords {
         restarts_in_window: i64,
         backoff_seconds: i64,
     ) -> Result<String, String> {
-        let outcome = self.node().restart_process(RestartProcess {
-            local_process_id: LocalProcessId(Uuid(local_process_id.to_owned())),
-            node_id: NodeId(Uuid(node_id.to_owned())),
-            reason: RestartReason::Exited,
+        let answered = self.records.restart_process(
+            local_process_id,
+            node_id,
             restarts_in_window,
             backoff_seconds,
-        });
-        self.keep("RestartProcess", outcome, |outcome| match outcome {
-            RestartProcessOutcome::Restarted { .. } => Some("restarted".to_owned()),
-            RestartProcessOutcome::BackingOff { .. } => Some("backing-off".to_owned()),
-            _ => None,
-        })
+        );
+        self.keep("RestartProcess", answered, str::to_owned)
     }
 
     fn stop_process(&self, local_process_id: &str, node_id: &str) -> Result<String, String> {
-        let outcome = self.node().stop_process(StopProcess {
-            local_process_id: LocalProcessId(Uuid(local_process_id.to_owned())),
-            node_id: NodeId(Uuid(node_id.to_owned())),
-        });
-        self.keep("StopProcess", outcome, |outcome| match outcome {
-            StopProcessOutcome::Stopped { .. } => Some("stopped".to_owned()),
-            StopProcessOutcome::AlreadyStopped { .. } => Some("already-stopped".to_owned()),
-            _ => None,
-        })
+        let answered = self.records.stop_process(local_process_id, node_id);
+        self.keep("StopProcess", answered, str::to_owned)
     }
 }
 
@@ -202,7 +158,7 @@ fn follow(
     host: &ControlHost,
     node_id: &str,
     workloads: Option<&'static StubWorkloads>,
-    records: Option<&'static LocalRecords>,
+    records: Option<&'static HostRecords>,
     name: &str,
 ) -> (PathBuf, &'static NoExec) {
     let report = report_path(name);
@@ -226,7 +182,7 @@ fn follow(
 }
 
 /// The calls of `command` in `records`, each with its outcome.
-fn calls(records: &LocalRecords, command: &str) -> Vec<String> {
+fn calls(records: &HostRecords, command: &str) -> Vec<String> {
     records
         .calls()
         .into_iter()
@@ -349,9 +305,9 @@ fn a_planned_process_part_runs_restarts_after_its_delay_stays_down_on_its_code_a
         &workload,
         IsolationLevel::None,
     );
-    let records = LocalRecords::leaked("acceptance", rows.clone());
     weft_testkit::seed(&host.state_path(), rows);
     let host = host.restart();
+    let records = HostRecords::leaked(&host);
     let client = host.client();
     let seq = host.last_seq();
 
@@ -439,8 +395,8 @@ fn a_planned_process_part_runs_restarts_after_its_delay_stays_down_on_its_code_a
     assert_eq!(
         records.calls(),
         vec![
-            ("StartProcess", "Started".to_owned()),
-            ("RestartProcess", "Restarted".to_owned()),
+            ("StartProcess", "started".to_owned()),
+            ("RestartProcess", "restarted".to_owned()),
         ]
     );
     wait_until(
@@ -508,7 +464,7 @@ fn a_planned_process_part_runs_restarts_after_its_delay_stays_down_on_its_code_a
         || format!("{:?}", records.calls()),
         || !calls(records, "StopProcess").is_empty(),
     );
-    assert_eq!(calls(records, "StopProcess"), vec!["Stopped"]);
+    assert_eq!(calls(records, "StopProcess"), vec!["stopped"]);
     assert_eq!(exec.calls(), 0, "a process instance reached the exec port");
 }
 
@@ -680,8 +636,8 @@ fn on_failure_restarts_an_exit_1_and_keeps_an_exit_0_down() {
         },
         RestartMode::OnFailure,
     );
-    let records = LocalRecords::leaked("on-failure", rows.clone());
     let host = ControlHost::start_seeded(rows);
+    let records = HostRecords::leaked(&host);
     let stub: &'static StubWorkloads = Box::leak(Box::new(StubWorkloads::new()));
     let key = key(&placed);
     let (report, exec) = follow(
@@ -713,7 +669,7 @@ fn on_failure_restarts_an_exit_1_and_keeps_an_exit_0_down() {
         || format!("{:?}", records.calls()),
         || !calls(records, "RestartProcess").is_empty(),
     );
-    assert_eq!(calls(records, "RestartProcess"), vec!["Restarted"]);
+    assert_eq!(calls(records, "RestartProcess"), vec!["restarted"]);
 
     stub.exit(&key, ProcessExit::Code(0));
     wait_until(
@@ -798,8 +754,8 @@ fn a_released_assignment_stops_its_process_with_the_workloads_grace_and_kill_sco
                 weft_types::primitives::Timestamp("2026-01-01T00:00:00Z".to_owned());
         }
     }
-    let records = LocalRecords::leaked("released", rows.clone());
     let host = ControlHost::start_seeded(rows);
+    let records = HostRecords::leaked(&host);
     let client = host.client();
     let stub: &'static StubWorkloads = Box::leak(Box::new(StubWorkloads::new()));
     let (report, exec) = follow(
@@ -855,8 +811,8 @@ fn a_released_assignment_stops_its_process_with_the_workloads_grace_and_kill_sco
     assert_eq!(
         records.calls(),
         vec![
-            ("StartProcess", "Started".to_owned()),
-            ("StopProcess", "Stopped".to_owned()),
+            ("StartProcess", "started".to_owned()),
+            ("StopProcess", "stopped".to_owned()),
         ]
     );
     assert_eq!(exec.calls(), 0, "a process instance reached the exec port");
