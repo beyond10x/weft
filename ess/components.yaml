@@ -1185,6 +1185,11 @@ bindings:
   #             (scale-in and draining to sleep: the live instance of the highest replica index)
   #   R1 level  deployments.RunningRolloutSteps   -> deployments.CompleteRolloutStep -> ReleaseController
   #             (ready_replicas: the row count of workloads.ReadyInstances(workload_id))
+  #   R1 level  workloads of shape Daemon whose node_selector records a placement (no gap view;
+  #             weft_impl::placement), each Ready scope node with no live instance of it
+  #                                                -> workloads.CreateInstance (scope_node_id) -> Scheduler
+  #             (story:slot-node-pool-placement: one instance per node of a placed scope, never a
+  #             second; weft-controllers per_node)
   #   R2 level  nodes.StoppedActiveAssignments    -> nodes.EndAssignment            -> Scheduler
   #             (repairs a lost r2-end-assignment-on-stopped delivery)
   #   R2 time   workloads.ServiceBackoffsDue      -> workloads.EndReplicaBackoff    -> Scheduler
