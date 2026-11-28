@@ -22,6 +22,10 @@
 # `--jobs 2` (2026-11-26 05:14 CET: a synthesis held 22 GB and the host ran out of memory). Run one
 # at a time.
 set -eu
+# The subset lives under the git-ignored .check/. A job the local daemon hands to a build node
+# syncs without git-ignored files unless this is set, and the node then reads the subset of an
+# earlier run (seen 2026-11-28: a run step refused a suite that required an older ess).
+export SLOT_SYNC_IGNORED=1
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 from="$root/ess"
