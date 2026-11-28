@@ -1,7 +1,7 @@
 {
   "format": "ess-diff-acknowledgements/1",
   "before": "ee3799306728d13b03538813eb0028eb74d2c8b4b28b35dc1282d1535616a53d",
-  "after": "20010998977c732b132d405d852528cd5d9759e4bea020c87795389fea7593c0",
+  "after": "211a63044901a32b8a88ef26dfe14a3b8662e071a6ca9a4eb2704e8a3f2e83ca",
   "acknowledged": [
     "system/weft/unclassified-changed",
     "type/weft.artifacts.ArtifactKind/variant-added/BuildContext",
@@ -873,8 +873,10 @@
     "command/weft.scheduling.PlaceInstance/input-added/formation_id",
     "command/weft.scheduling.PlaceInstance/input-added/scope_id",
     "command/weft.scheduling.PlaceInstance/input-removed/account_id",
+    "command/weft.scheduling.PlaceInstance/outcome-added/arguments-not-delivered",
     "command/weft.scheduling.PlaceInstance/outcome-added/below-cluster-process-sandbox",
     "command/weft.scheduling.PlaceInstance/outcome-added/below-process-sandbox",
+    "command/weft.scheduling.PlaceInstance/outcome-added/environment-not-delivered",
     "command/weft.scheduling.PlaceInstance/outcome-added/instance-of-other-formation",
     "command/weft.scheduling.PlaceInstance/outcome-added/instance-of-other-scope",
     "command/weft.scheduling.PlaceInstance/outcome-condition-changed/below-cluster-container",
@@ -1923,6 +1925,7 @@
     "component/weft-control/accepts-added/weft.topology.RemoveTopology",
     "component/weft-control/accepts-added/weft.topology.RemoveTopologyGroup",
     "component/weft-control/accepts-added/weft.topology.RemoveTopologyLink",
+    "component/weft-control/accepts-added/weft.workloads.DeclareRuntimeInputs",
     "component/weft-control/accepts-added/weft.workloads.RetireScopeServices",
     "component/weft-control/accepts-removed/weft.catalog.BackupServiceInstance",
     "component/weft-control/accepts-removed/weft.catalog.BindService",

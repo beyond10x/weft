@@ -6,6 +6,7 @@ mod plan_apply;
 mod plan_from_source;
 mod ratchet;
 mod release_steps;
+mod workload_inputs;
 
 mod trivial {
     #[test]

@@ -201,6 +201,15 @@ errors:
     summary: The node's free capacity does not cover the instance's claims.
   - name: weft.scheduling.IsolationNotOffered
     summary: The node's observed isolation facts do not include the level of the placement.
+  # story:workload-environment-and-args: what a placement's runtime does not deliver, by name.
+  - name: weft.scheduling.EnvironmentNotDelivered
+    summary: >-
+      A process of the instance names environment variables, and its workload's runtime delivers
+      no environment; nothing is placed.
+  - name: weft.scheduling.ArgumentsNotDelivered
+    summary: >-
+      A process of the instance passes arguments to its program, and its workload's runtime
+      delivers no arguments; nothing is placed.
   - name: weft.scheduling.DeviceNotWiped
     summary: A device in the bindings last served another tenant and has not been wiped since.
   - name: weft.scheduling.GangMemberAlone
@@ -658,6 +667,19 @@ commands:
               - "not defined(isolation_facts)"
               - not: {exists: {in: isolation_facts.levels, as: l, that: "l == input.isolation"}}
         error: weft.scheduling.IsolationNotOffered
+      # story:workload-environment-and-args: the runtime of the request's instance's workload
+      # (weft.workloads.RuntimeInputs, a runtime without a row delivers both) does not deliver what
+      # a process of the instance names: its environment variables, or the words of its command
+      # after the program. Nothing is placed, and the refusal names what is missing. Kept external,
+      # though every fact is stored: the runtime's row is four rows from the input (request,
+      # instance, workload, runtime inputs), and an ESS 0.99.2 guard nests no second walk inside
+      # the first (ESS-COMMAND-005, as `node-pool-differs` above).
+      - name: environment-not-delivered
+        external: a process of the request's instance names an environment variable, and its workload's runtime declares that it delivers no environment (weft.workloads.RuntimeInputs environment false)
+        error: weft.scheduling.EnvironmentNotDelivered
+      - name: arguments-not-delivered
+        external: a process of the request's instance has words after its program in its command, and its workload's runtime declares that it delivers no arguments (weft.workloads.RuntimeInputs arguments false)
+        error: weft.scheduling.ArgumentsNotDelivered
       # Kept external: free capacity is the node's observed capacity minus the claims of the
       # requests of the node's live PlacementDecisions (state Reserved, Bound or Evicting, the
       # states of shared-kernel) and minus the amounts the node's live bindings (Reserved,

@@ -57,6 +57,10 @@ pub const REQUEST_REFUSALS: &[&str] = &[
     "instance-of-other-scope",
     "instance-of-other-formation",
     "other-cluster",
+    // story:workload-environment-and-args: the workload's runtime, not the node, does not
+    // deliver what the instance names.
+    "environment-not-delivered",
+    "arguments-not-delivered",
     "quota-exceeded",
 ];
 

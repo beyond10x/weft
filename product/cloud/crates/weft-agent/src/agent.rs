@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use weft_client::{Addresses, Answer, Client};
-use weft_platform::node::{Capacity, Exec, Isolation, NodeFacts};
+use weft_platform::node::{Capacity, Exec, Isolation, NodeFacts, Workloads};
 
 use crate::follow::Follower;
 use crate::report::Report;
@@ -123,6 +123,22 @@ pub fn run(
     exec: &(dyn Exec + Sync),
     node: &dyn NodeFacts,
 ) -> Result<(), String> {
+    run_with(options, exec, node, None)
+}
+
+/// As [`run`], with the `workloads` port when the node has one: the processes of a `Service`
+/// replica start through it (`story:workload-environment-and-args`, [`Follower::workloads`]),
+/// every other process through `exec`.
+///
+/// # Errors
+///
+/// As [`run`].
+pub fn run_with(
+    options: &Options,
+    exec: &(dyn Exec + Sync),
+    node: &dyn NodeFacts,
+    workloads: Option<&(dyn Workloads + Sync)>,
+) -> Result<(), String> {
     let facts = node
         .observe()
         .map_err(|error| format!("node facts: {error}"))?;
@@ -185,7 +201,11 @@ pub fn run(
         }
     }
     let report = Mutex::new(report);
-    Follower::new(&client, &options.node_id, exec, &report).follow()
+    let follower = Follower::new(&client, &options.node_id, exec, &report);
+    match workloads {
+        Some(workloads) => follower.workloads(workloads).follow(),
+        None => follower.follow(),
+    }
 }
 
 fn write(report: &mut Report, line: &Value) -> Result<(), String> {

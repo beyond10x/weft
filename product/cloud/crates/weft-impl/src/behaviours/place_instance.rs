@@ -23,6 +23,11 @@
 //!    `cluster-pool-differs`, `group-not-of-node`, `crosses-closed-link`,
 //!    `isolation-not-offered`;
 //! 4. the external branches, in declaration order, decided from the rows of the same store:
+//!    - `environment-not-delivered`: the runtime of the instance's workload has a
+//!      `weft.workloads.RuntimeInputs` row with `environment` false, and a process of the
+//!      instance names an environment variable;
+//!    - `arguments-not-delivered`: that row has `arguments` false, and a process of the instance
+//!      has a command with words after its program; a runtime without a row delivers both;
 //!    - `no-capacity`: for a class the request claims, the node's free capacity is less than
 //!      the request claims. Free capacity is the node's observed capacity (the newest
 //!      `weft.inventory.NodeCapacity` of the node by `observed_at`) minus the claims of the
@@ -46,8 +51,8 @@ use std::collections::HashMap;
 use weft_types::behaviour::{
     AccountStorage, BindingStorage, ClaimStorage, ClusterNodePoolStorage, ClusterStorage,
     ComponentWorkloadStorage, DeviceStorage, InstanceStorage, NodeCapacityStorage,
-    NodeSessionStorage, NodeStorage, PlacementDecisionStorage, SchedulingRequestStorage,
-    TopologyGroupStorage, TopologyLinkStorage,
+    NodeSessionStorage, NodeStorage, PlacementDecisionStorage, RuntimeInputsStorage,
+    SchedulingRequestStorage, TopologyGroupStorage, TopologyLinkStorage, WorkloadStorage,
 };
 use weft_types::claims::BindingState;
 use weft_types::cluster::ClusterNodePoolState;
@@ -58,12 +63,12 @@ use weft_types::obligation::UnmetObligation;
 use weft_types::primitives::Uuid;
 use weft_types::scheduling::obligations::PlaceInstanceBehavior;
 use weft_types::scheduling::{
-    CrossesClosedLink, DecidedInFuture, DeviceNotWiped, InstancePlaced, IsolationNotOffered,
-    IsolationTooWeak, NoCapacity, NodeNotConnected, NodeNotSchedulable, NodeOutsideCluster,
-    NotFound, PlaceInstance, PlaceInstanceOutcome, PlacementDecisionData,
-    PlacementDecisionSnapshot, PlacementDecisionState, QuotaExceeded, RequestMismatch,
-    RequestReserved, SchedulingRequestState, StateConflict, TenantKernelShared, TopologyMismatch,
-    ZoneMismatch,
+    ArgumentsNotDelivered, CrossesClosedLink, DecidedInFuture, DeviceNotWiped,
+    EnvironmentNotDelivered, InstancePlaced, IsolationNotOffered, IsolationTooWeak, NoCapacity,
+    NodeNotConnected, NodeNotSchedulable, NodeOutsideCluster, NotFound, PlaceInstance,
+    PlaceInstanceOutcome, PlacementDecisionData, PlacementDecisionSnapshot, PlacementDecisionState,
+    QuotaExceeded, RequestMismatch, RequestReserved, SchedulingRequestState, StateConflict,
+    TenantKernelShared, TopologyMismatch, ZoneMismatch,
 };
 use weft_types::shared::{BindingId, IsolationLevel, NodeId, PlacementDecisionId, ResourceAmount};
 use weft_types::topology::{TopologyGroupState, TopologyLinkState};
@@ -381,6 +386,29 @@ impl PlaceInstanceBehavior for Ports {
             return Ok(PlaceInstanceOutcome::IsolationNotOffered {
                 error: IsolationNotOffered,
             });
+        }
+
+        // environment-not-delivered, arguments-not-delivered: what the runtime of the instance's
+        // workload declares it does not deliver (`weft.workloads.RuntimeInputs`), against what
+        // the instance's processes name. A runtime without a row delivers both.
+        let inputs = WorkloadStorage::get(self, &instance.data.workload_id)
+            .and_then(|workload| RuntimeInputsStorage::get(self, &workload.data.runtime_id));
+        if let Some(inputs) = inputs {
+            let processes = &instance.data.processes;
+            if !inputs.data.environment
+                && processes
+                    .iter()
+                    .any(|process| !process.environment.is_empty())
+            {
+                return Ok(PlaceInstanceOutcome::EnvironmentNotDelivered {
+                    error: EnvironmentNotDelivered,
+                });
+            }
+            if !inputs.data.arguments && processes.iter().any(|process| process.command.len() > 1) {
+                return Ok(PlaceInstanceOutcome::ArgumentsNotDelivered {
+                    error: ArgumentsNotDelivered,
+                });
+            }
         }
 
         // no-capacity: the node's observed capacity (its newest `weft.inventory.NodeCapacity`)
