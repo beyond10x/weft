@@ -13,16 +13,34 @@ relations:
 - depends_on: story:cloud-blocks-layers
 scope:
 - confidence: cited
+  path: README.md
+- confidence: cited
   path: quality/spec-diff-acknowledgements.json
+- confidence: cited
+  path: tools/check.d/30-docs-spec-pages.sh
 - confidence: cited
   path: tools/docs-spec-pages.sh
 - confidence: cited
+  path: tools/test-docs-spec-pages.sh
+- confidence: cited
   path: website/data/status-proofs.json
+- confidence: cited
+  path: website/data/status.json
 - confidence: cited
   path: website/docs/concepts
 - confidence: cited
+  path: website/docs/getting-started.md
+- confidence: cited
+  path: website/docs/index.md
+- confidence: cited
   path: website/docs/run/consoles.md
-revision: 6
+- confidence: cited
+  path: website/docs/run/deploy-a-workload.md
+- confidence: cited
+  path: website/docs/specification/read.md
+- confidence: cited
+  path: website/product.json
+revision: 15
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
