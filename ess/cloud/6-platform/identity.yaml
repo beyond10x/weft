@@ -112,6 +112,9 @@ entities:
     invariants:
       - document_ttl_seconds >= 60
       - document_ttl_seconds <= 3600
+    # The cloud whose trust domain this is; the cloud stands on its own: references.
+    relations:
+      - {name: cloud, kind: references, target: weft.infrastructure.Cloud, cardinality: one, via: cloud_id}
     # OPEN: how peers get the trust bundle (the public keys of current and previous signing key);
     # SPIFFE calls this the trust bundle and distributes it to workloads (unverified). Taken: the
     # node agent receives it on the node channel; this domain records only the key references.
@@ -161,17 +164,16 @@ entities:
       # Sketch line 391: `tenant/account/formation/environment/component/instance`. As a SPIFFE ID
       # this is the path after `spiffe://<trust domain name>/` (unverified).
       # OPEN: whether each segment is the entity's name (readable, changes on rename) or its id
-      # (stable). Taken: the issuer writes it; the segments are also stored below by id.
+      # (stable). Taken: the issuer writes it.
       - name: identity
         type: weft.shared.WorkloadIdentity
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: environment_id
-        type: weft.shared.EnvironmentId
-      - name: component
-        type: weft.shared.ComponentName
+      # cloudspec (layer rule): the component-level path (`identity` without the instance segment),
+      # copied from the instance's workload, in place of weft's formation_id, environment_id and
+      # component, which are records of the composition (layer 9).
+      - name: workload_identity
+        type: weft.shared.WorkloadIdentity
       - name: instance_id
         type: weft.shared.InstanceId
       # The instance's workload, checked against the path segments at issue.
@@ -212,8 +214,6 @@ entities:
       # The path segments and the node (sketch line 391). A document names them; none of them
       # stands or falls with it.
       - {name: scope_id, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
-      - {name: formation_id, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
-      - {name: environment_id, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
       - {name: workload_id, kind: references, target: weft.workloads.Workload, cardinality: one, via: workload_id}
       - {name: node_id, kind: references, target: weft.infrastructure.Node, cardinality: one, via: node_id}
     lifecycle:
@@ -238,14 +238,15 @@ entities:
   # Sketch line 397 "calls to outside services: exchange the identity for a scoped token of that
   # service". The sketch does not say what allows an exchange; brief: only an explicit policy, so
   # an identity with no policy gets no token (default deny, AGENTS.md).
-  # A policy names one component in one environment of one formation, one audience and the scopes
-  # it may receive. The match is on the path segments, so every replica of the component is
-  # covered and no single instance is named (line 399 says the same of SecretGrant).
+  # A policy names one component-level workload identity (one component in one environment of one
+  # formation, by its path), one audience and the scopes it may receive. The match is on the path,
+  # so every replica of the component is covered and no single instance is named (line 399 says
+  # the same of SecretGrant).
   # weft@6798e7d:ess/5-runtime/identity.yaml:237
   - name: weft.identity.ExchangePolicy
     naming:
       summary: >-
-        Allows one component of one formation environment to exchange its identity document for a
+        Allows one component-level workload identity to exchange its identity document for a
         token of one outside audience, with at most the listed scopes.
     identity:
       name: exchange_policy_id
@@ -253,12 +254,11 @@ entities:
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: environment_id
-        type: weft.shared.EnvironmentId
-      - name: component
-        type: weft.shared.ComponentName
+      # cloudspec (layer rule): the component-level workload identity (the path without the
+      # instance segment), in place of weft's formation_id, environment_id and component (records
+      # of the composition, layer 9). The path names the same component in the same environment.
+      - name: identity
+        type: weft.shared.WorkloadIdentity
       - name: audience
         type: weft.identity.Audience
       - name: allowed_scopes
@@ -276,12 +276,9 @@ entities:
     invariants:
       - max_token_ttl_seconds >= 60
       - max_token_ttl_seconds <= 3600
-    # The account, formation and environment a policy is written for. A policy names them; none
-    # of them stands or falls with it.
+    # The scope a policy is written for. A policy names it; it does not stand or fall with it.
     relations:
       - {name: scope_id, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
-      - {name: formation_id, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
-      - {name: environment_id, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
     lifecycle:
       initial: Active
       states:
@@ -384,7 +381,7 @@ errors:
   # weft@6798e7d:ess/5-runtime/identity.yaml:368
   - name: weft.identity.IdentityPathMismatch
     summary: >-
-      The scope, scope, formation, environment or component named differs from the instance's
+      The scope or the workload identity named differs from the instance's
       own record, so no document was issued.
   # weft@6798e7d:ess/5-runtime/identity.yaml:372
   - name: weft.identity.DocumentAlreadyLive
@@ -401,15 +398,16 @@ errors:
   # weft@6798e7d:ess/5-runtime/identity.yaml:380
   - name: weft.identity.EmptyScopes
     summary: The policy lists no scope, and a policy that allows nothing is not written.
+  # cloudspec (layer rule): weft's FormationNotInScope; the formation and environment are named by
+  # the workload identity's path, not read here.
   # weft@6798e7d:ess/5-runtime/identity.yaml:382
-  - name: weft.identity.FormationNotInScope
+  - name: weft.identity.IdentityOutsideScope
     summary: >-
-      The formation or the environment does not exist, the formation does not belong to the named
-      scope or the environment not to the formation, so no policy was written.
+      The workload identity's path does not lie in the named scope, so no policy was written.
   # weft@6798e7d:ess/5-runtime/identity.yaml:386
   - name: weft.identity.DuplicateExchangePolicy
     summary: >-
-      An active policy already names this component, environment and audience, so no second one
+      An active policy already names this workload identity and audience, so no second one
       was written.
   # weft@6798e7d:ess/5-runtime/identity.yaml:390
   - name: weft.identity.NotOwnDocument
@@ -426,8 +424,8 @@ errors:
   # weft@6798e7d:ess/5-runtime/identity.yaml:398
   - name: weft.identity.PolicyNotForIdentity
     summary: >-
-      The policy or the document names another formation, environment or component than the
-      request, so no token was issued.
+      The policy or the document names another workload identity than the request, so no token
+      was issued.
   # weft@6798e7d:ess/5-runtime/identity.yaml:402
   - name: weft.identity.AudienceNotAllowed
     summary: The policy names another audience, so no token was issued.
@@ -501,9 +499,7 @@ events:
   - name: weft.identity.ExchangePolicyCreated
     fields:
       - {name: exchange_policy_id, type: weft.shared.ExchangePolicyId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: audience, type: weft.identity.Audience}
       - {name: allowed_scopes, type: List<weft.identity.Scope>}
 
@@ -730,18 +726,17 @@ commands:
       - {name: trust_domain_id, type: weft.shared.TrustDomainId}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: node_id, type: weft.shared.NodeId}
-      # The instance's workload: the record that names its formation, environment and component.
+      # The instance's workload: the record that names its scope and its component-level workload
+      # identity (cloudspec, layer rule: weft's formation, environment and component are records
+      # of the composition, layer 9, and the path names them).
       - {name: workload_id, type: weft.shared.WorkloadId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
       - {name: format, type: weft.identity.DocumentFormat}
     outcomes:
       # Every segment of the path is checked against the stored records: the instance
-      # (weft.workloads.Instance: its node and its workload), the workload (account, formation,
-      # environment, component) and the account (tenant). An identity is never widened by what
-      # the caller sends; an unknown record refuses like a mismatch.
+      # (weft.workloads.Instance: its node and its workload), the workload (scope and workload
+      # identity) and the scope. An identity is never widened by what the caller sends;
+      # an unknown record refuses like a mismatch.
       - name: unknown-trust-domain
         when_related:
           via: input.trust_domain_id
@@ -753,36 +748,13 @@ commands:
       - name: no-such-scope
         when_related: {via: input.scope_id, exists: false}
         error: weft.identity.IdentityPathMismatch
-      # hardening pass 1 D10: the formation and environment are read below (W1); a missing one
-      # refuses like a mismatch.
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.identity.IdentityPathMismatch
-      - name: no-such-environment
-        when_related: {via: input.environment_id, exists: false}
-        error: weft.identity.IdentityPathMismatch
       - name: path-mismatch
         when_related:
           via: input.workload_id
-          predicate:
-            any:
-              - scope_id != input.scope_id
-              - formation_id != input.formation_id
-              - environment_id != input.environment_id
-              - component != input.component
+          predicate: scope_id != input.scope_id
         error: weft.identity.IdentityPathMismatch
       # cloudspec (D1 A): weft's check that the account belongs to the named tenant is cut with the
       # tenant segment; the scope is the outermost segment of the path.
-      # hardening pass 1 D10: the workload's path is not proof that its formation is the account's
-      # (W1); check the formation record itself, so a workload filed under another account's
-      # formation gets no identity in that formation.
-      - name: formation-of-other-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.identity.IdentityPathMismatch
-      # hardening pass 1 D10: an environment of another formation would put the identity in it.
-      - name: environment-of-other-formation
-        when_related: {via: input.environment_id, predicate: formation_id != input.formation_id}
-        error: weft.identity.IdentityPathMismatch
       - name: trust-domain-retired
         when_related:
           via: input.trust_domain_id
@@ -803,12 +775,10 @@ commands:
         instance: identity_document_id
         sets:
           trust_domain_id: input.trust_domain_id
-          # The issuer joins the path segments (line 391).
+          # The issuer joins the path segments (line 391): the workload's identity and the instance.
           identity: {generated: true}
           scope_id: input.scope_id
-          formation_id: input.formation_id
-          environment_id: input.environment_id
-          component: input.component
+          workload_identity: {related: {via: input.workload_id, field: identity}}
           instance_id: input.instance_id
           workload_id: input.workload_id
           node_id: input.node_id
@@ -936,16 +906,16 @@ commands:
       display: Create an exchange policy
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
+      # cloudspec (layer rule): the component-level workload identity, in place of weft's
+      # formation, environment and component (records of the composition, layer 9).
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: audience, type: weft.identity.Audience}
       - {name: allowed_scopes, type: List<weft.identity.Scope>}
       - {name: max_token_ttl_seconds, type: Integer}
       - {name: token_endpoint, type: String}
     outcomes:
       # hardening pass 1 D3: the policy is written only in the account the caller acts in; answered
-      # before any formation or environment is read, as not found, so another account's records
+      # before any record is read, as not found, so another account's records
       # are not disclosed.
       - name: not-callers-scope
         when: scope_id != caller.scope_id
@@ -956,41 +926,29 @@ commands:
       - name: no-scopes
         when: allowed_scopes.count < 1
         error: weft.identity.EmptyScopes
-      # The formation and its environments live in `formations` (weft.architecture.Formation,
-      # Environment); deny unless both exist and belong to the named account. A policy never
-      # reaches into another account.
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.identity.FormationNotInScope
-      - name: no-such-environment
-        when_related: {via: input.environment_id, exists: false}
-        error: weft.identity.FormationNotInScope
-      - name: formation-not-in-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.identity.FormationNotInScope
-      - name: environment-not-in-formation
-        when_related: {via: input.environment_id, predicate: formation_id != input.formation_id}
-        error: weft.identity.FormationNotInScope
       - name: duplicate
         when_related:
           entity: weft.identity.ExchangePolicy
           where:
             all:
-              - formation_id == input.formation_id
-              - environment_id == input.environment_id
-              - component == input.component
+              - identity == input.identity
               - audience == input.audience
               - state == Active
           count: {gte: 1}
         error: weft.identity.DuplicateExchangePolicy
+      # cloudspec (layer rule): weft checked that the formation and environment exist and belong to
+      # the scope; they are records of the composition (layer 9), which this block does not read.
+      # The identity names them in its path, and that the path lies in the scope is checked against
+      # it. Default deny: a path outside the scope refuses.
+      - name: identity-outside-scope
+        external: the workload identity's path does not lie in the scope
+        error: weft.identity.IdentityOutsideScope
       - name: created
         creates: weft.identity.ExchangePolicy
         instance: exchange_policy_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
-          environment_id: input.environment_id
-          component: input.component
+          identity: input.identity
           audience: input.audience
           allowed_scopes: input.allowed_scopes
           max_token_ttl_seconds: input.max_token_ttl_seconds
@@ -999,9 +957,7 @@ commands:
         payload:
           weft.identity.ExchangePolicyCreated:
             exchange_policy_id: {generated: true}
-            formation_id: input.formation_id
-            environment_id: input.environment_id
-            component: input.component
+            identity: input.identity
             audience: input.audience
             allowed_scopes: input.allowed_scopes
 
@@ -1039,7 +995,7 @@ commands:
   # 95-96: the instance asks through its local endpoint of weft-node, which passes the request to
   # weft-control. The shape follows RFC 8693 (unverified): the document is the `subject_token`,
   # `audience` and `scope` narrow the token.
-  # The request names the formation, environment and component; the document and the policy must
+  # The request names the component-level workload identity; the document and the policy must
   # both name the same, so a policy covers only the identity it was written for. Every check
   # refuses by name; there is no fallback to a broader token.
   # weft@6798e7d:ess/5-runtime/identity.yaml:1006
@@ -1049,9 +1005,9 @@ commands:
     input:
       - {name: identity_document_id, type: weft.shared.IdentityDocumentId}
       - {name: exchange_policy_id, type: weft.shared.ExchangePolicyId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
+      # cloudspec (layer rule): the component-level workload identity, in place of weft's
+      # formation, environment and component (records of the composition, layer 9).
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: audience, type: weft.identity.Audience}
       - {name: scopes, type: List<weft.identity.Scope>}
     response:
@@ -1088,9 +1044,7 @@ commands:
           via: input.identity_document_id
           predicate:
             any:
-              - formation_id != input.formation_id
-              - environment_id != input.environment_id
-              - component != input.component
+              - workload_identity != input.identity
         error: weft.identity.PolicyNotForIdentity
       - name: policy-withdrawn
         when_related:
@@ -1102,13 +1056,11 @@ commands:
           via: input.exchange_policy_id
           predicate:
             any:
-              - formation_id != input.formation_id
-              - environment_id != input.environment_id
-              - component != input.component
+              - identity != input.identity
         error: weft.identity.PolicyNotForIdentity
-      # hardening pass 1 D10: the policy is matched by formation, environment and component only;
-      # its account must also be the document's, so a document whose path names another account's
-      # formation (W1) gets none of that account's tokens.
+      # hardening pass 1 D10: the policy is matched by the workload identity only; its account must
+      # also be the document's, so a document whose path names another account gets none of that
+      # account's tokens.
       - name: policy-of-other-scope
         when_related:
           entity: weft.identity.ExchangePolicy
@@ -1209,9 +1161,7 @@ views:
       - {name: trust_domain_id, type: weft.shared.TrustDomainId}
       - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: workload_identity, type: weft.shared.WorkloadIdentity}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
       - {name: node_id, type: weft.shared.NodeId}
@@ -1251,9 +1201,7 @@ views:
     fields:
       - {name: exchange_policy_id, type: weft.shared.ExchangePolicyId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: audience, type: weft.identity.Audience}
       - {name: allowed_scopes, type: List<weft.identity.Scope>}
       - {name: max_token_ttl_seconds, type: Integer}

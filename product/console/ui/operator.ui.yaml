@@ -309,7 +309,6 @@ pages:
           - {field: zone, sortable: true}
           - {field: node_pool_id, label: Pool, label_from: {view: weft.infrastructure.NodePools, field: name, key: node_pool_id}}
           - {field: role, as: badge, tone_by: role}
-          - {field: capacity, label: Capacity, as: list}
           - {field: isolation_facts, label: Isolation, as: map}
           - {field: observed_at, label: Observed, as: timestamp, sortable: true}
           - {field: state, as: badge, tone_by: node_state, sortable: true}
@@ -347,7 +346,7 @@ pages:
     layout:
       columns:
         - {name: side, sections: [summary, devices, sessions], width: narrow}
-        - {name: main, sections: [observations, placements, bindings, drains], width: wide}
+        - {name: main, sections: [capacity, observations, placements, bindings, drains], width: wide}
     sections:
       - name: summary
         component: collection
@@ -360,11 +359,22 @@ pages:
           - {field: node_pool_id, label: Pool, label_from: {view: weft.infrastructure.NodePools, field: name, key: node_pool_id}}
           - {field: role, as: badge, tone_by: role}
           - {field: state, as: badge, tone_by: node_state}
-          - {field: capacity, as: list}
           - {field: isolation_facts, label: Isolation, as: map}
           - {field: join_token_used, label: Join token, as: badge, tone_by: token_used, labels: token_used}
           - {field: observed_at, label: Observed, as: timestamp}
         states: {empty: {title: Unknown node, message: No node of this cloud has this identifier.}}
+      - name: capacity
+        component: collection
+        title: Capacity reports
+        # The capacity is its own report since the blocks split it out of the node
+        # (weft.inventory.ReportNodeCapacity, story:cloud-blocks-layer-refactor-pin); the newest is
+        # the node's capacity.
+        reads: {view: weft.inventory.NodeCapacities, key: capacity_id, filter: "row.node_id == params.node_id"}
+        sort: {by: observed_at, dir: desc, mode: client}
+        columns:
+          - {field: observed_at, label: Observed, as: timestamp}
+          - {field: capacity, as: list}
+        states: {empty: {message: The node has reported no capacity.}}
       - name: devices
         component: collection
         title: Devices
@@ -671,7 +681,7 @@ pages:
         expand:
           component: record
           reads: {view: weft.scheduling.SchedulingRequestDetail, params: {request_id: row.request_id}}
-          fields: [{field: unschedulable_detail, label: Why}, {field: gang_id, label: Gang}, {field: formation_id, label: Formation}]
+          fields: [{field: unschedulable_detail, label: Why}, {field: gang_id, label: Gang}]
       - name: gangs
         component: collection
         title: Gangs

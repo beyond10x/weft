@@ -5,8 +5,10 @@
 //!    reports as its isolation facts (`weft_platform::node`).
 //! 2. `weft.infrastructure.JoinNode` as the NodeAgent with its node id and join token (`joined`,
 //!    or `token-used` when it was joined before and restarts).
-//! 3. `weft.infrastructure.RecordNodeObservation` as the NodeAgent with its capacity and isolation
-//!    facts, observed now on its own clock (`ready` the first time, `observed` after).
+//! 3. `weft.infrastructure.RecordNodeObservation` as the NodeAgent with its isolation facts,
+//!    observed now on its own clock (`ready` the first time, `observed` after), then
+//!    `weft.inventory.ReportNodeCapacity` with its capacity at the same instant (`reported`; the
+//!    blocks split the capacity out of the node, story:cloud-blocks-layer-refactor-pin).
 //! 4. A `hello` frame on the node channel (`POST /node/hello`); its answer is a line of the
 //!    report file. As the protocol model says (`protocols/node-channel.yaml`): a session opens
 //!    (`session-welcomed`); a refusal ends the agent with a failure (`session-refused`, the node
@@ -135,17 +137,29 @@ pub fn run(
     )?;
     expect(&joined, "JoinNode", &["joined", "token-used"])?;
 
+    let observed_at = now();
     let observed = command(
         &client,
         "weft.infrastructure.RecordNodeObservation",
         json!({
             "node_id": options.node_id,
-            "capacity": capacity(&facts.capacity),
             "isolation_facts": isolation_facts(&facts.isolation),
-            "observed_at": now(),
+            "observed_at": observed_at,
         }),
     )?;
     expect(&observed, "RecordNodeObservation", &["ready", "observed"])?;
+    // The capacity is its own report since the blocks split it out of the node
+    // (story:cloud-blocks-layer-refactor-pin), with the same instant as the observation.
+    let reported = command(
+        &client,
+        "weft.inventory.ReportNodeCapacity",
+        json!({
+            "node_id": options.node_id,
+            "capacity": capacity(&facts.capacity),
+            "observed_at": observed_at,
+        }),
+    )?;
+    expect(&reported, "ReportNodeCapacity", &["reported"])?;
 
     let hello = json!({"node_id": options.node_id, "agent_version": VERSION});
     loop {
@@ -202,7 +216,7 @@ fn now() -> String {
         .expect("an instant formats in RFC 3339")
 }
 
-/// The node's capacity as `RecordNodeObservation` takes it (`weft.shared.ResourceAmount`).
+/// The node's capacity as `ReportNodeCapacity` takes it (`weft.shared.ResourceAmount`).
 fn capacity(capacity: &[Capacity]) -> Value {
     capacity
         .iter()

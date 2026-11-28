@@ -301,6 +301,8 @@ types:
     variants: [Restart, Reload]
 
   # `signal` is the signal's name without the SIG prefix (`HUP`, `USR2`); only `Reload` has one.
+  # story:systemd-unit-fidelity: `new_pid` (default false) says the reloaded process continues
+  # under another process ID (a hand-over to a new process); false, it re-executes in place.
   - name: weft.workloads.Upgrade
     kind: struct
     fields:
@@ -308,6 +310,81 @@ types:
         type: weft.workloads.UpgradeKind
       - name: signal
         type: Optional<String>
+      - name: new_pid
+        type: Optional<Boolean>
+
+  # New in cloudspec (story:systemd-unit-fidelity): ceilings the host enforces on a process,
+  # beside its claims (a reservation): `cpu_millis` (1000 is one core), `memory_mib`, and
+  # `open_files`, the number of file descriptors it may hold open.
+  - name: weft.workloads.Limits
+    kind: struct
+    fields:
+      - name: cpu_millis
+        type: Optional<Integer>
+      - name: memory_mib
+        type: Optional<Integer>
+      - name: open_files
+        type: Optional<Integer>
+
+  # story:systemd-unit-fidelity: the share of the CPU a process gets while the host is busy,
+  # relative to the host's other processes; no ceiling. `Background` yields, `Interactive` goes
+  # first.
+  - name: weft.workloads.CpuPriority
+    kind: enum
+    variants: [Background, Normal, Interactive]
+  - name: weft.workloads.ProcessPriority
+    kind: struct
+    fields:
+      - name: cpu
+        type: Optional<weft.workloads.CpuPriority>
+
+  # story:systemd-unit-fidelity: how a process is stopped. `grace` is a duration (`<n>s`, `<n>m`
+  # or `<n>h`) between the stop signal and the kill; `kill` is what the stop reaches: `Main` the
+  # main process only, `Group` every process the workload started (the default), `Mixed` the stop
+  # signal to the main process and the kill to all of them.
+  - name: weft.workloads.KillScope
+    kind: enum
+    variants: [Main, Group, Mixed]
+  - name: weft.workloads.Stop
+    kind: struct
+    fields:
+      - name: grace
+        type: Optional<String>
+      - name: kill
+        type: Optional<weft.workloads.KillScope>
+
+  # story:systemd-unit-fidelity: a command run before the process starts, in list order;
+  # `privileged` (default false) runs it with the host's full rights, not as the workload's user.
+  - name: weft.workloads.PrestartStep
+    kind: struct
+    fields:
+      - name: command
+        type: List<String>
+      - name: privileged
+        type: Optional<Boolean>
+
+  # story:systemd-unit-fidelity: whether the host starts a process again after it ended
+  # (`policy`), after how long (`delay`, a duration as in Stop), and the exit codes after which it
+  # stays down (`keep_down_on_exit`).
+  - name: weft.workloads.ProcessRestart
+    kind: struct
+    fields:
+      - name: policy
+        type: weft.workloads.RestartMode
+      - name: delay
+        type: Optional<String>
+      - name: keep_down_on_exit
+        type: Optional<List<Integer>>
+
+  # story:systemd-unit-fidelity: a file of variable assignments read when the process starts;
+  # `optional` (default false): a missing file is no error.
+  - name: weft.workloads.EnvironmentFile
+    kind: struct
+    fields:
+      - name: path
+        type: String
+      - name: optional
+        type: Optional<Boolean>
 
   # New in cloudspec (story:host-path-volume): a host directory mounted into a workload. `host_path`
   # is absolute; `mount` is `same` (the directory at its own path, as every node holds the
@@ -494,8 +571,9 @@ entities:
   # 3 line 164). One Workload is one component of one formation revision applied to one
   # environment.
   # OPEN: whether a workload belongs to a FormationRevision (immutable) or to the live release of an
-  # environment. Smallest answer: both identifiers are stored; a new revision defines a new
-  # workload and retires the old one.
+  # environment. Smallest answer: a new revision defines a new workload and retires the old one.
+  # cloudspec (layer rule): which revision, environment and component a workload realizes is the
+  # composition's record (weft.architecture.ComponentWorkload, layer 9), not a field here.
   # weft@6798e7d:ess/4-applications/workloads.yaml:394
   - name: weft.workloads.Workload
     naming:
@@ -506,12 +584,13 @@ entities:
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: formation_revision_id
-        type: weft.shared.FormationRevisionId
-      - name: environment_id
-        type: weft.shared.EnvironmentId
+      # cloudspec (layer rule): the component-level workload identity (weft.shared.WorkloadIdentity,
+      # the path the identity block issues, without the instance segment), in place of weft's
+      # formation_id, formation_revision_id and environment_id. Which component of which revision
+      # and environment the workload realizes is the composition's record
+      # (weft.architecture.ComponentWorkload, layer 9); this block does not know the composition.
+      - name: identity
+        type: weft.shared.WorkloadIdentity
       - name: component
         type: weft.shared.ComponentName
       # Axis 1, Package (sketch lines 213-226): a plain kind only. A spec kind is translated into
@@ -538,6 +617,20 @@ entities:
       # story:socket-ports: the ports each instance serves.
       - name: ports
         type: Optional<List<weft.workloads.ServedPort>>
+      # story:systemd-unit-fidelity: the ceilings, the CPU share, the stop, the commands before
+      # the start, the restart and the environment files of a host process.
+      - name: limits
+        type: Optional<weft.workloads.Limits>
+      - name: process_priority
+        type: Optional<weft.workloads.ProcessPriority>
+      - name: stop
+        type: Optional<weft.workloads.Stop>
+      - name: prestart
+        type: Optional<List<weft.workloads.PrestartStep>>
+      - name: restart
+        type: Optional<weft.workloads.ProcessRestart>
+      - name: environment_files
+        type: Optional<List<weft.workloads.EnvironmentFile>>
       # Axis 2, Shape (sketch lines 241-257).
       - name: shape
         type: weft.workloads.ShapeKind
@@ -577,21 +670,6 @@ entities:
         target: weft.scope.Scope
         cardinality: one
         via: scope_id
-      - name: formation
-        kind: references
-        target: weft.architecture.Formation
-        cardinality: one
-        via: formation_id
-      - name: formation_revision
-        kind: references
-        target: weft.architecture.FormationRevision
-        cardinality: one
-        via: formation_revision_id
-      - name: environment
-        kind: references
-        target: weft.architecture.Environment
-        cardinality: one
-        via: environment_id
       - name: artifact
         kind: references
         target: weft.artifacts.Artifact
@@ -914,7 +992,9 @@ entities:
   # or machine. Lifecycle: created, starting, started, stopping, stopped, suspended, destroyed. The
   # user starts, stops, suspends, execs into it and resizes it. Its volume stays across stops. A
   # lease gives one caller exclusive update rights for a time; cordon takes it out of its
-  # endpoint's traffic." A Box is a virtual machine, so it runs under MicroVm only.
+  # endpoint's traffic." A Box is a virtual machine, so it runs under MicroVm only. cloudspec
+  # (layer rule): the edge names the box it serves (weft.edge.Endpoint.box_id); the box names no
+  # endpoint.
   # weft@6798e7d:ess/4-applications/workloads.yaml:1009
   - name: weft.workloads.Box
     naming:
@@ -932,8 +1012,6 @@ entities:
       # Sketch line 251: "Its volume stays across stops".
       - name: volume_id
         type: Optional<weft.shared.VolumeId>
-      - name: endpoint_id
-        type: Optional<weft.shared.EndpointId>
       # The instance that runs the box while it is starting, started or stopping.
       - name: instance_id
         type: Optional<weft.shared.InstanceId>
@@ -965,11 +1043,6 @@ entities:
         target: weft.resources.Volume
         cardinality: one
         via: volume_id
-      - name: endpoint
-        kind: references
-        target: weft.edge.Endpoint
-        cardinality: one
-        via: endpoint_id
     lifecycle:
       initial: Created
       states: [Created, Starting, Started, Stopping, Stopped, Suspended, Destroyed]
@@ -1407,8 +1480,7 @@ events:
     fields:
       - {name: workload_id, type: weft.shared.WorkloadId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: component, type: weft.shared.ComponentName}
       - {name: package_kind, type: weft.workloads.PackageKind}
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
@@ -1844,8 +1916,9 @@ commands:
   # artifact that is missing, revoked, of another kind or of another account (lines 215-216;
   # section 1 lines 139-140), a runtime that is missing, retired, does not run the kind, or whose
   # minimum isolation the workload's is below (section 10 lines 456-458), settings of another shape
-  # than the workload's, a component the formation does not have (section 3), and a retired
-  # formation or environment.
+  # than the workload's. cloudspec (layer rule): weft also refused a component the formation does
+  # not have and a retired formation or environment; those are records of the composition (layer
+  # 9) and weft.architecture.AssignWorkload refuses them when the workload is assigned.
   # OPEN: which actor defines a workload: the deployments domain applies a release (section 5);
   # the sketch's actor list has no controller. Smallest answer: the release apply, as Deployer.
   # OPEN: "untrusted code default to microvm" (section 10 line 458): which kinds are untrusted. The
@@ -1857,9 +1930,11 @@ commands:
       display: Define a workload
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
+      # cloudspec (layer rule): the component-level workload identity, in place of the formation,
+      # revision and environment (records of the composition, layer 9). The caller composes it;
+      # the composition records which component, revision and environment the workload realizes
+      # (weft.architecture.AssignWorkload).
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: component, type: weft.shared.ComponentName}
       - {name: package_kind, type: weft.workloads.PackageKind}
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
@@ -1869,6 +1944,12 @@ commands:
       - {name: upgrade, type: Optional<weft.workloads.Upgrade>}
       - {name: volumes, type: Optional<List<weft.workloads.HostPathMount>>}
       - {name: ports, type: Optional<List<weft.workloads.ServedPort>>}
+      - {name: limits, type: Optional<weft.workloads.Limits>}
+      - {name: process_priority, type: Optional<weft.workloads.ProcessPriority>}
+      - {name: stop, type: Optional<weft.workloads.Stop>}
+      - {name: prestart, type: Optional<List<weft.workloads.PrestartStep>>}
+      - {name: restart, type: Optional<weft.workloads.ProcessRestart>}
+      - {name: environment_files, type: Optional<List<weft.workloads.EnvironmentFile>>}
       - {name: shape, type: weft.workloads.ShapeKind}
       - {name: settings, type: weft.workloads.ShapeSettings}
       - {name: claims, type: List<weft.workloads.ClaimRequest>}
@@ -1956,51 +2037,9 @@ commands:
         external: the settings are tagged with another shape than the workload's shape
         before_row: true
         error: weft.workloads.SettingsShapeMismatch
-      # hardening pass 1 W1: the formation, its environment and its revision are the account's,
-      # so a workload never joins another account's formation (and its identity never matches
-      # that formation's exchange policies). Missing and foreign answer alike; every existence
-      # check answers before every predicate (ESS precedence), so the ties follow `no-runtime`.
-      - name: formation-missing
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.workloads.NotFound
-      - name: environment-missing
-        when_related: {via: input.environment_id, exists: false}
-        error: weft.workloads.NotFound
-      - name: revision-missing
-        when_related: {via: input.formation_revision_id, exists: false}
-        error: weft.workloads.NotFound
       - name: no-runtime
         when_related: {via: input.runtime_id, exists: false}
         error: weft.workloads.RuntimeNotFound
-      # Section 3: a workload is one of the formation's components; the component is named by
-      # (formation_id, name), as weft.formations keys it.
-      - name: component-missing
-        when_related:
-          entity: weft.architecture.Component
-          where:
-            all:
-              - formation_id == input.formation_id
-              - name == input.component
-          exists: false
-        error: weft.workloads.NotFound
-      - name: formation-foreign
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.workloads.NotFound
-      - name: environment-foreign
-        when_related: {via: input.environment_id, predicate: formation_id != input.formation_id}
-        error: weft.workloads.NotFound
-      - name: revision-foreign
-        when_related: {via: input.formation_revision_id, predicate: formation_id != input.formation_id}
-        error: weft.workloads.NotFound
-      # A retired formation or environment takes no new workload (weft.formations: a retired
-      # formation takes no edit and no commit). After the foreign checks, so another account's
-      # state is not read.
-      - name: formation-retired
-        when_related: {via: input.formation_id, predicate: state == Retired}
-        error: weft.workloads.StateConflict
-      - name: environment-retired
-        when_related: {via: input.environment_id, predicate: state == Retired}
-        error: weft.workloads.StateConflict
       - name: runtime-retired
         when_related: {via: input.runtime_id, predicate: state == Retired}
         error: weft.workloads.RuntimeIsRetired
@@ -2055,9 +2094,7 @@ commands:
         instance: workload_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
-          formation_revision_id: input.formation_revision_id
-          environment_id: input.environment_id
+          identity: input.identity
           component: input.component
           package_kind: input.package_kind
           artifact_digest: input.artifact_digest
@@ -2067,6 +2104,12 @@ commands:
           upgrade: input.upgrade
           volumes: input.volumes
           ports: input.ports
+          limits: input.limits
+          process_priority: input.process_priority
+          stop: input.stop
+          prestart: input.prestart
+          restart: input.restart
+          environment_files: input.environment_files
           shape: input.shape
           settings: input.settings
           claims: input.claims
@@ -2078,8 +2121,7 @@ commands:
           weft.workloads.WorkloadDefined:
             workload_id: {generated: true}
             scope_id: input.scope_id
-            formation_id: input.formation_id
-            environment_id: input.environment_id
+            identity: input.identity
             component: input.component
             package_kind: input.package_kind
             artifact_digest: input.artifact_digest
@@ -2291,13 +2333,26 @@ commands:
       display: Set a workload's replica count
     input:
       - {name: workload_id, type: weft.shared.WorkloadId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: replicas, type: Integer}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.workloads.WorkloadNotFound
       - name: negative-replicas
         when: replicas < 0
         error: weft.workloads.InvalidAmount
       - name: no-workload
         when_related: {via: input.workload_id, exists: false}
+        error: weft.workloads.WorkloadNotFound
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: workload-of-other-scope
+        when_related: {via: input.workload_id, predicate: scope_id != input.scope_id}
         error: weft.workloads.WorkloadNotFound
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
@@ -2638,6 +2693,9 @@ commands:
       display: Wake a service
     input:
       - {name: service_id, type: weft.shared.ServiceId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: source, type: weft.workloads.WakeSource}
       # The time of the request plus the Service's WakeDeadline, computed by the caller.
       - {name: deadline_at, type: Timestamp}
@@ -2645,8 +2703,20 @@ commands:
       - name: deadline-past
         when: deadline_at < now
         error: weft.workloads.DeadlineInPast
+      # Scope isolation: the scope named is the caller's. External: Client carries scope_id, the
+      # actor Instance does not, and ESS reads a caller attribute only when every actor that may
+      # invoke the command declares it (ESS-COMMAND-004). It reads the request alone (before_row).
+      - name: not-callers-scope
+        external: the scope named is not the caller's (the client's scope, or the scope of the calling instance)
+        before_row: true
+        error: weft.workloads.ServiceNotFound
       - name: no-service
         when_related: {via: input.service_id, exists: false}
+        error: weft.workloads.ServiceNotFound
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: service-of-other-scope
+        when_related: {via: input.service_id, predicate: scope_id != input.scope_id}
         error: weft.workloads.ServiceNotFound
       - name: retired
         when_related: {via: input.service_id, predicate: state == Retired}
@@ -3407,7 +3477,6 @@ commands:
       - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size, type: weft.workloads.BoxSize}
       - {name: volume_id, type: Optional<weft.shared.VolumeId>}
-      - {name: endpoint_id, type: Optional<weft.shared.EndpointId>}
     outcomes:
       # Isolation pass 2: the account must be the one the request acts in; it reads no row and
       # answers like a missing workload (an input guard answers ahead of every row check).
@@ -3429,17 +3498,12 @@ commands:
       - name: volume-missing
         when_related: {via: input.volume_id, exists: false}
         error: weft.workloads.NotFound
-      # hardening pass 1 W3: the box is reached only through an endpoint of its workload's
-      # formation; another formation's endpoint answers like a missing one.
-      - name: endpoint-missing
-        when_related: {via: input.endpoint_id, exists: false}
-        error: weft.workloads.NotFound
       # Isolation pass 2: a workload of another account answers like a missing one, after the
       # existence checks and before its state is read.
       - name: workload-of-other-scope
         when_related: {via: input.workload_id, predicate: scope_id != input.scope_id}
         error: weft.workloads.WorkloadNotFound
-      # hardening pass 1 W2, W3: the ties, after every existence check (ESS precedence).
+      # hardening pass 1 W2: the tie, after every existence check (ESS precedence).
       - name: volume-foreign
         when: defined(volume_id)
         when_related:
@@ -3452,20 +3516,6 @@ commands:
                     as: w
                     in: {entity: weft.workloads.Workload}
                     that: {all: [{w.scope_id: {eq: {fact: scope_id}}}, w.workload_id == input.workload_id]}
-          exists: true
-        error: weft.workloads.NotFound
-      - name: endpoint-foreign
-        when: defined(endpoint_id)
-        when_related:
-          entity: weft.edge.Endpoint
-          where:
-            all:
-              - endpoint_id == input.endpoint_id
-              - not:
-                  exists:
-                    as: w
-                    in: {entity: weft.workloads.Workload}
-                    that: {all: [{w.formation_id: {eq: {fact: formation_id}}}, w.workload_id == input.workload_id]}
           exists: true
         error: weft.workloads.NotFound
       - name: workload-retired
@@ -3485,7 +3535,6 @@ commands:
           scope_id: {related: {via: input.workload_id, field: scope_id}}
           size: input.size
           volume_id: input.volume_id
-          endpoint_id: input.endpoint_id
           cordoned: false
         emits: [weft.workloads.BoxCreated]
         payload:
@@ -3821,7 +3870,8 @@ commands:
       - name: destroyed
         error: weft.workloads.StateConflict
 
-  # Sketch lines 252-253: "cordon takes it out of its endpoint's traffic".
+  # Sketch lines 252-253: "cordon takes it out of its endpoint's traffic": the endpoint that names
+  # the box (weft.edge.Endpoint.box_id; cloudspec, layer rule: the box does not name it).
   # weft@6798e7d:ess/4-applications/workloads.yaml:5199
   - name: weft.workloads.CordonBox
     naming:
@@ -4230,9 +4280,9 @@ commands:
       - name: workload-retired
         when_related: {via: input.workload_id, predicate: state == Retired}
         error: weft.workloads.WorkloadIsRetired
-      # Kept external: the Border is weft.architecture.Component.on_border, found by the workload's
-      # formation_id and component name; a guard reads a row by an input identity or by a row
-      # set over input values, not by two fields of another related row.
+      # Kept external: the Border is weft.architecture.Component.on_border, and which component a
+      # workload realizes is weft.architecture.ComponentWorkload, both of the composition (layer
+      # 9), which this block does not read.
       - name: not-on-border
         external: the workload's component is not on its formation's Border
         when: kind == Http
@@ -4595,19 +4645,19 @@ views:
       - {name: minimum_isolation, type: weft.shared.IsolationLevel}
       - {name: state, type: weft.workloads.Runtime.State}
 
-  # Sketch section 4: the workloads of a formation.
+  # Sketch section 4: the workloads of a formation. cloudspec (layer rule): of a scope; the
+  # workloads of one formation are weft.architecture.FormationWorkloads (layer 9).
   # weft@6798e7d:ess/4-applications/workloads.yaml:6030
   - name: weft.workloads.WorkloadList
     source: weft.workloads.Workload
     consistency: read_your_writes
     params:
-      - {name: formation_id, type: weft.shared.FormationId}
-    filter: formation_id == param.formation_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: workload_id, type: weft.shared.WorkloadId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: component, type: weft.shared.ComponentName}
       - {name: package_kind, type: weft.workloads.PackageKind}
       - {name: shape, type: weft.workloads.ShapeKind}
@@ -4625,9 +4675,7 @@ views:
     fields:
       - {name: workload_id, type: weft.shared.WorkloadId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: component, type: weft.shared.ComponentName}
       - {name: package_kind, type: weft.workloads.PackageKind}
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
@@ -4860,7 +4908,6 @@ views:
       - {name: scope_id, type: weft.shared.ScopeId}
       - {name: size, type: weft.workloads.BoxSize}
       - {name: volume_id, type: Optional<weft.shared.VolumeId>}
-      - {name: endpoint_id, type: Optional<weft.shared.EndpointId>}
       - {name: instance_id, type: Optional<weft.shared.InstanceId>}
       - {name: cordoned, type: Boolean}
       - {name: lease_holder, type: Optional<weft.shared.PrincipalId>}

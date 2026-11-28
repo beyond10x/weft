@@ -172,6 +172,35 @@ entities:
         - {name: reset, from: [Faulted], to: Wiping}
         - {name: remove, from: [Wiping, Free, Bound, Sliced, Faulted], to: Removed}
 
+  # Sketch lines 442-443 (a node's Capacity) and section 9 line 444 (a node reports capacity):
+  # the amounts of each resource class one node offers, as its agent last observed them. Moved
+  # here from weft.infrastructure.Node.capacity (cloudspec, layer rule): a node does not name the
+  # resource classes of this block, this block names the node, as a Device does. One row per
+  # report; the newest by `observed_at` is the node's capacity.
+  - name: weft.inventory.NodeCapacity
+    naming:
+      summary: The amount of each resource class one node offers, as its agent observed it at one time.
+    identity:
+      name: capacity_id
+      type: weft.shared.NodeCapacityId
+    fields:
+      - name: node_id
+        type: weft.shared.NodeId
+      - name: capacity
+        type: List<weft.shared.ResourceAmount>
+      - name: observed_at
+        type: Timestamp
+    relations:
+      - name: node
+        kind: references
+        target: weft.infrastructure.Node
+        cardinality: one
+        via: node_id
+    lifecycle:
+      initial: Reported
+      states: [Reported]
+      terminal: [Reported]
+
 errors:
   # weft@6798e7d:ess/1-infrastructure/inventory.yaml:167
   - name: weft.inventory.NotFound
@@ -256,6 +285,14 @@ events:
   - name: weft.inventory.DeviceRemoved
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
+
+  # cloudspec: from weft.infrastructure.NodeReady and NodeObserved, which carried the capacity.
+  - name: weft.inventory.NodeCapacityReported
+    fields:
+      - {name: capacity_id, type: weft.shared.NodeCapacityId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: capacity, type: List<weft.shared.ResourceAmount>}
+      - {name: observed_at, type: Timestamp}
 
 commands:
   # Section 6 lines 384-393 and 397-405.
@@ -409,6 +446,38 @@ commands:
             hardware_id: input.hardware_id
             vendor: input.vendor
             model: input.model
+
+  # Sketch lines 442-443 and line 468 ("reports what it observed"): the node agent reports the
+  # capacity of its node; each report is a row, and the newest by `observed_at` is the node's
+  # capacity. Moved here from weft.infrastructure.RecordNodeObservation, which keeps the
+  # isolation facts and the node's readiness (cloudspec, layer rule).
+  # OPEN: whether a report older than the newest `observed_at` is refused as stale, and when old
+  # reports are dropped.
+  - name: weft.inventory.ReportNodeCapacity
+    naming:
+      display: Report the capacity of a node
+    input:
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: capacity, type: List<weft.shared.ResourceAmount>}
+      - {name: observed_at, type: Timestamp}
+    outcomes:
+      - name: no-such-node
+        when_related: {via: input.node_id, exists: false}
+        error: weft.inventory.NotFound
+      - name: reported
+        creates: weft.inventory.NodeCapacity
+        instance: capacity_id
+        sets:
+          node_id: input.node_id
+          capacity: input.capacity
+          observed_at: input.observed_at
+        emits: [weft.inventory.NodeCapacityReported]
+        payload:
+          weft.inventory.NodeCapacityReported:
+            capacity_id: {generated: true}
+            node_id: input.node_id
+            capacity: input.capacity
+            observed_at: input.observed_at
 
   # Section 10 line 459: the wipe ends; the device is bindable again.
   # weft@6798e7d:ess/1-infrastructure/inventory.yaml:384
@@ -575,3 +644,15 @@ views:
       - {name: model, type: String}
       - {name: memory_bytes, type: Optional<Integer>}
       - {name: interconnect_id, type: Optional<weft.shared.DeviceId>}
+
+  # Sketch lines 441-443 (Capacity) and section 10 line 451 (the scheduler's input): the capacity
+  # each node last reported. Moved here from the capacity columns of weft.infrastructure.Nodes and
+  # CloudNodes (cloudspec, layer rule).
+  - name: weft.inventory.NodeCapacities
+    source: weft.inventory.NodeCapacity
+    consistency: read_your_writes
+    fields:
+      - {name: capacity_id, type: weft.shared.NodeCapacityId}
+      - {name: node_id, type: weft.shared.NodeId}
+      - {name: capacity, type: List<weft.shared.ResourceAmount>}
+      - {name: observed_at, type: Timestamp}

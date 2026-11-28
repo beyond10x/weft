@@ -5,8 +5,6 @@
 # `scope_id: actor.scope_id` and remove the line.
 home.sections[instances]: weft.workloads.Instances() | model view has no scope_id param
 home.sections[running]: weft.workloads.Services() | model view has no scope_id param
-formations.detail.sections[workloads]: weft.workloads.WorkloadList(formation_id: params.formation_id) | model view has no scope_id param
-workloads.sections[list]: weft.workloads.WorkloadList(formation_id: state.formation) | model view has no scope_id param
 workloads.detail.sections[summary]: weft.workloads.WorkloadDetail(workload_id: params.workload_id) | model view has no scope_id param
 workloads.detail.sections[service]: weft.workloads.ServiceDetail(workload_id: params.workload_id) | model view has no scope_id param
 workloads.detail.sections[snapshots]: weft.workloads.SnapshotList(workload_id: params.workload_id) | model view has no scope_id param

@@ -295,15 +295,20 @@ events:
   # weft.scheduling.SubmitSchedulingRequest this domain holds, so a binding maps them (edge form).
   # `job_id` lets a binding skip a gang Job's member (scheduling: "a gang member is not submitted
   # by that binding").
-  # `zones` is weft.architecture.Formation.zones, read through [workload_id, formation_id], and
   # `priority` is Workload.priority (docs/open-questions.md "workloads loops", wave 4, decided).
+  # story:cloud-blocks-layer-refactor-pin (cloudspec layer rule): the workload names no formation,
+  # so the event carries the workload's component-level `identity` in place of `formation_id`.
+  # `zones` is weft.architecture.Formation.zones of the formation weft.architecture.ComponentWorkload
+  # assigns the workload to (empty, any zone, for a workload no formation assigns). No related
+  # path reaches it from the workload (the assignment names the workload, not the other way), so
+  # CreateInstance's payload marks it generated and the implementation reads it.
   - name: weft.workloads.InstanceCreated
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
       - {name: minimum_isolation, type: weft.shared.IsolationLevel}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: claims, type: List<weft.workloads.ClaimRequest>}
       - {name: service_id, type: Optional<weft.shared.ServiceId>}
       - {name: replica_index, type: Optional<Integer>}
@@ -600,12 +605,12 @@ commands:
             workload_id: input.workload_id
             minimum_isolation: {related: {via: input.workload_id, field: isolation}}
             scope_id: {related: {via: input.workload_id, field: scope_id}}
-            formation_id: {related: {via: input.workload_id, field: formation_id}}
+            identity: {related: {via: input.workload_id, field: identity}}
             claims: {related: {via: input.workload_id, field: claims}}
             service_id: input.service_id
             replica_index: input.replica_index
             job_id: input.job_id
-            zones: {related: {via: [input.workload_id, formation_id], field: zones}}
+            zones: {generated: true}
             priority: {related: {via: input.workload_id, field: priority}}
 
   # Section 10 lines 451-452 (input and output of scheduling) and lines 456-458: an instance is
@@ -1885,18 +1890,17 @@ views:
   # Section 15 "Health", read by component: an edge route and a link name a component of a
   # formation in an environment (section 3), not a workload. The ready instances of every
   # workload of that component, through the instance's workload (one hop).
+  # story:cloud-blocks-layer-refactor-pin (cloudspec layer rule): the workload names no formation
+  # or environment; the component of one environment of one formation is named by the
+  # component-level workload identity, which the workload holds.
   - name: weft.workloads.ComponentReadyInstances
     source: weft.workloads.Instance
     consistency: read_your_writes
     params:
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
     filter:
       all:
-        - workload_id.formation_id == param.formation_id
-        - workload_id.environment_id == param.environment_id
-        - workload_id.component == param.component
+        - workload_id.identity == param.identity
         - state == Running
         - health == Ready
     fields:

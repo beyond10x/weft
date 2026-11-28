@@ -298,8 +298,9 @@ commands:
       # the vendored SchedulingRequest holds no cluster (cloudspec C2); the cluster is the one whose
       # `formations` lists the request's formation (weft.cluster.PinFormation), `other-cluster`.
       - {name: cluster_id, type: weft.shared.ClusterId}
-      # D-e A: the request's formation, as the request row holds it (`other-formation`), so
-      # `other-cluster` reads the cluster's list without a second walk.
+      # D-e A: the request's formation, the one weft.architecture.ComponentWorkload assigns the
+      # request's instance's workload to (`instance-of-other-formation`), so `other-cluster` reads the
+      # cluster's list without a second walk.
       - {name: formation_id, type: weft.shared.FormationId}
       - {name: node_id, type: weft.shared.NodeId}
       # design:tenant-clusters step 3: the node's pool as weft.infrastructure.Node holds it (absent
@@ -382,16 +383,16 @@ commands:
                     that: {all: ["i.instance_id == instance_id", "i.scope_id == input.scope_id"]}
           exists: true
         error: weft.scheduling.NotFound
-      # D-e A: the formation named is the request's.
-      - name: other-formation
-        when_related: {via: input.request_id, predicate: formation_id != input.formation_id}
-        error: weft.scheduling.RequestMismatch
       # The request's instance runs a workload of the formation named (cloudspec dropped
       # SubmitSchedulingRequest's `formation-not-instances`), so a request cannot carry an
-      # instance into another formation's cluster. A walk of the request's instance with two
+      # instance into another formation's cluster. story:cloud-blocks-layer-refactor-pin
+      # (cloudspec layer rule): neither the request nor the workload names a formation, so the
+      # formation is the one weft.architecture.ComponentWorkload assigns the instance's workload
+      # to, and this guard is the only tie of `formation_id` (weft's `other-formation`, which read
+      # the request's formation, is gone with it). A walk of the request's instance with two
       # sibling walks, each one level deep (ESS 0.99.2 nests no second walk inside the first). An
-      # instance whose workload row is missing is refused (default deny). Answers as a missing
-      # request, like `instance-of-other-scope`.
+      # instance whose workload no formation assigns is refused (default deny). Answers as a
+      # missing request, like `instance-of-other-scope`.
       - name: instance-of-other-formation
         when_related:
           entity: weft.workloads.Instance
@@ -403,7 +404,7 @@ commands:
                   that: {all: ["q.request_id == input.request_id", "q.instance_id == instance_id"]}
               - not:
                   exists:
-                    in: {entity: weft.workloads.Workload}
+                    in: {entity: weft.architecture.ComponentWorkload}
                     as: w
                     that: {all: ["w.workload_id == workload_id", "w.formation_id == input.formation_id"]}
           exists: true
@@ -701,7 +702,7 @@ commands:
           min_isolation: {related: {via: input.request_id, field: min_isolation}}
           assigned: false
           bindings: input.bindings
-          formation_id: {related: {via: input.request_id, field: formation_id}}
+          formation_id: input.formation_id
           topology_group_id: input.topology_group_id
           topology_id: {related: {via: input.topology_group_id, field: topology_id}}
           gang_id: {related: {via: input.request_id, field: gang_id}}
@@ -909,6 +910,18 @@ commands:
         error: weft.scheduling.StateConflict
 
 views:
+  # story:cloud-blocks-layer-refactor-pin (cloudspec layer rule): neither a request nor a workload
+  # names its formation; the Scheduler reads here which formation each workload is assigned to
+  # (weft.architecture.ComponentWorkload), the `formation_id` PlaceInstance takes and
+  # `instance-of-other-formation` checks.
+  - name: weft.scheduling.WorkloadFormations
+    source: weft.architecture.ComponentWorkload
+    consistency: read_your_writes
+    fields:
+      - {name: component_workload_id, type: weft.shared.ComponentWorkloadId}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+      - {name: formation_id, type: weft.shared.FormationId}
+
   # §10: every placement decision.
   - name: weft.scheduling.PlacementDecisions
     source: weft.scheduling.PlacementDecision

@@ -130,8 +130,8 @@ flowchart TB
   cloud.architecture --> cloud.infrastructure
   cloud.architecture --> cloud.inventory
   cloud.architecture --> cloud.scope
+  cloud.architecture --> cloud.workloads
   cloud.artifacts --> cloud.scope
-  cloud.claims --> cloud.architecture
   cloud.claims --> cloud.infrastructure
   cloud.claims --> cloud.inventory
   cloud.claims --> cloud.resources
@@ -139,35 +139,27 @@ flowchart TB
   cloud.deployments --> cloud.architecture
   cloud.deployments --> cloud.artifacts
   cloud.deployments --> cloud.scope
-  cloud.edge --> cloud.architecture
-  cloud.identity --> cloud.architecture
+  cloud.edge --> cloud.scope
+  cloud.edge --> cloud.workloads
   cloud.identity --> cloud.infrastructure
   cloud.identity --> cloud.scope
   cloud.identity --> cloud.workloads
-  cloud.infrastructure --> cloud.inventory
   cloud.inventory --> cloud.infrastructure
-  cloud.limits --> cloud.architecture
   cloud.limits --> cloud.scope
-  cloud.observability --> cloud.architecture
   cloud.observability --> cloud.identity
   cloud.observability --> cloud.infrastructure
   cloud.observability --> cloud.resources
   cloud.observability --> cloud.scope
   cloud.resources --> cloud.infrastructure
   cloud.resources --> cloud.scope
-  cloud.scheduling --> cloud.architecture
   cloud.scheduling --> cloud.infrastructure
   cloud.scheduling --> cloud.inventory
   cloud.scheduling --> cloud.scope
   cloud.scheduling --> cloud.workloads
-  cloud.secrets --> cloud.architecture
   cloud.secrets --> cloud.scope
-  cloud.services --> cloud.architecture
   cloud.services --> cloud.scope
   cloud.topology --> cloud.infrastructure
-  cloud.workloads --> cloud.architecture
   cloud.workloads --> cloud.artifacts
-  cloud.workloads --> cloud.edge
   cloud.workloads --> cloud.infrastructure
   cloud.workloads --> cloud.inventory
   cloud.workloads --> cloud.resources
@@ -194,7 +186,7 @@ flowchart TB
 | 7 | `catalog` | `cloud.architecture`, `cloud.deployments`, `cloud.inventory`, `cloud.scope`, `cloud.services` |
 | 6 | `deployments` | `cloud.architecture`, `cloud.deployments`, `cloud.infrastructure`, `cloud.scope`, `cloud.workloads`, `accounts`, `workloads` |
 | 6 | `pipelines` | `cloud.architecture`, `cloud.artifacts`, `cloud.deployments`, `cloud.inventory`, `cloud.resources`, `cloud.scope`, `cloud.secrets`, `accounts`, `workloads` |
-| 5 | `edge` | `cloud.architecture`, `cloud.edge`, `cloud.workloads`, `workloads` |
+| 5 | `edge` | `cloud.architecture`, `cloud.workloads`, `workloads` |
 | 5 | `identity` | none |
 | 5 | `node` | `cloud.infrastructure`, `nodes`, `workloads` |
 | 5 | `nodes` | `cloud.claims`, `cloud.infrastructure`, `cloud.inventory`, `cloud.scope`, `cloud.workloads`, `accounts`, `scheduling`, `workloads` |
@@ -208,24 +200,24 @@ flowchart TB
 | 2 | `accounts` | `cloud.inventory`, `cloud.scope` |
 | 1 | `infrastructure` | `cloud.infrastructure` |
 | 0 | `shared` | none |
-| cloud | `cloud.architecture` | `cloud.artifacts`, `cloud.edge`, `cloud.infrastructure`, `cloud.inventory`, `cloud.scope` |
+| cloud | `cloud.architecture` | `cloud.artifacts`, `cloud.edge`, `cloud.infrastructure`, `cloud.inventory`, `cloud.scope`, `cloud.workloads` |
 | cloud | `cloud.artifacts` | `cloud.scope` |
-| cloud | `cloud.claims` | `cloud.architecture`, `cloud.infrastructure`, `cloud.inventory`, `cloud.resources`, `cloud.scope` |
+| cloud | `cloud.claims` | `cloud.infrastructure`, `cloud.inventory`, `cloud.resources`, `cloud.scope` |
 | cloud | `cloud.deployments` | `cloud.architecture`, `cloud.artifacts`, `cloud.scope` |
-| cloud | `cloud.edge` | `cloud.architecture` |
-| cloud | `cloud.identity` | `cloud.architecture`, `cloud.infrastructure`, `cloud.scope`, `cloud.workloads` |
-| cloud | `cloud.infrastructure` | `cloud.inventory` |
+| cloud | `cloud.edge` | `cloud.scope`, `cloud.workloads` |
+| cloud | `cloud.identity` | `cloud.infrastructure`, `cloud.scope`, `cloud.workloads` |
+| cloud | `cloud.infrastructure` | none |
 | cloud | `cloud.inventory` | `cloud.infrastructure` |
-| cloud | `cloud.limits` | `cloud.architecture`, `cloud.scope` |
-| cloud | `cloud.observability` | `cloud.architecture`, `cloud.identity`, `cloud.infrastructure`, `cloud.resources`, `cloud.scope` |
+| cloud | `cloud.limits` | `cloud.scope` |
+| cloud | `cloud.observability` | `cloud.identity`, `cloud.infrastructure`, `cloud.resources`, `cloud.scope` |
 | cloud | `cloud.resources` | `cloud.infrastructure`, `cloud.scope` |
-| cloud | `cloud.scheduling` | `cloud.architecture`, `cloud.infrastructure`, `cloud.inventory`, `cloud.scope`, `cloud.workloads` |
+| cloud | `cloud.scheduling` | `cloud.infrastructure`, `cloud.inventory`, `cloud.scope`, `cloud.workloads` |
 | cloud | `cloud.scope` | none |
-| cloud | `cloud.secrets` | `cloud.architecture`, `cloud.scope` |
-| cloud | `cloud.services` | `cloud.architecture`, `cloud.scope` |
+| cloud | `cloud.secrets` | `cloud.scope` |
+| cloud | `cloud.services` | `cloud.scope` |
 | cloud | `cloud.shared` | none |
 | cloud | `cloud.topology` | `cloud.infrastructure` |
-| cloud | `cloud.workloads` | `cloud.architecture`, `cloud.artifacts`, `cloud.edge`, `cloud.infrastructure`, `cloud.inventory`, `cloud.resources`, `cloud.scope` |
+| cloud | `cloud.workloads` | `cloud.artifacts`, `cloud.infrastructure`, `cloud.inventory`, `cloud.resources`, `cloud.scope` |
 <!-- /domain-map -->
 
 ## What the rule costs

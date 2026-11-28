@@ -4,8 +4,9 @@
 domain: weft.edge
 
 summary: >-
-  The public entry points: endpoints (a public host), the routes that send a host and path to a
-  component and port, and the certificate of each endpoint.
+  The public entry points: endpoints (a public host of a scope, optionally serving one box) and
+  the certificate of each endpoint. The routes that send a host and path to a component of a
+  formation are the composition's (weft.architecture.Route).
 
 naming:
   wire: weft
@@ -30,50 +31,30 @@ types:
 entities:
 
   # Section 3: "`Border`: the components reachable from outside the formation, with
-  # their public `Endpoint`s". An Endpoint is one public host of the formation.
-  # OPEN: whether each environment gets its own hosts. Taken: an endpoint belongs to the formation;
+  # their public `Endpoint`s". An Endpoint is one public host. cloudspec (layer rule): an endpoint
+  # belongs to a scope, the boundary that shows it controls the host; the formation whose border
+  # uses it names it from layer 9 (weft.architecture.Route.endpoint_id), so this block names no
+  # formation. A box (sketch lines 248-254: "cordon takes it out of its endpoint's traffic") is
+  # served by the endpoint that names it in `box_id`; the box does not name its endpoint.
+  # OPEN: whether each environment gets its own hosts. Taken: an endpoint belongs to the scope;
   # per-environment hosts are left to `weft.deployments`.
   # weft@6798e7d:ess/4-applications/formations.yaml:290
   - name: weft.edge.Endpoint
     naming:
-      summary: A public host name at the formation's border.
+      summary: A public host name of a scope, used by a formation's border or serving one box.
     identity:
       name: endpoint_id
       type: weft.shared.EndpointId
     fields:
-      - name: formation_id
-        type: weft.shared.FormationId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: host
         type: weft.edge.Host
-    lifecycle:
-      initial: Declared
-      states: [Declared]
-      terminal: [Declared]
-
-  # Section 3, `Border`: "`Route`s (host and path to a component and port; what a Kubernetes
-  # Ingress says)". The host is the endpoint's.
-  # weft@6798e7d:ess/4-applications/formations.yaml:361
-  - name: weft.edge.Route
-    naming:
-      summary: Host and path of a public endpoint, sent to one border component on one port.
-    identity:
-      name: route_id
-      type: weft.shared.RouteId
-    fields:
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: endpoint_id
-        type: weft.shared.EndpointId
-      # A path prefix such as `/api`. OPEN: prefix or exact match; taken: prefix.
-      - name: path
-        type: String
-      - name: component_id
-        type: weft.shared.ComponentId
-      - name: port
-        type: weft.edge.Port
+      - name: box_id
+        type: Optional<weft.shared.BoxId>
     relations:
-      - {name: endpoint, kind: references, target: weft.edge.Endpoint, cardinality: one, via: endpoint_id}
-      - {name: component, kind: references, target: weft.architecture.Component, cardinality: one, via: component_id}
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: box, kind: references, target: weft.workloads.Box, cardinality: one, via: box_id}
     lifecycle:
       initial: Declared
       states: [Declared]
@@ -93,8 +74,9 @@ entities:
     fields:
       - name: endpoint_id
         type: weft.shared.EndpointId
-      - name: formation_id
-        type: weft.shared.FormationId
+      # cloudspec (layer rule): the endpoint's scope, in place of weft's formation_id.
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: host
         type: weft.edge.Host
       # The issuer's `notAfter`; absent until issued.
@@ -108,11 +90,11 @@ entities:
         target: weft.edge.Endpoint
         cardinality: one
         via: endpoint_id
-      - name: formation
+      - name: scope
         kind: references
-        target: weft.architecture.Formation
+        target: weft.scope.Scope
         cardinality: one
-        via: formation_id
+        via: scope_id
     lifecycle:
       initial: Requested
       states:
@@ -136,36 +118,26 @@ entities:
           to: Retired
 
 errors:
+  # cloudspec (layer rule): an endpoint belongs to a scope (weft's NoSuchFormation).
   # weft@6798e7d:ess/4-applications/formations.yaml:496
-  - name: weft.edge.NoSuchFormation
-    summary: No formation has this id, and nothing changed.
+  - name: weft.edge.NoSuchScope
+    summary: No scope has this id, or it is not the scope the request acts in, and nothing changed.
+  # cloudspec (layer rule): weft's FormationStateConflict, for the endpoint's scope.
   # weft@6798e7d:ess/4-applications/formations.yaml:498
-  - name: weft.edge.FormationStateConflict
-    summary: The formation is retired, so it takes no edit, and nothing changed.
-  # weft@6798e7d:ess/4-applications/formations.yaml:518
-  - name: weft.edge.NoSuchComponent
-    summary: No component of this formation has this id, and nothing changed.
-  # weft@6798e7d:ess/4-applications/formations.yaml:528
-  - name: weft.edge.NotOnBorder
-    summary: The component is not on the formation's border, so no route may reach it, and nothing changed.
-  # weft@6798e7d:ess/4-applications/formations.yaml:530
-  - name: weft.edge.RoutesRemain
-    summary: A route still names this component or endpoint, and nothing changed.
+  - name: weft.edge.ScopeStateConflict
+    summary: The scope is closed, so it takes no new endpoint, and nothing changed.
   # weft@6798e7d:ess/4-applications/formations.yaml:534
   - name: weft.edge.NoSuchEndpoint
-    summary: No endpoint of this formation has this id, and nothing changed.
+    summary: No endpoint of this scope has this id, and nothing changed.
   # weft@6798e7d:ess/4-applications/formations.yaml:536
   - name: weft.edge.HostTaken
     summary: Another endpoint already holds this host, and nothing was created.
   # weft@6798e7d:ess/4-applications/formations.yaml:538
   - name: weft.edge.HostNotVerified
     summary: The scope has not shown that it controls this host, and nothing was created.
-  # weft@6798e7d:ess/4-applications/formations.yaml:554
-  - name: weft.edge.NoSuchRoute
-    summary: No route of this formation has this id, and nothing changed.
-  # weft@6798e7d:ess/4-applications/formations.yaml:556
-  - name: weft.edge.RouteExists
-    summary: The endpoint already routes this path, and nothing was created.
+  # cloudspec: the box an endpoint serves is missing or of another scope.
+  - name: weft.edge.NoSuchBox
+    summary: No box of this scope has this id, and nothing was created.
   # weft@6798e7d:ess/5-runtime/edge.yaml:233
   - name: weft.edge.EndpointNotFound
     summary: No public endpoint has this identifier, and no certificate is requested.
@@ -187,27 +159,13 @@ events:
   - name: weft.edge.EndpointAdded
     fields:
       - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: host, type: weft.edge.Host}
   # weft@6798e7d:ess/4-applications/formations.yaml:647
   - name: weft.edge.EndpointRemoved
     fields:
       - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: formation_id, type: weft.shared.FormationId}
-  # weft@6798e7d:ess/4-applications/formations.yaml:666
-  - name: weft.edge.RouteAdded
-    fields:
-      - {name: route_id, type: weft.shared.RouteId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: path, type: String}
-      - {name: component_id, type: weft.shared.ComponentId}
-      - {name: port, type: weft.edge.Port}
-  # weft@6798e7d:ess/4-applications/formations.yaml:674
-  - name: weft.edge.RouteRemoved
-    fields:
-      - {name: route_id, type: weft.shared.RouteId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scope_id, type: weft.shared.ScopeId}
 
   # weft@6798e7d:ess/5-runtime/edge.yaml:277
   - name: weft.edge.CertificateRequested
@@ -247,6 +205,9 @@ commands:
 
   # Section 3, `Border`: "their public `Endpoint`s". A host is held by one endpoint in the
   # cluster. The account must have shown it controls the host.
+  # cloudspec (layer rule): the endpoint is created in a scope, not in a formation; a formation's
+  # route names it (weft.architecture.AddRoute). A box it serves is named here: the edge attaches
+  # to the box, the box does not name its endpoint (weft's CreateBox endpoint_id).
   # OPEN: how an account proves it controls a host (DNS record, delegated zone) and which domain
   # keeps that proof. Taken: external check, refused by default.
   # weft@6798e7d:ess/4-applications/formations.yaml:1506
@@ -254,15 +215,29 @@ commands:
     naming:
       display: Add a public endpoint
     input:
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: host, type: weft.edge.Host}
+      - {name: box_id, type: Optional<weft.shared.BoxId>}
     outcomes:
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.edge.NoSuchFormation
-      - name: retired
-        when_related: {via: input.formation_id, predicate: state == Retired}
-        error: weft.edge.FormationStateConflict
+      # Isolation pass 2: the scope must be the one the request acts in; another answers like a
+      # missing one (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.edge.NoSuchScope
+      - name: no-such-scope
+        when_related: {via: input.scope_id, exists: false}
+        error: weft.edge.NoSuchScope
+      - name: box-missing
+        when_related: {via: input.box_id, exists: false}
+        error: weft.edge.NoSuchBox
+      - name: scope-closed
+        when_related: {via: input.scope_id, predicate: state == Closed}
+        error: weft.edge.ScopeStateConflict
+      # hardening pass 1 W3: a box is reached only through an endpoint of its own scope; another
+      # scope's box answers like a missing one.
+      - name: box-foreign
+        when_related: {via: input.box_id, predicate: scope_id != input.scope_id}
+        error: weft.edge.NoSuchBox
       - name: host-taken
         when_related:
           entity: weft.edge.Endpoint
@@ -270,64 +245,50 @@ commands:
           exists: true
         error: weft.edge.HostTaken
       - name: host-not-verified
-        external: the formation's scope has not shown that it controls the host
+        external: the scope has not shown that it controls the host
         error: weft.edge.HostNotVerified
       - name: added
         creates: weft.edge.Endpoint
         instance: endpoint_id
         sets:
-          formation_id: input.formation_id
+          scope_id: input.scope_id
           host: input.host
+          box_id: input.box_id
         emits: [weft.edge.EndpointAdded]
         payload:
           weft.edge.EndpointAdded:
             endpoint_id: {generated: true}
-            formation_id: input.formation_id
+            scope_id: input.scope_id
             host: input.host
 
-  # Section 3, `Border`. Refused while a route or an active export still uses the endpoint.
+  # Section 3, `Border`. cloudspec (layer rule): weft refused while a route still used the
+  # endpoint; routes are the composition's (weft.architecture.Route, layer 9), which this block
+  # does not read. A route whose endpoint is gone is the composition's to repair (OPEN).
   # weft@6798e7d:ess/4-applications/formations.yaml:1542
   - name: weft.edge.RemoveEndpoint
     naming:
       display: Remove a public endpoint
     input:
-      - {name: formation_id, type: weft.shared.FormationId}
-      # Isolation pass 2: the account the request acts in, so the formation can be tied to the
+      # Isolation pass 2: the scope the request acts in, so the endpoint can be tied to the
       # caller (a related row is not compared with the caller directly).
       - {name: scope_id, type: weft.shared.ScopeId}
       - {name: endpoint_id, type: weft.shared.EndpointId}
     outcomes:
-      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
-      # answers like a missing formation (an input guard answers ahead of every row check).
+      # Isolation pass 2: the scope must be the one the request acts in; it reads no row and
+      # answers like a missing endpoint (an input guard answers ahead of every row check).
       - name: not-callers-scope
         when: scope_id != caller.scope_id
-        error: weft.edge.NoSuchFormation
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.edge.NoSuchFormation
+        error: weft.edge.NoSuchEndpoint
       - name: unknown-endpoint
         unknown_instance: true
         error: weft.edge.NoSuchEndpoint
       - name: no-such-endpoint
         when_related: {via: input.endpoint_id, exists: false}
         error: weft.edge.NoSuchEndpoint
-      # Isolation pass 2: a formation of another account answers like a missing one, after the
-      # existence checks and before its state is read.
-      - name: formation-of-other-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.edge.NoSuchFormation
-      - name: retired
-        when_related: {via: input.formation_id, predicate: state == Retired}
-        error: weft.edge.FormationStateConflict
+      # Isolation pass 2: an endpoint of another scope answers like a missing one.
       - name: foreign-endpoint
-        when_related: {via: input.endpoint_id, predicate: formation_id != input.formation_id}
+        when_related: {via: input.endpoint_id, predicate: scope_id != input.scope_id}
         error: weft.edge.NoSuchEndpoint
-      - name: routed
-        when_related:
-          entity: weft.edge.Route
-          where: endpoint_id == input.endpoint_id
-          exists: true
-        error: weft.edge.RoutesRemain
       # cloudspec: weft's `exported` (an active weft.formations.Export names the endpoint) is cut;
       # exports between accounts are the multi-tenant example's.
       - name: removed
@@ -337,124 +298,16 @@ commands:
         payload:
           weft.edge.EndpointRemoved:
             endpoint_id: input.endpoint_id
-            formation_id: input.formation_id
+            scope_id: input.scope_id
 
-  # Section 3, `Border`: "host and path to a component and port". Only a component on the
-  # border may be routed to (section 3, `Border`: "Everything else is internal").
-  # weft@6798e7d:ess/4-applications/formations.yaml:1760
-  - name: weft.edge.AddRoute
-    naming:
-      display: Add a route
-    input:
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: path, type: String}
-      - {name: component_id, type: weft.shared.ComponentId}
-      - {name: port, type: weft.edge.Port}
-    outcomes:
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.edge.NoSuchFormation
-      - name: no-such-endpoint
-        when_related: {via: input.endpoint_id, exists: false}
-        error: weft.edge.NoSuchEndpoint
-      - name: no-such-component
-        when_related: {via: input.component_id, exists: false}
-        error: weft.edge.NoSuchComponent
-      - name: retired
-        when_related: {via: input.formation_id, predicate: state == Retired}
-        error: weft.edge.FormationStateConflict
-      - name: foreign-endpoint
-        when_related: {via: input.endpoint_id, predicate: formation_id != input.formation_id}
-        error: weft.edge.NoSuchEndpoint
-      - name: foreign-component
-        when_related: {via: input.component_id, predicate: formation_id != input.formation_id}
-        error: weft.edge.NoSuchComponent
-      - name: not-on-border
-        when_related: {via: input.component_id, predicate: on_border == false}
-        error: weft.edge.NotOnBorder
-      - name: exists
-        when_related:
-          entity: weft.edge.Route
-          where:
-            all:
-              - endpoint_id == input.endpoint_id
-              - path == input.path
-          exists: true
-        error: weft.edge.RouteExists
-      - name: added
-        creates: weft.edge.Route
-        instance: route_id
-        sets:
-          formation_id: input.formation_id
-          endpoint_id: input.endpoint_id
-          path: input.path
-          component_id: input.component_id
-          port: input.port
-        emits: [weft.edge.RouteAdded]
-        payload:
-          weft.edge.RouteAdded:
-            route_id: {generated: true}
-            formation_id: input.formation_id
-            endpoint_id: input.endpoint_id
-            path: input.path
-            component_id: input.component_id
-            port: input.port
-
-  # Section 3, `Border`.
-  # weft@6798e7d:ess/4-applications/formations.yaml:1820
-  - name: weft.edge.RemoveRoute
-    naming:
-      display: Remove a route
-    input:
-      - {name: formation_id, type: weft.shared.FormationId}
-      # Isolation pass 2: the account the request acts in, so the formation can be tied to the
-      # caller (a related row is not compared with the caller directly).
-      - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: route_id, type: weft.shared.RouteId}
-    outcomes:
-      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
-      # answers like a missing formation (an input guard answers ahead of every row check).
-      - name: not-callers-scope
-        when: scope_id != caller.scope_id
-        error: weft.edge.NoSuchFormation
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.edge.NoSuchFormation
-      - name: unknown-route
-        unknown_instance: true
-        error: weft.edge.NoSuchRoute
-      - name: no-such-route
-        when_related: {via: input.route_id, exists: false}
-        error: weft.edge.NoSuchRoute
-      # Isolation pass 2: a formation of another account answers like a missing one, after the
-      # existence checks and before its state is read.
-      - name: formation-of-other-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.edge.NoSuchFormation
-      - name: retired
-        when_related: {via: input.formation_id, predicate: state == Retired}
-        error: weft.edge.FormationStateConflict
-      - name: foreign-route
-        when_related: {via: input.route_id, predicate: formation_id != input.formation_id}
-        error: weft.edge.NoSuchRoute
-      - name: removed
-        deletes: weft.edge.Route
-        instance: route_id
-        emits: [weft.edge.RouteRemoved]
-        payload:
-          weft.edge.RouteRemoved:
-            route_id: input.route_id
-            formation_id: input.formation_id
-
-  # § 3 `Border`: a public endpoint is served over TLS. Bound to formations.EndpointAdded.
+  # § 3 `Border`: a public endpoint is served over TLS. Bound to EndpointAdded.
   # weft@6798e7d:ess/5-runtime/edge.yaml:565
   - name: weft.edge.RequestCertificate
     naming:
       display: Request the certificate of a public endpoint
     input:
       - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: host, type: weft.edge.Host}
     outcomes:
       - name: no-such-endpoint
@@ -471,7 +324,7 @@ commands:
         instance: certificate_id
         sets:
           endpoint_id: input.endpoint_id
-          formation_id: input.formation_id
+          scope_id: input.scope_id
           host: input.host
         emits: [weft.edge.CertificateRequested]
         payload:
@@ -575,7 +428,7 @@ commands:
         wrong_state: true
         error: weft.edge.CertificateStateConflict
 
-  # § 3: a removed endpoint is served no more. Bound to formations.EndpointRemoved.
+  # § 3: a removed endpoint is served no more. Bound to EndpointRemoved.
   # weft@6798e7d:ess/5-runtime/edge.yaml:689
   - name: weft.edge.RetireEndpointCertificates
     naming:
@@ -602,59 +455,19 @@ commands:
 
 views:
 
-  # Topology: the border's routes, with the endpoint's host and the component's name (section 3,
-  # `Border`). The border's components are FormationComponents rows with `on_border`.
-  # weft@6798e7d:ess/4-applications/formations.yaml:2538
-  - name: weft.edge.FormationBorder
-    source: weft.edge.Route
-    consistency: read_your_writes
-    params:
-      - {name: formation_id, type: weft.shared.FormationId}
-    filter: formation_id == param.formation_id
-    fields:
-      - {name: route_id, type: weft.shared.RouteId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: endpoint_id, type: weft.shared.EndpointId}
-      - name: host
-        type: Optional<weft.edge.Host>
-        field: {related: {via: endpoint_id, field: host}}
-      - {name: path, type: String}
-      - {name: component_id, type: weft.shared.ComponentId}
-      - name: component_name
-        type: Optional<weft.shared.ComponentName>
-        field: {related: {via: component_id, field: name}}
-      - {name: port, type: weft.edge.Port}
-
-  # Section 3, `Border`: the formation's public hosts.
+  # Section 3, `Border`: the public hosts of a scope (cloudspec, layer rule: of a scope, not of a
+  # formation; a formation's hosts are weft.architecture.FormationBorder).
   # weft@6798e7d:ess/4-applications/formations.yaml:2559
   - name: weft.edge.Endpoints
     source: weft.edge.Endpoint
     consistency: read_your_writes
     params:
-      - {name: formation_id, type: weft.shared.FormationId}
-    filter: formation_id == param.formation_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: host, type: weft.edge.Host}
-
-  # Reachability of a component, from outside (section 3, `Border`): every host and path
-  # routed to it. No row, not reachable from outside.
-  # weft@6798e7d:ess/4-applications/formations.yaml:2607
-  - name: weft.edge.ComponentRoutes
-    source: weft.edge.Route
-    consistency: read_your_writes
-    params:
-      - {name: component_id, type: weft.shared.ComponentId}
-    filter: component_id == param.component_id
-    fields:
-      - {name: route_id, type: weft.shared.RouteId}
-      - {name: endpoint_id, type: weft.shared.EndpointId}
-      - name: host
-        type: Optional<weft.edge.Host>
-        field: {related: {via: endpoint_id, field: host}}
-      - {name: path, type: String}
-      - {name: port, type: weft.edge.Port}
 
   # § 3 `Border`: the certificate of each public endpoint.
   # weft@6798e7d:ess/5-runtime/edge.yaml:767
@@ -664,7 +477,7 @@ views:
     fields:
       - {name: certificate_id, type: weft.shared.EdgeCertificateId}
       - {name: endpoint_id, type: weft.shared.EndpointId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: host, type: weft.edge.Host}
       - {name: not_after, type: Optional<Timestamp>}
       - {name: failure, type: Optional<String>}

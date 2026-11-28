@@ -1121,6 +1121,9 @@ commands:
       display: Record one source object's coverage
     input:
       - {name: translation_id, type: weft.shared.TranslationId}
+      # Scope isolation (story blocks-scope-isolation): the scope the request acts in, so the
+      # row can be tied to the caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: object, type: weft.deployments.SourceObject}
       - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
       - {name: outcome, type: weft.deployments.CoverageOutcome}
@@ -1129,6 +1132,11 @@ commands:
       - {name: lost, type: Optional<String>}
       - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
     outcomes:
+      # Scope isolation: the scope must be the caller's; it reads no row and answers like a
+      # missing row (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.deployments.NotFound
       - name: refusal-unnamed
         when:
           all:
@@ -1156,6 +1164,11 @@ commands:
         error: weft.deployments.KindNotMappable
       - name: no-such-translation
         when_related: {via: input.translation_id, exists: false}
+        error: weft.deployments.NotFound
+      # Scope isolation: a row of another scope answers like a missing one, after the existence
+      # checks and before its state is read.
+      - name: translation-of-other-scope
+        when_related: {via: input.translation_id, predicate: scope_id != input.scope_id}
         error: weft.deployments.NotFound
       - name: translation-closed
         when_related: {via: input.translation_id, predicate: state != Requested}
@@ -1217,6 +1230,12 @@ commands:
               - outcome == Refused
           exists: true
         error: weft.deployments.HasRefusedObjects
+      # Scope isolation (story blocks-scope-isolation): a translation of another scope than the
+      # caller's answers like a missing one. External: ESS 0.99.2 refuses a when_subject guard
+      # beside the row-set guards above (ESS-COMMAND-009), and an external guard comes after them.
+      - name: not-callers-scope
+        external: the translation is of another scope than the caller's
+        error: weft.deployments.NotFound
       - name: translated
         moves: weft.deployments.Translation.complete
         instance: translation_id
@@ -1247,6 +1266,11 @@ commands:
     outcomes:
       - name: no-such-translation
         unknown_instance: true
+        error: weft.deployments.NotFound
+      # Scope isolation (story blocks-scope-isolation): a translation of another scope than the
+      # caller's answers like a missing one, before its state is read.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.deployments.NotFound
       - name: no-refused-object
         when_related: {via: input.entry_id, exists: false}
@@ -1284,6 +1308,11 @@ commands:
     outcomes:
       - name: no-such-translation
         unknown_instance: true
+        error: weft.deployments.NotFound
+      # Scope isolation (story blocks-scope-isolation): a translation of another scope than the
+      # caller's answers like a missing one, before its state is read.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.deployments.NotFound
       - name: failed
         moves: weft.deployments.Translation.fail
@@ -1491,6 +1520,11 @@ commands:
     outcomes:
       - name: no-such-plan
         unknown_instance: true
+        error: weft.deployments.NotFound
+      # Scope isolation (story blocks-scope-isolation): a plan of another scope than the
+      # caller's answers like a missing one, before its state is read.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.deployments.NotFound
       - name: blocked
         when: simulation.violations.count > 0

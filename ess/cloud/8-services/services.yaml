@@ -90,22 +90,18 @@ entities:
           to: Retired
 
   # § 13 lines 533-535 ServiceInstance: one provisioned offering in an account or a formation.
-  # § 13 lines 541-543: it runs as components of a formation the system owns, on the same nodes,
-  # with the same isolation and metering; that formation is named by `system_formation_id`.
+  # cloudspec (layer rule): in a scope; the formation that uses it is the composition's (layer 9),
+  # and the system-owned formation it runs as (lines 541-543) is the runtime's.
   # weft@6798e7d:ess/7-services/catalog.yaml:198
   - name: weft.services.ServiceInstance
     naming:
-      summary: One provisioned offering in a scope or a formation, run as a system-owned formation.
+      summary: One provisioned offering in a scope.
     identity:
       name: service_instance_id
       type: weft.shared.ServiceInstanceId
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      # Present when the instance belongs to one formation of the account (lines 533-534 "or a
-      # formation"); absent when it belongs to the account as a whole.
-      - name: formation_id
-        type: Optional<weft.shared.FormationId>
       - name: name
         type: String
       - name: offering_id
@@ -121,14 +117,9 @@ entities:
       # Internal (lines 530-531): the engine this instance runs on. No tenant view shows it.
       - name: engine_id
         type: weft.shared.EngineId
-      # Lines 541-543: the system-owned formation this instance runs as. Minted at provisioning.
-      # OPEN: how that formation is created in `formations` (a translator of `deployments`, or a
-      # catalog command of its own); decided in the integration pass.
-      - name: system_formation_id
-        type: weft.shared.FormationId
       - name: degraded_reason
         type: Optional<String>
-      # § 4 "Sleep and wake" (lines 274-301): applied to the components of the system formation.
+      # § 4 "Sleep and wake" (lines 274-301): applied to the instance's components.
       # OPEN: whether a plan may forbid sleep (a durable sql that must stay warm) or bound the
       # idle time; the smallest answer lets the instance's owner set it on any plan.
       - name: sleep_policy
@@ -144,19 +135,6 @@ entities:
         target: weft.scope.Scope
         cardinality: one
         via: scope_id
-      - name: formation
-        kind: references
-        target: weft.architecture.Formation
-        cardinality: one
-        via: formation_id
-      # Lines 541-543: the instance runs as this system-owned formation, which lives and goes with
-      # the instance. ESS writes `owns` on the owner with `via` on the child, so the instance can
-      # own it only if Formation carried a service instance id; it does not, so `references`.
-      - name: system_formation
-        kind: references
-        target: weft.architecture.Formation
-        cardinality: one
-        via: system_formation_id
     # Lines 534-535: provisioning, ready, degraded, updating, deprovisioning, gone.
     lifecycle:
       initial: Provisioning
@@ -183,8 +161,9 @@ entities:
   # Authenticated by the component's workload identity (§ 8 lines 422-437); it carries no static
   # credential, and no field here holds one. Default deny: a component without an active binding
   # of a mode has no access of that mode (CheckServiceAccess).
-  # OPEN: whether a binding is per environment of the component's formation (§ 3 line 176) or
-  # for all its environments; the smallest answer binds the component in every environment.
+  # cloudspec (layer rule): a binding names the component's workload identity, which names one
+  # environment of its formation; weft's smallest answer bound the component in every environment
+  # by (formation_id, component), records of the composition (layer 9).
   # weft@6798e7d:ess/7-services/catalog.yaml:300
   - name: weft.services.ServiceBinding
     naming:
@@ -195,12 +174,11 @@ entities:
     fields:
       - name: service_instance_id
         type: weft.shared.ServiceInstanceId
-      # The component is named by its formation and its name in it (§ 3), the parts of its
-      # workload identity (§ 8 line 425) that a binding names.
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: component
-        type: weft.shared.ComponentName
+      # cloudspec (layer rule): the component is named by its workload identity (§ 8 line 425),
+      # the path the identity domain issues (weft.shared.WorkloadIdentity, component level: no
+      # instance segment), not by its formation and name (records of the composition, layer 9).
+      - name: identity
+        type: weft.shared.WorkloadIdentity
       - name: mode
         type: weft.services.BindingMode
     relations:
@@ -209,11 +187,6 @@ entities:
         target: weft.services.ServiceInstance
         cardinality: one
         via: service_instance_id
-      - name: formation
-        kind: references
-        target: weft.architecture.Formation
-        cardinality: one
-        via: formation_id
     lifecycle:
       initial: Active
       states: [Active, Revoked]
@@ -329,9 +302,6 @@ errors:
   # weft@6798e7d:ess/7-services/catalog.yaml:641
   - name: weft.services.ServiceNameTaken
     summary: A live service instance with this name already exists in the scope.
-  # weft@6798e7d:ess/7-services/catalog.yaml:643
-  - name: weft.services.FormationNotFound
-    summary: The named formation does not exist.
   # weft@6798e7d:ess/7-services/catalog.yaml:645
   - name: weft.services.QuotaExceeded
     summary: The plan's limits do not fit the remaining quota of the scope or one of its parents.
@@ -346,7 +316,7 @@ errors:
     summary: The named service instance is not serving (provisioning, deprovisioning or gone).
   # weft@6798e7d:ess/7-services/catalog.yaml:653
   - name: weft.services.OutsideServiceScope
-    summary: The service instance belongs to another formation than the component's.
+    summary: The workload identity does not lie in the service instance's scope.
   # weft@6798e7d:ess/7-services/catalog.yaml:655
   - name: weft.services.ModeNotOffered
     summary: The offering's API has no operation of this binding mode.
@@ -392,7 +362,6 @@ events:
       - {name: scope_id, type: weft.shared.ScopeId}
       - {name: offering_id, type: weft.shared.OfferingId}
       - {name: plan_id, type: weft.shared.OfferingPlanId}
-      - {name: system_formation_id, type: weft.shared.FormationId}
   # weft@6798e7d:ess/7-services/catalog.yaml:737
   - name: weft.services.ServiceInstanceUpdating
     fields:
@@ -430,8 +399,7 @@ events:
     fields:
       - {name: binding_id, type: weft.shared.ServiceBindingId}
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: mode, type: weft.services.BindingMode}
   # weft@6798e7d:ess/7-services/catalog.yaml:769
   - name: weft.services.ServiceUnbound
@@ -557,15 +525,15 @@ commands:
         wrong_state: true
         error: weft.services.StateConflict
 
-  # § 13 lines 510-512 and 533-535: take a ready service from weft by name, in an account or one
-  # of its formations. Lines 541-543: it runs as a system-owned formation, whose id is minted here.
+  # § 13 lines 510-512 and 533-535: take a ready service from weft by name, in an account.
+  # cloudspec (layer rule): weft's optional formation and the minted system formation are cut;
+  # which formation uses the instance is the composition's (layer 9), how it runs is the runtime's.
   # weft@6798e7d:ess/7-services/catalog.yaml:1095
   - name: weft.services.ProvisionServiceInstance
     naming:
       display: Provision a service instance
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: name, type: String}
       - {name: offering_id, type: weft.shared.OfferingId}
       - {name: plan_id, type: weft.shared.OfferingPlanId}
@@ -582,17 +550,6 @@ commands:
       - name: no-such-offering
         when_related: {via: input.offering_id, exists: false}
         error: weft.services.OfferingNotFound
-      # Nothing crosses accounts (§ 1 lines 139-140): a formation of another account is refused.
-      # The formation's account is `weft.architecture.Formation.scope_id`; both formation guards
-      # read the formation only when one is named.
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.services.FormationNotFound
-      # hardening pass 1 disclosure (catalog.yaml:1135): a formation of another account answers
-      # as a missing one, right after the existence check, so its existence is not told.
-      - name: formation-outside-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.services.FormationNotFound
       - name: offering-retired
         when_related: {via: input.offering_id, predicate: state == Retired}
         error: weft.services.OfferingUnavailable
@@ -615,14 +572,12 @@ commands:
         instance: service_instance_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
           name: input.name
           offering_id: input.offering_id
           kind: {related: {via: input.offering_id, field: kind}}
           plan_id: input.plan_id
           durability: input.durability
           engine_id: {related: {via: input.offering_id, field: engine_id}}
-          system_formation_id: {generated: true}
           sleep_policy: input.sleep_policy
         emits: [weft.services.ServiceInstanceProvisioning]
         payload:
@@ -631,7 +586,6 @@ commands:
             scope_id: input.scope_id
             offering_id: input.offering_id
             plan_id: input.plan_id
-            system_formation_id: {generated: true}
 
   # § 13 lines 527-528 and 534-535 "updating": move a live instance to another plan of its own
   # offering.
@@ -750,10 +704,10 @@ commands:
         wrong_state: true
         error: weft.services.StateConflict
 
-  # § 13 lines 534-535 "ready": the control plane reports the instance's system formation
-  # running and serving, after provisioning, an update or a recovery.
+  # § 13 lines 534-535 "ready": the control plane reports the instance running and serving, after
+  # provisioning, an update or a recovery.
   # OPEN: which system actor reports a service instance's health; the sketch names none for the
-  # catalog (Translator writes the formation, NodeAgent observes its instances).
+  # catalog (NodeAgent observes its instances).
   # weft@6798e7d:ess/7-services/catalog.yaml:1309
   - name: weft.services.ReportServiceInstanceReady
     naming:
@@ -819,17 +773,18 @@ commands:
       - name: no-such-instance
         unknown_instance: true
         error: weft.services.NotFound
-      # UNMAPPED (hardening pass 1 D3): the caller tie `when_subject: {predicate: scope_id !=
-      # caller.scope_id}` is refused beside the `still-bound` row set (ess 0.99.2,
-      # ESS-COMMAND-009: one kind of related row per command), and a caller value is compared only
-      # in `when:` or `when_subject:`. Not declared; the account check stays weft-api's. Open
-      # question for ESS.
       - name: still-bound
         when_related:
           entity: weft.services.ServiceBinding
           where: {all: ["service_instance_id == input.service_instance_id", "state == Active"]}
           exists: true
         error: weft.services.StillBound
+      # Scope isolation (story blocks-scope-isolation): the service instance of another scope than the
+      # caller's answers like a missing one. External: ESS 0.99.2 refuses a when_subject guard
+      # beside the row-set guard above (ESS-COMMAND-009), and an external guard comes after it.
+      - name: not-callers-scope
+        external: the service instance is of another scope than the caller's
+        error: weft.services.NotFound
       - name: deprovisioning
         moves: weft.services.ServiceInstance.deprovision
         instance: service_instance_id
@@ -841,7 +796,7 @@ commands:
         wrong_state: true
         error: weft.services.StateConflict
 
-  # § 13 lines 534-535 "gone": the system formation is removed and its data erased.
+  # § 13 lines 534-535 "gone": the instance is removed and its data erased.
   # weft@6798e7d:ess/7-services/catalog.yaml:1394
   - name: weft.services.ReportServiceInstanceGone
     naming:
@@ -874,58 +829,40 @@ commands:
       display: Bind a component to a service instance
     input:
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
-      # The service instance's account, stated by the caller so the instance (account-mismatch)
-      # and the component's formation (cross-account) are each checked against it: a guard reads
-      # one row at a time.
+      # The service instance's account, stated by the caller so the instance (scope-mismatch) is
+      # checked against it.
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
+      # cloudspec (layer rule): the component's workload identity, in place of its formation and
+      # name (records of the composition, layer 9).
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: mode, type: weft.services.BindingMode}
     outcomes:
       # hardening pass 1 D3: the stated account is the account the caller acts in; with
-      # account-mismatch and cross-account below, the instance and the formation are both of it.
+      # scope-mismatch below, the instance is of it.
       - name: not-callers-scope
         when: scope_id != caller.scope_id
         error: weft.services.NotFound
       - name: no-such-instance
         when_related: {via: input.service_instance_id, exists: false}
         error: weft.services.ServiceInstanceNotFound
-      - name: no-such-formation
-        when_related: {via: input.formation_id, exists: false}
-        error: weft.services.FormationNotFound
       # hardening pass 1 disclosure (catalog.yaml:1424): an instance of another account answers
       # as a missing one, ahead of every state check (was AccountMismatch). ESS answers every
       # existence check before any predicate, so it cannot sit directly after no-such-instance.
       - name: scope-mismatch
         when_related: {via: input.service_instance_id, predicate: scope_id != input.scope_id}
         error: weft.services.ServiceInstanceNotFound
-      # § 1 lines 139-140: nothing crosses accounts unless an Export names it. An Export names an
-      # endpoint (`weft.formations.Export.endpoint_id`), never a service instance, so a component
-      # of another account is always refused. With account-mismatch above, the stated account is
-      # the instance's.
-      # hardening pass 1 disclosure (catalog.yaml:1431): a formation of another account answers as
-      # a missing one, right after the existence check (was CrossAccount).
-      - name: cross-scope
-        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
-        error: weft.services.FormationNotFound
       - name: instance-unavailable
         when_related:
           via: input.service_instance_id
           predicate: {state: [Deprovisioning, Gone]}
         error: weft.services.ServiceInstanceUnavailable
-      - name: outside-scope
-        when_related:
-          via: input.service_instance_id
-          predicate: {all: ["defined(formation_id)", "formation_id != input.formation_id"]}
-        error: weft.services.OutsideServiceScope
       - name: already-bound
         when_related:
           entity: weft.services.ServiceBinding
           where:
             all:
               - "service_instance_id == input.service_instance_id"
-              - "formation_id == input.formation_id"
-              - "component == input.component"
+              - "identity == input.identity"
               - "mode == input.mode"
               - "state == Active"
           exists: true
@@ -936,21 +873,25 @@ commands:
       - name: mode-not-offered
         external: the offering's API has no operation of this mode
         error: weft.services.ModeNotOffered
+      # cloudspec (layer rule): weft refused an instance of another formation than the
+      # component's; formations are the composition's (layer 9). That the identity lies in the
+      # instance's scope is the identity domain's record (its path), so the check is external.
+      - name: outside-scope
+        external: the workload identity does not lie in the service instance's scope
+        error: weft.services.OutsideServiceScope
       - name: bound
         creates: weft.services.ServiceBinding
         instance: binding_id
         sets:
           service_instance_id: input.service_instance_id
-          formation_id: input.formation_id
-          component: input.component
+          identity: input.identity
           mode: input.mode
         emits: [weft.services.ServiceBound]
         payload:
           weft.services.ServiceBound:
             binding_id: {generated: true}
             service_instance_id: input.service_instance_id
-            formation_id: input.formation_id
-            component: input.component
+            identity: input.identity
             mode: input.mode
 
   # § 13 lines 536-539: end a component's access.
@@ -992,17 +933,15 @@ commands:
 
   # § 13 lines 536-539: "no binding, no access". The data plane asks before it lets a caller's
   # workload identity use a service instance; the answer is no unless an active binding of the
-  # mode names the caller's component.
-  # OPEN: how the caller's workload identity (§ 8 line 425) is resolved to its formation and
-  # component; the identity domain does that, and this command takes the resolved parts.
+  # mode names the caller's workload identity. cloudspec (layer rule): the identity itself, not
+  # its formation and component (records of the composition, layer 9), so nothing resolves it.
   # weft@6798e7d:ess/7-services/catalog.yaml:1544
   - name: weft.services.CheckServiceAccess
     naming:
       display: Check a component's access to a service instance
     input:
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: mode, type: weft.services.BindingMode}
     # Reads the bindings only (one kind of related row per command). An unknown instance has no
     # binding and a gone one none active (DeprovisionServiceInstance refuses while bound), so both
@@ -1017,8 +956,7 @@ commands:
           where:
             all:
               - "service_instance_id == input.service_instance_id"
-              - "formation_id == input.formation_id"
-              - "component == input.component"
+              - "identity == input.identity"
               - "mode == input.mode"
               - "state == Active"
           exists: false
@@ -1272,7 +1210,6 @@ views:
     fields:
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: name, type: String}
       - {name: offering_id, type: weft.shared.OfferingId}
       - {name: kind, type: weft.services.OfferingKind}
@@ -1294,7 +1231,6 @@ views:
     fields:
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: Optional<weft.shared.FormationId>}
       - {name: name, type: String}
       - {name: offering_id, type: weft.shared.OfferingId}
       - {name: kind, type: weft.services.OfferingKind}
@@ -1316,7 +1252,6 @@ views:
       - {name: offering_id, type: weft.shared.OfferingId}
       - {name: kind, type: weft.services.OfferingKind}
       - {name: engine_id, type: weft.shared.EngineId}
-      - {name: system_formation_id, type: weft.shared.FormationId}
       - {name: state, type: weft.services.ServiceInstance.State}
 
   # § 13 lines 536-539 ServiceBinding: who may use one service instance, in which mode.
@@ -1330,25 +1265,24 @@ views:
     fields:
       - {name: binding_id, type: weft.shared.ServiceBindingId}
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: mode, type: weft.services.BindingMode}
       - {name: state, type: weft.services.ServiceBinding.State}
 
-  # § 13 lines 536-539 ServiceBinding: the service instances the components of one formation are
-  # bound to.
+  # § 13 lines 536-539 ServiceBinding: the service instances one workload identity is bound to.
+  # cloudspec (layer rule): weft's FormationServiceBindings, by the component's workload identity
+  # in place of its formation (a record of the composition, layer 9).
   # weft@6798e7d:ess/7-services/catalog.yaml:2380
-  - name: weft.services.FormationServiceBindings
+  - name: weft.services.WorkloadServiceBindings
     source: weft.services.ServiceBinding
     consistency: read_your_writes
     params:
-      - {name: formation_id, type: weft.shared.FormationId}
-    filter: formation_id == param.formation_id
+      - {name: identity, type: weft.shared.WorkloadIdentity}
+    filter: identity == param.identity
     fields:
       - {name: binding_id, type: weft.shared.ServiceBindingId}
       - {name: service_instance_id, type: weft.shared.ServiceInstanceId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: mode, type: weft.services.BindingMode}
       - {name: state, type: weft.services.ServiceBinding.State}
 

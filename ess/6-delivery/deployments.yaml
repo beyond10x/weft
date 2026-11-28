@@ -357,6 +357,9 @@ events:
     fields:
       - {name: step_id, type: weft.shared.ReleaseStepId}
       - {name: release_id, type: weft.shared.ReleaseId}
+      # story:cloud-blocks-layer-refactor-pin: the release's scope, which workloads.SetWorkloadReplicas
+      # takes since cloudspec's scope isolation (r1-set-workload-replicas).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: position, type: Integer}
       - {name: kind, type: weft.deployments.StepKind}
       - {name: component, type: Optional<weft.shared.ComponentName>}
@@ -716,37 +719,42 @@ commands:
         error: weft.deployments.PreviousStepIncomplete
       # hardening pass 1 (StartReleaseStep job_id): a hook step's job runs a workload of the
       # release's own environment, never another formation's or account's.
+      # story:cloud-blocks-layer-refactor-pin (cloudspec layer rule): the workload names no
+      # environment; the environment a workload realizes is weft.architecture.ComponentWorkload.
+      # Written as: no assignment of the job's workload lies in the release's environment (a job
+      # or workload no assignment names is refused, default deny).
       - name: job-outside-release
+        when: defined(job_id)
         when_related:
-          entity: weft.workloads.Workload
+          entity: weft.architecture.ComponentWorkload
           where:
             all:
               - exists:
                   in: {entity: weft.workloads.Job}
                   as: j
                   that: {all: [j.job_id == input.job_id, j.workload_id == workload_id]}
-              - not:
-                  exists:
-                    in: {entity: weft.deployments.Release}
-                    as: r
-                    that: {all: [r.release_id == subject.release_id, r.environment_id == environment_id]}
-          exists: true
+              - exists:
+                  in: {entity: weft.deployments.Release}
+                  as: r
+                  that: {all: [r.release_id == subject.release_id, r.environment_id == environment_id]}
+          exists: false
         error: weft.deployments.OutsideRelease
       # hardening pass 1 (StartReleaseStep, same class as job_id): the workload a rollout step rolls
       # out is one of the release's environment; ReleaseStepStarted sets that workload's desired
-      # count (section 14 R1), so another account's workload is never scaled from here.
+      # count (section 14 R1), so another account's workload is never scaled from here. Written
+      # as `job-outside-release`: no assignment of the workload lies in the release's environment.
       - name: workload-outside-release
+        when: defined(workload_id)
         when_related:
-          entity: weft.workloads.Workload
+          entity: weft.architecture.ComponentWorkload
           where:
             all:
               - workload_id == input.workload_id
-              - not:
-                  exists:
-                    in: {entity: weft.deployments.Release}
-                    as: r
-                    that: {all: [r.release_id == subject.release_id, r.environment_id == environment_id]}
-          exists: true
+              - exists:
+                  in: {entity: weft.deployments.Release}
+                  as: r
+                  that: {all: [r.release_id == subject.release_id, r.environment_id == environment_id]}
+          exists: false
         error: weft.deployments.OutsideRelease
       - name: started
         moves: weft.deployments.ReleaseStep.start
@@ -760,6 +768,7 @@ commands:
           weft.deployments.ReleaseStepStarted:
             step_id: input.step_id
             release_id: {related: {via: input.step_id, field: release_id}}
+            scope_id: {related: {via: [input.step_id, release_id], field: scope_id}}
             position: {related: {via: input.step_id, field: position}}
             kind: {related: {via: input.step_id, field: kind}}
             component: {related: {via: input.step_id, field: component}}
@@ -1044,21 +1053,23 @@ commands:
         error: weft.deployments.StepMismatch
       # hardening pass 1 (RecordDrift instance_id): the instance a drift names runs a workload of
       # the release's own environment, never another formation's or account's.
+      # story:cloud-blocks-layer-refactor-pin: written as StartReleaseStep `job-outside-release`,
+      # over weft.architecture.ComponentWorkload (the workload names no environment).
       - name: instance-outside-release
+        when: defined(instance_id)
         when_related:
-          entity: weft.workloads.Workload
+          entity: weft.architecture.ComponentWorkload
           where:
             all:
               - exists:
                   in: {entity: weft.workloads.Instance}
                   as: i
                   that: {all: [i.instance_id == input.instance_id, i.workload_id == workload_id]}
-              - not:
-                  exists:
-                    in: {entity: weft.deployments.Release}
-                    as: r
-                    that: {all: [r.release_id == input.release_id, r.environment_id == environment_id]}
-          exists: true
+              - exists:
+                  in: {entity: weft.deployments.Release}
+                  as: r
+                  that: {all: [r.release_id == input.release_id, r.environment_id == environment_id]}
+          exists: false
         error: weft.deployments.OutsideRelease
       - name: detected
         creates: weft.deployments.Drift

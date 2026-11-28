@@ -19,11 +19,14 @@ entities:
   # A route (§ 3) sends to one component of a formation; the instances of that component's
   # workload are its backends. One row per instance that was ever ready, kept from the readiness
   # events of weft.workloads. The ready instances of a route are the view RouteBackends (the rows
-  # of the route's formation and component in state Ready).
+  # of each workload of the route's component in state Ready).
   # OPEN: a route names a formation and a component, not an environment, while a workload is one
-  # environment's (workloads.Workload.environment_id; formations.yaml OPEN "whether each
-  # environment gets its own hosts"). Taken: the edge serves every environment's ready instance
-  # behind the route until per-environment hosts are decided.
+  # environment's (formations.yaml OPEN "whether each environment gets its own hosts"). Taken: the
+  # edge serves every environment's ready instance behind the route until per-environment hosts
+  # are decided.
+  # story:cloud-blocks-layer-refactor-pin (cloudspec layer rule): the workload names no formation
+  # or environment, so the row keeps the workload's component-level workload identity in their
+  # place; which workloads realize the route's component is weft.architecture.FormationWorkloads.
   - name: weft.edge.RouteBackend
     naming:
       summary: One instance behind the routes to its component, and whether it gets traffic.
@@ -35,10 +38,8 @@ entities:
         type: weft.shared.InstanceId
       - name: workload_id
         type: weft.shared.WorkloadId
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: environment_id
-        type: weft.shared.EnvironmentId
+      - name: identity
+        type: weft.shared.WorkloadIdentity
       - name: component
         type: weft.shared.ComponentName
     relations:
@@ -52,16 +53,6 @@ entities:
         target: weft.workloads.Workload
         cardinality: one
         via: workload_id
-      - name: formation
-        kind: references
-        target: weft.architecture.Formation
-        cardinality: one
-        via: formation_id
-      - name: environment
-        kind: references
-        target: weft.architecture.Environment
-        cardinality: one
-        via: environment_id
     lifecycle:
       initial: Ready
       states:
@@ -109,7 +100,7 @@ entities:
     relations:
       - name: route
         kind: references
-        target: weft.edge.Route
+        target: weft.architecture.Route
         cardinality: one
         via: route_id
       - name: service
@@ -183,6 +174,9 @@ events:
     fields:
       - {name: held_request_id, type: weft.shared.HeldRequestId}
       - {name: service_id, type: weft.shared.ServiceId}
+      # story:cloud-blocks-layer-refactor-pin: the service's scope, which workloads.WakeService
+      # takes since cloudspec's scope isolation (copied from the service).
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: deadline_at, type: Timestamp}
 
   - name: weft.edge.HeldRequestForwarded
@@ -234,8 +228,7 @@ commands:
         sets:
           instance_id: input.instance_id
           workload_id: input.workload_id
-          formation_id: {related: {via: input.workload_id, field: formation_id}}
-          environment_id: {related: {via: input.workload_id, field: environment_id}}
+          identity: {related: {via: input.workload_id, field: identity}}
           component: {related: {via: input.workload_id, field: component}}
         emits: [weft.edge.BackendSetChanged]
         payload:
@@ -378,6 +371,7 @@ commands:
           weft.edge.WakeRequested:
             held_request_id: {generated: true}
             service_id: input.service_id
+            scope_id: {related: {via: input.service_id, field: scope_id}}
             deadline_at: input.deadline_at
 
   # § 4 "Sleep and wake": the edge "forwards the request when one is ready". Bound to this
@@ -461,20 +455,19 @@ commands:
 
 views:
   # § 15 "Readiness gates traffic: an edge route ... forward[s] only to ready instances". The
-  # ready instances behind a route: the edge reads the route's formation and its component's name
-  # (weft.formations Route and Component) and passes them here.
+  # ready instances behind a route: the edge reads the workloads of the route's component
+  # (weft.architecture.Route and FormationWorkloads) and asks for each workload's here.
   - name: weft.edge.RouteBackends
     source: weft.edge.RouteBackend
     consistency: read_your_writes
     params:
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: component, type: weft.shared.ComponentName}
-    filter: {all: [formation_id == param.formation_id, component == param.component, state == Ready]}
+      - {name: workload_id, type: weft.shared.WorkloadId}
+    filter: {all: [workload_id == param.workload_id, state == Ready]}
     fields:
       - {name: backend_id, type: weft.shared.RouteBackendId}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
 
   # Every backend the edge knows, ready or not.
   - name: weft.edge.Backends
@@ -484,8 +477,7 @@ views:
       - {name: backend_id, type: weft.shared.RouteBackendId}
       - {name: instance_id, type: weft.shared.InstanceId}
       - {name: workload_id, type: weft.shared.WorkloadId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: identity, type: weft.shared.WorkloadIdentity}
       - {name: component, type: weft.shared.ComponentName}
       - {name: state, type: weft.edge.RouteBackend.State}
 

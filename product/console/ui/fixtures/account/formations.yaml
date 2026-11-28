@@ -20,6 +20,19 @@ views:
       - {environment_id: b34643e2-f824-4064-8be9-56b5c6c5b150, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: production, quota_slice: [{resource_class: cpu, amount: 12}, {resource_class: memory-gib, amount: 48}], state: Active}
       - {environment_id: 6e17cf81-ed4e-4a41-b70b-acb57e61f00b, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: staging, quota_slice: [{resource_class: cpu, amount: 4}, {resource_class: memory-gib, amount: 16}], state: Active}
       - {environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, name: production, quota_slice: [{resource_class: cpu, amount: 32}, {resource_class: memory-gib, amount: 128}], state: Active}
+  weft.architecture.FormationWorkloads:
+    rows:
+      - {component_workload_id: 3e40161c-64ad-479f-8205-39cc8cd074da, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, formation_revision_id: 4a022f77-d82f-4baf-8a5d-536e5fa7e31d, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, component: web, workload_id: e340b7d2-9782-472b-91dd-934f220fa355}
+      - {component_workload_id: c75fc42c-f162-4593-8ee7-ebb285cfcc8b, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, formation_revision_id: 4a022f77-d82f-4baf-8a5d-536e5fa7e31d, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, component: api, workload_id: 664cb8ca-6299-486d-9342-87a8a94c514c}
+      - {component_workload_id: b5daa508-9626-470d-8352-ad693fd590c0, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, formation_revision_id: 4a022f77-d82f-4baf-8a5d-536e5fa7e31d, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, component_id: f7335202-8303-4f58-be18-ca96aa2033ed, component: worker, workload_id: bd74f8d4-4242-46ab-b929-8b5b2117515c}
+      - {component_workload_id: 7854e93f-f03e-493c-852b-9774f925a5b7, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, formation_revision_id: 4a022f77-d82f-4baf-8a5d-536e5fa7e31d, environment_id: d5ad7afa-794f-4170-94bb-424b7d1c4409, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, component: web, workload_id: d0ad3c1b-564c-4d96-918e-bc03d8614dc3}
+      - {component_workload_id: eef04273-d705-464f-80aa-f6df9ae3ccc7, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, formation_revision_id: 4a022f77-d82f-4baf-8a5d-536e5fa7e31d, environment_id: b3cb546a-543a-4287-9dee-1b3aaa52c242, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, component: web, workload_id: 1b1f2f39-6eab-4e42-ae0b-bc196be20ee1}
+      - {component_workload_id: b1e980fd-3ea2-4e00-88ae-62be6e8d8de2, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, formation_revision_id: 77a10478-bb67-4952-8539-915bef9ec743, environment_id: b34643e2-f824-4064-8be9-56b5c6c5b150, component_id: 54c8a28f-f6e2-4a35-bc38-2ecf9c43b817, component: ledger-api, workload_id: 8231aec4-0414-440c-bc4b-8e8ed6bd02ec}
+      - {component_workload_id: f7033ef9-ca50-403f-8efa-80f5a2be63c7, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, formation_revision_id: 77a10478-bb67-4952-8539-915bef9ec743, environment_id: b34643e2-f824-4064-8be9-56b5c6c5b150, component_id: f998fd2b-ace8-4f6d-aaef-0a2e1dfa0726, component: reconciler, workload_id: f7dc8ac3-135e-4c5a-9f12-43d72958a082}
+      - {component_workload_id: 252d631e-c1dd-4a47-8574-807a2eebbca3, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, formation_revision_id: d3288612-4a7e-4b31-b35d-d63fa5a77600, environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, component_id: b749c8ea-c9aa-417b-83ea-36a8fe3d1d37, component: collector, workload_id: b5304e37-d39e-42c8-b6a5-07df3d834c53}
+      - {component_workload_id: dec37c35-4e7a-4d1a-8497-696ee447b677, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, formation_revision_id: d3288612-4a7e-4b31-b35d-d63fa5a77600, environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, component_id: 03053909-963f-49bb-9c10-532a40e84f2b, component: transformer, workload_id: 80199a5f-679b-41f8-b8be-9551f46080ae}
+      - {component_workload_id: 22ea9e5b-dcd1-415b-898d-201e91a3bf08, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, formation_revision_id: d3288612-4a7e-4b31-b35d-d63fa5a77600, environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, component_id: 8599ae51-a49c-4164-a5bc-a390f0061fda, component: nightly-compact, workload_id: 72f7947e-ba5f-4728-95c4-4af0d876dfb0}
+      - {component_workload_id: e23d4a17-b359-449a-83ce-f56f9089d6c4, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, formation_revision_id: d3288612-4a7e-4b31-b35d-d63fa5a77600, environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, component_id: 488e3cd4-b46e-4909-81e6-96fc445ed718, component: importer, workload_id: 42ce5160-0fe2-4029-880b-09d264cd12a4}
   weft.architecture.FormationComponents:
     rows:
       - {component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: web, internal_name: web.storefront.weft.internal, on_border: true}
@@ -49,11 +62,11 @@ views:
       - {link_id: d972cdc0-7d6b-4751-874e-0f2094abb340, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, caller_component_id: 8599ae51-a49c-4164-a5bc-a390f0061fda, caller_name: nightly-compact, target_component_id: 03053909-963f-49bb-9c10-532a40e84f2b, target_name: transformer, protocol: Tcp, port: 6000}
   weft.edge.Endpoints:
     rows:
-      - {endpoint_id: b9a63daf-8564-4167-ac55-9cd4c2d5b741, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, host: shop.example.test}
-      - {endpoint_id: d1cf4ebb-2fb2-41d6-8366-33743affef79, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, host: api.shop.example.test}
-      - {endpoint_id: 6154bff7-b322-45e2-8f4b-918d4e37a69d, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, host: ledger.example.test}
-      - {endpoint_id: 54892932-7654-41b2-9860-d9a1275fc5c8, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, host: collect.example.test}
-  weft.edge.FormationBorder:
+      - {endpoint_id: b9a63daf-8564-4167-ac55-9cd4c2d5b741, host: shop.example.test}
+      - {endpoint_id: d1cf4ebb-2fb2-41d6-8366-33743affef79, host: api.shop.example.test}
+      - {endpoint_id: 6154bff7-b322-45e2-8f4b-918d4e37a69d, host: ledger.example.test}
+      - {endpoint_id: 54892932-7654-41b2-9860-d9a1275fc5c8, host: collect.example.test}
+  weft.architecture.FormationBorder:
     rows:
       - {route_id: 610cfd0b-e2d1-4b7e-a5d9-e8badf890549, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, endpoint_id: b9a63daf-8564-4167-ac55-9cd4c2d5b741, host: shop.example.test, path: /, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, component_name: web, port: 8000}
       - {route_id: 658c9563-30f4-4e43-9a6c-686a7649fcfa, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, endpoint_id: d1cf4ebb-2fb2-41d6-8366-33743affef79, host: api.shop.example.test, path: /v1, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, component_name: api, port: 8080}

@@ -41,6 +41,7 @@ chain:
   - weft.infrastructure.ProvisionPoolNode
   - weft.infrastructure.JoinNode
   - weft.infrastructure.RecordNodeObservation
+  - weft.inventory.ReportNodeCapacity
   - weft.nodes.OpenNodeSession
   - weft.cluster.CreateDefaultCluster
   - weft.accounts.CreateTenant
@@ -59,6 +60,7 @@ chain:
   - weft.architecture.CreateEnvironment
   - weft.artifacts.RegisterArtifact
   - weft.workloads.DefineWorkload
+  - weft.architecture.AssignWorkload
   - weft.workloads.DefineService
   - weft.workloads.RequestReplica
   - weft.workloads.CreateInstance
@@ -127,8 +129,14 @@ setup:
     repeat: "${per_pool}"
     command: weft.infrastructure.RecordNodeObservation
     actor: weft.actors.NodeAgent
-    input: {node_id: "${node_s_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}
+    input: {node_id: "${node_s_${i}}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}
     expect: ready
+  - label: capacity-shared
+    repeat: "${per_pool}"
+    command: weft.inventory.ReportNodeCapacity
+    actor: weft.actors.NodeAgent
+    input: {node_id: "${node_s_${i}}", capacity: "${capacity}", observed_at: "${now}"}
+    expect: reported
   - label: session-shared
     repeat: "${per_pool}"
     command: weft.nodes.OpenNodeSession
@@ -234,9 +242,12 @@ setup:
   - {label: join-g0, repeat: "${per_pool}", command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", join_token: "${token_g0_${i}}"}, expect: joined}
   - {label: join-g1, repeat: "${per_pool}", command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", join_token: "${token_g1_${i}}"}, expect: joined}
   - {label: join-g2, repeat: "${per_pool}", command: weft.infrastructure.JoinNode, actor: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", join_token: "${token_g2_${i}}"}, expect: joined}
-  - {label: observe-g0, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
-  - {label: observe-g1, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
-  - {label: observe-g2, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", capacity: "${capacity}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: observe-g0, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: capacity-g0, repeat: "${per_pool}", command: weft.inventory.ReportNodeCapacity, actor: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", capacity: "${capacity}", observed_at: "${now}"}, expect: reported}
+  - {label: observe-g1, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: capacity-g1, repeat: "${per_pool}", command: weft.inventory.ReportNodeCapacity, actor: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", capacity: "${capacity}", observed_at: "${now}"}, expect: reported}
+  - {label: observe-g2, repeat: "${per_pool}", command: weft.infrastructure.RecordNodeObservation, actor: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", isolation_facts: "${isolation_facts}", observed_at: "${now}"}, expect: ready}
+  - {label: capacity-g2, repeat: "${per_pool}", command: weft.inventory.ReportNodeCapacity, actor: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", capacity: "${capacity}", observed_at: "${now}"}, expect: reported}
   - {label: session-g0, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_g0_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened, bind: {"session_g0_${i}": session_id}}
   - {label: session-g1, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_g1_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
   - {label: session-g2, repeat: "${per_pool}", command: weft.nodes.OpenNodeSession, actor: weft.actors.ControlPlane, relays: weft.actors.NodeAgent, input: {node_id: "${node_g2_${i}}", agent_version: "1.0", received_at: "${now}"}, expect: opened}
@@ -329,29 +340,30 @@ setup:
     caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}
     input: {formation_id: "${formation_site}", scope_id: "${scope_b}", name: site}
     expect: added
+    bind: {site_comp: component_id}
   - label: link-shop-web-api
     command: weft.architecture.AddLink
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {formation_id: "${formation_shop}", caller_component_id: "${shop_comp_0}", target_component_id: "${shop_comp_2}", protocol: Http, port: 8080}
+    input: {formation_id: "${formation_shop}", scope_id: "${scope_a}", caller_component_id: "${shop_comp_0}", target_component_id: "${shop_comp_2}", protocol: Http, port: 8080}
     expect: added
   - label: link-shop-mobile-api
     command: weft.architecture.AddLink
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {formation_id: "${formation_shop}", caller_component_id: "${shop_comp_1}", target_component_id: "${shop_comp_2}", protocol: Http, port: 8080}
+    input: {formation_id: "${formation_shop}", scope_id: "${scope_a}", caller_component_id: "${shop_comp_1}", target_component_id: "${shop_comp_2}", protocol: Http, port: 8080}
     expect: added
   - label: link-etl-ingest-transform
     command: weft.architecture.AddLink
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {formation_id: "${formation_etl}", caller_component_id: "${etl_comp_0}", target_component_id: "${etl_comp_1}", protocol: Grpc, port: 9000}
+    input: {formation_id: "${formation_etl}", scope_id: "${scope_a}", caller_component_id: "${etl_comp_0}", target_component_id: "${etl_comp_1}", protocol: Grpc, port: 9000}
     expect: added
   - label: link-etl-transform-load
     command: weft.architecture.AddLink
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {formation_id: "${formation_etl}", caller_component_id: "${etl_comp_1}", target_component_id: "${etl_comp_2}", protocol: Grpc, port: 9000}
+    input: {formation_id: "${formation_etl}", scope_id: "${scope_a}", caller_component_id: "${etl_comp_1}", target_component_id: "${etl_comp_2}", protocol: Grpc, port: 9000}
     expect: added
   - {label: commit-shop, command: weft.architecture.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}, input: {formation_id: "${formation_shop}", scope_id: "${scope_a}"}, expect: committed, bind: {rev_shop: revision_id}}
   - {label: commit-etl, command: weft.architecture.CommitRevision, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}, input: {formation_id: "${formation_etl}", scope_id: "${scope_a}"}, expect: committed, bind: {rev_etl: revision_id}}
@@ -368,24 +380,44 @@ setup:
     command: weft.workloads.DefineWorkload
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {scope_id: "${scope_a}", formation_id: "${formation_shop}", formation_revision_id: "${rev_shop}", environment_id: "${env_shop}", component: "${shop_c_${i}}", package_kind: Image, artifact_digest: "sha256:acme", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
+    input: {scope_id: "${scope_a}", identity: "acme/shop/prod/${shop_c_${i}}", component: "${shop_c_${i}}", package_kind: Image, artifact_digest: "sha256:acme", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
     expect: defined
     bind: {"shop_w_${i}": workload_id}
+  - label: assign-shop
+    repeat: 3
+    command: weft.architecture.AssignWorkload
+    actor: weft.actors.Deployer
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
+    input: {formation_id: "${formation_shop}", scope_id: "${scope_a}", formation_revision_id: "${rev_shop}", environment_id: "${env_shop}", component_id: "${shop_comp_${i}}", workload_id: "${shop_w_${i}}"}
+    expect: assigned
   - label: workload-etl
     repeat: 3
     command: weft.workloads.DefineWorkload
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {scope_id: "${scope_a}", formation_id: "${formation_etl}", formation_revision_id: "${rev_etl}", environment_id: "${env_etl}", component: "${etl_c_${i}}", package_kind: Image, artifact_digest: "sha256:acme", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
+    input: {scope_id: "${scope_a}", identity: "acme/etl/prod/${etl_c_${i}}", component: "${etl_c_${i}}", package_kind: Image, artifact_digest: "sha256:acme", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
     expect: defined
     bind: {"etl_w_${i}": workload_id}
+  - label: assign-etl
+    repeat: 3
+    command: weft.architecture.AssignWorkload
+    actor: weft.actors.Deployer
+    caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
+    input: {formation_id: "${formation_etl}", scope_id: "${scope_a}", formation_revision_id: "${rev_etl}", environment_id: "${env_etl}", component_id: "${etl_comp_${i}}", workload_id: "${etl_w_${i}}"}
+    expect: assigned
   - label: workload-site
     command: weft.workloads.DefineWorkload
     actor: weft.actors.Deployer
     caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}
-    input: {scope_id: "${scope_b}", formation_id: "${formation_site}", formation_revision_id: "${rev_site}", environment_id: "${env_site}", component: site, package_kind: Image, artifact_digest: "sha256:globex", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
+    input: {scope_id: "${scope_b}", identity: globex/site/prod/site, component: site, package_kind: Image, artifact_digest: "sha256:globex", runtime_id: "${runtime_id}", isolation: Container, shape: Service, settings: {shape: service, value: {stateful: false}}, claims: "${claims}", processes: "${processes}", restart_policy: "${restart_policy}", priority: standard}
     expect: defined
     bind: {site_w: workload_id}
+  - label: assign-site
+    command: weft.architecture.AssignWorkload
+    actor: weft.actors.Deployer
+    caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}
+    input: {formation_id: "${formation_site}", scope_id: "${scope_b}", formation_revision_id: "${rev_site}", environment_id: "${env_site}", component_id: "${site_comp}", workload_id: "${site_w}"}
+    expect: assigned
   - {label: service-shop, repeat: 3, command: weft.workloads.DefineService, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}, input: {workload_id: "${shop_w_${i}}", scope_id: "${scope_a}", replicas: "${replicas}", scale_rule: "${scale_rule}", disruption_budget: null, sleep_policy: null, wake_deadline: null}, expect: defined, bind: {"shop_s_${i}": service_id}}
   - {label: service-etl, repeat: 3, command: weft.workloads.DefineService, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}, input: {workload_id: "${etl_w_${i}}", scope_id: "${scope_a}", replicas: "${replicas}", scale_rule: "${scale_rule}", disruption_budget: null, sleep_policy: null, wake_deadline: null}, expect: defined, bind: {"etl_s_${i}": service_id}}
   - {label: service-site, command: weft.workloads.DefineService, actor: weft.actors.Deployer, caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}, input: {workload_id: "${site_w}", scope_id: "${scope_b}", replicas: "${replicas}", scale_rule: "${scale_rule}", disruption_budget: null, sleep_policy: null, wake_deadline: null}, expect: defined, bind: {site_s: service_id}}
@@ -395,7 +427,7 @@ ticks: 6
 traffic:
   - name: shop-fan-in
     formation: "${formation_shop}"
-    account: "${account_a}"
+    scope: {scope_id: "${scope_a}", cloud_id: "${cloud_id}"}
     pattern: FanIn
     rate: "${rate}"
     step:
@@ -405,7 +437,7 @@ traffic:
       input: {service_id: "${shop_s_2}", replicas: "${replicas}", metric_value: "${rate}"}
   - name: etl-pipeline
     formation: "${formation_etl}"
-    account: "${account_a}"
+    scope: {scope_id: "${scope_a}", cloud_id: "${cloud_id}"}
     pattern: Pipeline
     rate: "${rate}"
     step:
@@ -465,9 +497,10 @@ controllers:
     command: weft.workloads.RequestReplica
     actor: weft.actors.Scheduler
     input: {service_id: row.service_id, replica_index: row.running_replicas}
-  # The vendored SchedulingRequest holds the scope and the formation, not the tenant or the
-  # cluster: one scheduler step per scope gives the scope's tenant and the cluster its formations
-  # are pinned to.
+  # The vendored SchedulingRequest holds the scope, not the tenant, the formation or the cluster:
+  # one scheduler step per scope gives the scope's tenant and the cluster its formations are
+  # pinned to, and tries each of the scope's formations (PlaceInstance refuses a formation the
+  # instance's workload is not assigned to, instance-of-other-formation).
   - name: scheduler-place-acme
     limit: 64
     rounds: 2
@@ -475,10 +508,10 @@ controllers:
     filter: {state: Pending, scope_id: "${scope_a}"}
     command: weft.scheduling.PlaceInstance
     actor: weft.actors.Scheduler
-    input: {request_id: row.request_id, tenant_id: "${tenant_a}", scope_id: row.scope_id, cluster_id: "${cluster_a}", formation_id: row.formation_id, node_id: cand.node_id, node_pool_id: cand.node_pool_id, zone: cand.zone, isolation: vary.isolation, bindings: [], cluster_node_pool_id: null, topology_group_id: null, peer_groups: [], decided_at: "${now}"}
+    input: {request_id: row.request_id, tenant_id: "${tenant_a}", scope_id: row.scope_id, cluster_id: "${cluster_a}", formation_id: vary.formation, node_id: cand.node_id, node_pool_id: cand.node_pool_id, zone: cand.zone, isolation: vary.isolation, bindings: [], cluster_node_pool_id: null, topology_group_id: null, peer_groups: [], decided_at: "${now}"}
     each:
       view: weft.infrastructure.Nodes
-      vary: {isolation: [Container, MicroVm]}
+      vary: {isolation: [Container, MicroVm], formation: ["${formation_shop}", "${formation_etl}"]}
       spread: true
   - name: scheduler-place-globex
     limit: 64
@@ -487,10 +520,10 @@ controllers:
     filter: {state: Pending, scope_id: "${scope_b}"}
     command: weft.scheduling.PlaceInstance
     actor: weft.actors.Scheduler
-    input: {request_id: row.request_id, tenant_id: "${tenant_b}", scope_id: row.scope_id, cluster_id: "${default_cluster}", formation_id: row.formation_id, node_id: cand.node_id, node_pool_id: cand.node_pool_id, zone: cand.zone, isolation: vary.isolation, bindings: [], cluster_node_pool_id: null, topology_group_id: null, peer_groups: [], decided_at: "${now}"}
+    input: {request_id: row.request_id, tenant_id: "${tenant_b}", scope_id: row.scope_id, cluster_id: "${default_cluster}", formation_id: vary.formation, node_id: cand.node_id, node_pool_id: cand.node_pool_id, zone: cand.zone, isolation: vary.isolation, bindings: [], cluster_node_pool_id: null, topology_group_id: null, peer_groups: [], decided_at: "${now}"}
     each:
       view: weft.infrastructure.Nodes
-      vary: {isolation: [Container, MicroVm]}
+      vary: {isolation: [Container, MicroVm], formation: ["${formation_site}"]}
       spread: true
   - name: node-verify-artifact
     limit: 64

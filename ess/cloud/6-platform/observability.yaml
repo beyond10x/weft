@@ -381,10 +381,12 @@ entities:
     fields:
       - name: scope_id
         type: weft.shared.ScopeId
-      - name: formation_id
-        type: weft.shared.FormationId
-      - name: environment_id
-        type: Optional<weft.shared.EnvironmentId>
+      # cloudspec (layer rule): the formation, or the formation and environment, the policy covers,
+      # named by the workload-identity prefix of its components (the formation segment, or the
+      # formation and environment segments), not by the composition's ids; a layer-6 block names no
+      # layer-9 record. The longer prefix wins over the shorter.
+      - name: path
+        type: weft.shared.WorkloadIdentity
       # Share of traces kept, 0 to 1.
       - name: trace_sampling_ratio
         type: Binary64
@@ -415,8 +417,6 @@ entities:
       - traces_retention_days <= 365
     relations:
       - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
-      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
-      - {name: environment, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
       - {name: logs_sink, kind: references, target: weft.observability.TelemetrySink, cardinality: one, via: logs_sink_id}
       - {name: metrics_sink, kind: references, target: weft.observability.TelemetrySink, cardinality: one, via: metrics_sink_id}
       - {name: traces_sink, kind: references, target: weft.observability.TelemetrySink, cardinality: one, via: traces_sink_id}
@@ -613,7 +613,7 @@ events:
   - name: weft.observability.TelemetryPolicySet
     fields:
       - {name: telemetry_policy_id, type: weft.shared.TelemetryPolicyId}
-      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: path, type: weft.shared.WorkloadIdentity}
 
   # weft@6798e7d:ess/5-runtime/observability.yaml:649
   - name: weft.observability.TelemetryPolicyRemoved
@@ -950,9 +950,6 @@ commands:
       - name: no-such-sink
         unknown_instance: true
         error: weft.observability.NotFound
-      # OPEN (hardening pass 1 D3): no caller tie here. ESS refuses a `when_subject` guard beside
-      # the row-set guards below (ESS-COMMAND-009, "one command reads one kind of related row in
-      # this cut"), so the sink's account is checked against the caller only by weft-api.
       # One guard per routed signal: a selector of one equality per guard is one synthesis can
       # arrange rows on both sides of; an `any:` of three is not (ESS-SYNTH-001).
       - name: in-use
@@ -982,6 +979,12 @@ commands:
               - state == Active
           count: {gte: 1}
         error: weft.observability.SinkInUse
+      # Scope isolation (story blocks-scope-isolation): the sink of another scope than the
+      # caller's answers like a missing one. External: ESS 0.99.2 refuses a when_subject guard
+      # beside the row-set guard above (ESS-COMMAND-009), and an external guard comes after it.
+      - name: not-callers-scope
+        external: the sink is of another scope than the caller's
+        error: weft.observability.NotFound
       - name: removed
         moves: weft.observability.TelemetrySink.remove
         instance: telemetry_sink_id
@@ -1041,9 +1044,6 @@ commands:
       - name: no-such-target
         unknown_instance: true
         error: weft.observability.NotFound
-      # OPEN (hardening pass 1 D3): no caller tie here. ESS refuses a `when_subject` guard beside
-      # the row-set guard below (ESS-COMMAND-009, "one command reads one kind of related row in
-      # this cut"), so the target's account is checked against the caller only by weft-api.
       - name: in-use
         when_related:
           entity: weft.observability.AlertRule
@@ -1053,6 +1053,12 @@ commands:
               - state == Active
           count: {gte: 1}
         error: weft.observability.TargetInUse
+      # Scope isolation (story blocks-scope-isolation): the target of another scope than the
+      # caller's answers like a missing one. External: ESS 0.99.2 refuses a when_subject guard
+      # beside the row-set guard above (ESS-COMMAND-009), and an external guard comes after it.
+      - name: not-callers-scope
+        external: the target is of another scope than the caller's
+        error: weft.observability.NotFound
       - name: removed
         moves: weft.observability.NotificationTarget.remove
         instance: notification_target_id
@@ -1302,7 +1308,7 @@ commands:
         wrong_state: true
         error: weft.observability.StateConflict
 
-  # Line 636-637. One active policy per formation (no environment) and one per environment.
+  # Line 636-637. One active policy per path: a formation prefix or a formation/environment prefix.
   # Default deny: the formation, the environment and every sink are the account's own, and each
   # sink lists the signal routed to it.
   # OPEN: which roles may write a policy. Taken: deployers and admins of the account.
@@ -1312,8 +1318,7 @@ commands:
       display: Set a telemetry policy
     input:
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+      - {name: path, type: weft.shared.WorkloadIdentity}
       - {name: trace_sampling_ratio, type: Binary64}
       - {name: keep_error_traces, type: Boolean}
       - {name: logs_retention_days, type: Integer}
@@ -1341,16 +1346,6 @@ commands:
             - traces_retention_days < 1
             - traces_retention_days > 365
         error: weft.observability.RetentionOutOfBounds
-      - name: unknown-formation
-        when_related:
-          via: input.formation_id
-          exists: false
-        error: weft.observability.UnknownFormation
-      - name: unknown-environment
-        when_related:
-          via: input.environment_id
-          exists: false
-        error: weft.observability.UnknownEnvironment
       - name: unknown-logs-sink
         when_related:
           via: input.logs_sink_id
@@ -1366,32 +1361,10 @@ commands:
           via: input.traces_sink_id
           exists: false
         error: weft.observability.UnknownSink
-      # hardening pass 1 disclosure (SetTelemetryPolicy formation_id, environment_id, logs_sink_id,
-      # metrics_sink_id, traces_sink_id): each row of another account answers like a missing one,
-      # right after the existence checks (ESS answers every existence check first) and before any
-      # state of the row is read.
-      - name: foreign-formation
-        when_related:
-          via: input.formation_id
-          predicate: scope_id != input.scope_id
-        error: weft.observability.UnknownFormation
-      # hardening pass 1 disclosure (SetTelemetryPolicy environment_id): an environment carries no
-      # account, so it is tied through its formation; an environment of another account's
-      # formation answers like a missing one. One of the account's own other formations still
-      # answers EnvironmentNotInFormation below.
-      - name: foreign-environment
-        when_related:
-          entity: weft.architecture.Environment
-          where:
-            all:
-              - environment_id == input.environment_id
-              - not:
-                  exists:
-                    as: f
-                    in: {entity: weft.architecture.Formation}
-                    that: {all: [{f.formation_id: {eq: {fact: formation_id}}}, f.scope_id == input.scope_id]}
-          exists: true
-        error: weft.observability.UnknownEnvironment
+      # hardening pass 1 disclosure (SetTelemetryPolicy logs_sink_id, metrics_sink_id,
+      # traces_sink_id): each row of another account answers like a missing one, right after the
+      # existence checks (ESS answers every existence check first) and before any state of the row
+      # is read.
       - name: foreign-logs-sink
         when_related:
           via: input.logs_sink_id
@@ -1407,16 +1380,6 @@ commands:
           via: input.traces_sink_id
           predicate: scope_id != input.scope_id
         error: weft.observability.UnknownSink
-      - name: formation-retired
-        when_related:
-          via: input.formation_id
-          predicate: state == Retired
-        error: weft.observability.FormationRetired
-      - name: environment-not-in-formation
-        when_related:
-          via: input.environment_id
-          predicate: formation_id != input.formation_id
-        error: weft.observability.EnvironmentNotInFormation
       - name: logs-sink-removed
         when_related:
           via: input.logs_sink_id
@@ -1458,24 +1421,26 @@ commands:
           entity: weft.observability.TelemetryPolicy
           where:
             all:
-              - formation_id == input.formation_id
-              - environment_id == input.environment_id
+              - path == input.path
               - state == Active
           count: {gte: 1}
         error: weft.observability.TelemetryPolicyExists
-      # `environment_id == input.environment_id` is unknown when both are absent, so the one
-      # formation-wide policy needs its own selector, or a second one would be written.
-      - name: formation-policy-exists
-        when_related:
-          entity: weft.observability.TelemetryPolicy
-          where:
-            all:
-              - formation_id == input.formation_id
-              - not defined(environment_id)
-              - not defined(input.environment_id)
-              - state == Active
-          count: {gte: 1}
-        error: weft.observability.TelemetryPolicyExists
+      # cloudspec (layer rule): weft read the composition's Formation and Environment rows for the
+      # four refusals below. A layer-6 block reads no layer-9 record, so the path is checked against
+      # the scope's formations outside this domain; the refusals keep their names. After the
+      # row-set guard: ESS orders an external guard after the row-set guards.
+      - name: unknown-formation
+        external: the path's formation segment names no formation of the scope (composition domain)
+        error: weft.observability.UnknownFormation
+      - name: unknown-environment
+        external: the path's environment segment names no environment of the scope (composition domain)
+        error: weft.observability.UnknownEnvironment
+      - name: environment-not-in-formation
+        external: the path's environment segment names an environment of another formation of the scope (composition domain)
+        error: weft.observability.EnvironmentNotInFormation
+      - name: formation-retired
+        external: the path's formation is retired (composition domain)
+        error: weft.observability.FormationRetired
       # Line 622 "bounded by the plan": the plan is above this layer (OPEN on the entity).
       - name: retention-over-plan
         external: a retention exceeds the bound of the scope's plan
@@ -1485,8 +1450,7 @@ commands:
         instance: telemetry_policy_id
         sets:
           scope_id: input.scope_id
-          formation_id: input.formation_id
-          environment_id: input.environment_id
+          path: input.path
           trace_sampling_ratio: input.trace_sampling_ratio
           keep_error_traces: input.keep_error_traces
           logs_retention_days: input.logs_retention_days
@@ -1499,7 +1463,7 @@ commands:
         payload:
           weft.observability.TelemetryPolicySet:
             telemetry_policy_id: {generated: true}
-            formation_id: input.formation_id
+            path: input.path
 
   # Line 636-637. A policy is changed by removing it and setting a new one; while none is active
   # the formation's policy, or the default, applies.
@@ -1925,8 +1889,7 @@ views:
     fields:
       - {name: telemetry_policy_id, type: weft.shared.TelemetryPolicyId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+      - {name: path, type: weft.shared.WorkloadIdentity}
       - {name: trace_sampling_ratio, type: Binary64}
       - {name: keep_error_traces, type: Boolean}
       - {name: logs_retention_days, type: Integer}
@@ -1986,8 +1949,7 @@ views:
     fields:
       - {name: telemetry_policy_id, type: weft.shared.TelemetryPolicyId}
       - {name: scope_id, type: weft.shared.ScopeId}
-      - {name: formation_id, type: weft.shared.FormationId}
-      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+      - {name: path, type: weft.shared.WorkloadIdentity}
       - {name: trace_sampling_ratio, type: Binary64}
       - {name: keep_error_traces, type: Boolean}
       - {name: logs_retention_days, type: Integer}
