@@ -35,7 +35,7 @@ Domains only: no existing implementation is assumed.
 - `workloads`: package, shape, claims of one component; instances,
   invocations, jobs, boxes, snapshots.
 - `deployments`: deployment sources (weft, Compose, Helm, Kubernetes, ESS
-  system, Loom agent), translation, releases, plans, simulation, drift.
+  system, Loom agent), translation (moved to cloudspec: last section), releases, plans, simulation, drift.
 - `inventory`: resource classes and devices (operator-owned).
 - `resources`: volumes, filesystems, buckets, snapshots of an account.
 - `artifacts`: content-addressed blobs an account owns.
@@ -62,7 +62,7 @@ A domain refers to another domain's entity through an identifier in
 
 - **Management plane**: the user API. Tenants, accounts, formations,
   secrets, deploys. Called by the CLI and by CI.
-- **Control plane**: state store, scheduler, translators, identity issuer.
+- **Control plane**: state store, scheduler, identity issuer (translators: cloudspec's).
   Decides; runs no workload.
 - **Worker plane**: one node agent per node; starts, observes and stops
   instances. Holds no state the control plane does not know.
@@ -72,7 +72,7 @@ A domain refers to another domain's entity through an identifier in
 ### Components (`ess/components.yaml`)
 
 - `weft-api`: the user API (management plane).
-- `weft-control`: scheduler, translators, identity issuer, secret delivery.
+- `weft-control`: scheduler, identity issuer, secret delivery (translators: cloudspec's).
 - `weft-node`: the node agent (worker plane).
 - `weft-edge`: the gateway in front of public endpoints (data plane).
 - `weft` (CLI): a client of `weft-api`; holds no other power.
@@ -118,7 +118,7 @@ System actors:
 
 - `NodeAgent`: a joined node; reports observations, receives assignments.
 - `Scheduler`: places instances, preempts.
-- `Translator`: writes translations of deployment sources.
+- `Translator`: writes translations of deployment sources (moves to cloudspec: last section).
 - `Instance`: a running workload, acting through its workload identity.
 - `Anonymous`: a CLI before login (starts a device login only).
 - `ManagementApi`: weft-api acting on its own: expiry of logins and
@@ -234,8 +234,8 @@ verified by the node before start.
 
 ### Package: spec kinds
 
-A spec is not run as it is. A `Translator` turns it into a formation of plain
-components (section 5).
+A spec is not run as it is. cloudspec's inbound translator turns it into a cloudspec
+architecture of plain components, which weft runs (section 5, last section).
 
 - `ess-system`: an ESS system. Becomes an API service with its state store,
   its commands and views, its conformance suite as health check.
@@ -318,8 +318,8 @@ deploys and runs on weft unchanged.
 
 ### Deployment sources
 
-A user deploys a `DeploymentSource`: a document weft translates into a
-FormationRevision. Kinds:
+A user deploys a cloudspec architecture. cloudspec, not weft, translates each source below
+into one (last section); the mapping stays as written. Kinds:
 
 - `weft`: weft's own formation document (section 3).
 - `compose`: a Docker Compose file. Service -> component, network ->
@@ -351,7 +351,7 @@ A spec source can also be one component's package (an `ess-system`
 component inside a `weft` formation); then its translation becomes a
 sub-formation in that place.
 
-### Translation
+### Translation (cloudspec's rules since 2026-11-28: last section)
 
 - `Translator`: registered per source kind and version.
 - `Translation`: source digest + translator version -> FormationRevision +
@@ -719,13 +719,13 @@ weft account create acme/research/gpu-lab --quota gpu=4
 
 ## Ecosystem formats
 
-Other specs of the ecosystem enter only as deployable workloads (spec
-kinds with a translator). The cloud's own domains reuse none of them.
+Other specs of the ecosystem enter only as cloudspec architectures, through
+cloudspec's inbound translators (last section). The cloud's own domains reuse none of them.
 
 - `loom.agent/1`: the agent document; Loom owns the format
-  (`agency/README.md`). Input of the `loom-agent` translator.
-- ESS `system.yaml`: input of the `ess-system` translator.
-- ModelSpec: input of the later `training` translator.
+  (`agency/README.md`). Input of cloudspec's agent translator.
+- ESS `system.yaml`: input of cloudspec's ESS-system translator.
+- ModelSpec: input of a later cloudspec translator.
 
 ## Open points
 
@@ -737,3 +737,24 @@ kinds with a translator). The cloud's own domains reuse none of them.
 - `bucket` and `filesystem` sit in resources and in the catalog's
   `object-store`; the integration pass decides one home.
 - Out of scope: multi-region, a web console, billing beyond PriceList.
+
+## Translation moved to cloudspec (2026-11-28)
+
+The owner, 2026-11-28 about 02:14 CET (decision D5): cloudspec is the lowest common point, the
+intermediate representation. Every source translates into cloudspec, every target is generated
+out of it, and weft runs only cloudspec specifications. About 02:08 CET: weft is the runtime of a
+cloudspec specification; the enterprise multi-tenant cloud of this sketch is its first example.
+
+- The deployment sources of section 5 (Compose, Helm, Kubernetes, ESS system, agent, training)
+  are inbound translators of cloudspec (cloudspec epic `translation`); weft receives a cloudspec
+  architecture. Until cloudspec has its architecture format, a weft formation document stands
+  in for it.
+- The translator rules of section 5 "Translation" stay as written and are cloudspec's now:
+  registered per source kind and version, deterministic, a coverage report of mapped, mapped
+  with loss and refused, a refused object stops a deploy, no grant beyond the source. cloudspec
+  adds a `foreign` element for what a reader cannot express, and an equivalence check of source
+  and target.
+- Not changed yet: `ess/6-delivery/deployments.yaml` (`Translator`, `DeploymentSource`,
+  `Translation`, `CoverageEntry`, `SourceKind`) and `RegisterTranslator`, `RetireTranslator`
+  (`ess/9-actors/actors.yaml:100-101`). Their removal, or their reduction to a record of
+  cloudspec's translation, is a later specification change (`epic:agent-workloads`).

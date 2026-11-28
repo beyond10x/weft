@@ -66,12 +66,14 @@ entities and commands, and the document format belongs to the planned `weft` CLI
 
 ## Deployment sources
 
-A user deploys a **deployment source**, which a translator turns into a formation revision
-(`weft.deployments`). Specified kinds: weft's own formation document, a Docker Compose file, a
-Helm chart, Kubernetes manifests, an ESS system and an agent document. A translation is
-deterministic and reports every object of the source as mapped, mapped with loss, or refused with
-a reason; a refused object stops the deploy. A translator never grants more than the source
-declares.
+A user deploys a **deployment source**. weft runs only cloudspec specifications: cloudspec's
+inbound translators turn a source into a cloudspec architecture, which weft takes as a formation
+revision; weft has no translator of its own. Until cloudspec has its architecture format, weft's
+formation document stands in for it. Source kinds: a Docker Compose file, a Helm chart,
+Kubernetes manifests, an ESS system and an agenticspec deployment. A translation is deterministic
+and reports every object of the source as mapped, mapped with loss, or refused with a reason; a
+refused object stops the deploy. A translator never grants more than the source declares. The
+specification still holds these records in `weft.deployments` until a later change moves them.
 
 A **release** applies a formation revision to an environment. Before it applies, a **plan** shows
 the difference to the live release and a **simulation** checks placement, policy and reachability.

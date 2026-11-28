@@ -53,7 +53,7 @@ Each component runs in one plane of the design
 | Plane | Component | What the plane does |
 |---|---|---|
 | Management | `weft-api` | The user API: tenants, accounts, formations, secrets, deploys. Called by the CLI and by CI. |
-| Control | `weft-control` | State store, scheduler, translators, identity issuer. Decides; runs no workload. |
+| Control | `weft-control` | State store, scheduler, identity issuer; translators are cloudspec's. Decides; runs no workload. |
 | Worker | `weft-node` | One node agent per node: starts, observes and stops instances. Holds no state the control plane does not know. |
 | Data | `weft-edge` | Traffic to endpoints: the edge gateway, links between components, egress through the node's filter. |
 
