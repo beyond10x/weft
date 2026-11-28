@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-plan-apply
 kind: story
-status: active
+status: implemented
 title: RecordPlanResult moves a simulated plan to Ready or Blocked, and ApplyPlan makes a Ready plan a Planned release, each refusal tested
 relations:
 - decomposes: epic:cloudspec-submission
@@ -14,10 +14,11 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/main.rs
 - confidence: inferred
   path: product/cloud/crates/weft-testkit/tests/plan_apply.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T13:56:42Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T13:56:42Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T14:44:24Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

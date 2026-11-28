@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-pin
 kind: story
-status: active
+status: implemented
 title: CLOUDSPEC_REV moves to a cloudspec revision with SourceKind::Cloudspec and the cloudspec-sim view-name fix, and weft follows the new block fields
 relations:
 - decomposes: epic:cloudspec-submission
@@ -66,10 +66,11 @@ scope:
   path: tests/fixtures/cloudspec
 - confidence: cited
   path: website/docs/concepts/components.md
-revision: 18
+revision: 19
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T11:22:48Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T11:22:48Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T14:44:23Z", actor: "human:operator", revision: 19, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
