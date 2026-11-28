@@ -10,13 +10,17 @@ relations:
 - depends_on: story:cloudspec-submission-submit
 - depends_on: story:cloudspec-submission-pin
 scope:
+- confidence: cited
+  path: Cargo.lock
+- confidence: cited
+  path: product/cloud/crates/weft-impl/Cargo.toml
 - confidence: inferred
   path: product/cloud/crates/weft-impl/src/behaviours/plan_from_source.rs
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
 - confidence: inferred
   path: product/cloud/crates/weft-testkit/tests/plan_from_source.rs
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T14:03:29Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T14:03:29Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
