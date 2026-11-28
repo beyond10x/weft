@@ -1,0 +1,9 @@
+# A second signed-in actor of the account console in fixture mode, chosen with `?actor=deployer`
+# (read by product/console, not part of ess-ui/1): the role `deployer` only, no `account_admin`.
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+principal_id: 6f1d0c52-8a0e-4c11-9f7b-2d4c8e1a7b35
+tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880
+account_id: e4a5db1f-595f-4057-b315-8750cf2855d3
+roles:
+  - deployer
+display: release-engineer

@@ -139,6 +139,16 @@
         "tolerance": 0
       }
     },
+    "page.docs-run-consoles": {
+      "axe.minor": {
+        "value": 1,
+        "tolerance": 0
+      },
+      "axe.moderate": {
+        "value": 0,
+        "tolerance": 0
+      }
+    },
     "page.docs-run-control-host-and-node": {
       "axe.minor": {
         "value": 1,

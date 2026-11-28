@@ -1,0 +1,88 @@
+# Formations, their environments, components, links, routes, configs and the clusters of the account.
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+views:
+  weft.formations.Formations:
+    rows:
+      - {formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: storefront, internal_domain: storefront.orbit-platform.weft.internal, quota_slice: [{resource_class: cpu, amount: 48}, {resource_class: memory-gib, amount: 192}], cluster_id: cc9ce31e-fc5b-46b3-8476-c8692082ffe9, state: Active}
+      - {formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: ledger, internal_domain: ledger.orbit-platform.weft.internal, quota_slice: [{resource_class: cpu, amount: 16}, {resource_class: memory-gib, amount: 64}, {resource_class: volume-ssd, amount: 500}], cluster_id: cc9ce31e-fc5b-46b3-8476-c8692082ffe9, state: Active}
+      - {formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: ingest, internal_domain: ingest.orbit-platform.weft.internal, quota_slice: [{resource_class: cpu, amount: 32}, {resource_class: memory-gib, amount: 128}], cluster_id: cc9ce31e-fc5b-46b3-8476-c8692082ffe9, state: Active}
+      - {formation_id: 2a7086ca-92eb-4563-b297-cdb1636bb412, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: prototype, internal_domain: prototype.orbit-platform.weft.internal, quota_slice: [], cluster_id: cc9ce31e-fc5b-46b3-8476-c8692082ffe9, state: Retired}
+  weft.cluster.ClustersOfAccount:
+    rows:
+      - {cluster_id: cc9ce31e-fc5b-46b3-8476-c8692082ffe9, cloud_id: 90ea73f6-e911-40bb-a029-e63f7fce6c9f, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: orbit-main, control_plane: Shared, min_isolation: Container, zones: [zone-a, zone-b], state: Active}
+      - {cluster_id: e2fb930e-f840-42dc-91b9-275d06aeddef, cloud_id: 90ea73f6-e911-40bb-a029-e63f7fce6c9f, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: orbit-accel, control_plane: Dedicated, min_isolation: MicroVm, zones: [zone-c], state: Active}
+  weft.formations.Environments:
+    rows:
+      - {environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: production, quota_slice: [{resource_class: cpu, amount: 32}, {resource_class: memory-gib, amount: 128}], state: Active}
+      - {environment_id: d5ad7afa-794f-4170-94bb-424b7d1c4409, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: staging, quota_slice: [{resource_class: cpu, amount: 12}, {resource_class: memory-gib, amount: 48}], state: Active}
+      - {environment_id: b3cb546a-543a-4287-9dee-1b3aaa52c242, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: pr-482, quota_slice: [{resource_class: cpu, amount: 4}, {resource_class: memory-gib, amount: 16}], state: Active}
+      - {environment_id: 106d527b-6827-4b6a-b7b5-7505eed1c1d9, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: pr-471, quota_slice: [], state: Retired}
+      - {environment_id: b34643e2-f824-4064-8be9-56b5c6c5b150, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: production, quota_slice: [{resource_class: cpu, amount: 12}, {resource_class: memory-gib, amount: 48}], state: Active}
+      - {environment_id: 6e17cf81-ed4e-4a41-b70b-acb57e61f00b, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: staging, quota_slice: [{resource_class: cpu, amount: 4}, {resource_class: memory-gib, amount: 16}], state: Active}
+      - {environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, name: production, quota_slice: [{resource_class: cpu, amount: 32}, {resource_class: memory-gib, amount: 128}], state: Active}
+  weft.formations.FormationComponents:
+    rows:
+      - {component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: web, internal_name: web.storefront.weft.internal, on_border: true}
+      - {component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: api, internal_name: api.storefront.weft.internal, on_border: true}
+      - {component_id: f7335202-8303-4f58-be18-ca96aa2033ed, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: worker, internal_name: worker.storefront.weft.internal, on_border: false}
+      - {component_id: 9017ac8a-c764-4b12-9f47-da72b6c30915, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: cache-warmer, internal_name: cache-warmer.storefront.weft.internal, on_border: false}
+      - {component_id: 54c8a28f-f6e2-4a35-bc38-2ecf9c43b817, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: ledger-api, internal_name: ledger-api.ledger.weft.internal, on_border: true}
+      - {component_id: f998fd2b-ace8-4f6d-aaef-0a2e1dfa0726, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: reconciler, internal_name: reconciler.ledger.weft.internal, on_border: false}
+      - {component_id: b749c8ea-c9aa-417b-83ea-36a8fe3d1d37, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, name: collector, internal_name: collector.ingest.weft.internal, on_border: true}
+      - {component_id: 03053909-963f-49bb-9c10-532a40e84f2b, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, name: transformer, internal_name: transformer.ingest.weft.internal, on_border: false}
+      - {component_id: 8599ae51-a49c-4164-a5bc-a390f0061fda, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, name: nightly-compact, internal_name: nightly-compact.ingest.weft.internal, on_border: false}
+  weft.formations.FormationRevisions:
+    rows:
+      - {revision_id: 5696cd1d-9130-4933-b21a-9cf94e77dd4f, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, number: 12, document_digest: sha256:132f9fc29a2c510e002e7005b4eba4cffbd348aaeea5488ba282423ac6c524da}
+      - {revision_id: 64baef57-b1ea-484a-ae62-521c56b496af, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, number: 13, document_digest: sha256:3887b167def2d3b97c3c07aebc09dbe695262dfae0d9cc50e57432c847a65cbd}
+      - {revision_id: 4a022f77-d82f-4baf-8a5d-536e5fa7e31d, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, number: 14, document_digest: sha256:d455a5cca9be1e877e3400cef9a985c5421742ba28d59df98ace2bc0a3e56d1f}
+      - {revision_id: cae20f73-6ba6-4f0a-aba2-d978ad2837dd, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, number: 5, document_digest: sha256:8d5c77e3f7736391e06bc9d25992295aff91f16d1b8e7a46e589376fb1fa1baf}
+      - {revision_id: 77a10478-bb67-4952-8539-915bef9ec743, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, number: 6, document_digest: sha256:63dc5d26ad242b5b09cb9d0db24e5497623ef9db1992bd75b144c402e9c47d88}
+      - {revision_id: d3288612-4a7e-4b31-b35d-d63fa5a77600, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, number: 3, document_digest: sha256:6f3499c120fdbf034cedad79f5c0c39a6a632e48abf5ac746797761844f58415}
+  weft.formations.FormationLinks:
+    rows:
+      - {link_id: d14fbdb2-7186-4602-bae7-9327087b00b9, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, caller_component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, caller_name: web, target_component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, target_name: api, protocol: Http, port: 8080}
+      - {link_id: d6e9c5ac-cee4-447c-a60d-7157b95821eb, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, caller_component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, caller_name: api, target_component_id: f7335202-8303-4f58-be18-ca96aa2033ed, target_name: worker, protocol: Grpc, port: 9090}
+      - {link_id: cb0fadcf-820b-4754-ac14-faa4c487fd9f, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, caller_component_id: 9017ac8a-c764-4b12-9f47-da72b6c30915, caller_name: cache-warmer, target_component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, target_name: api, protocol: Http, port: 8080}
+      - {link_id: f8209ae3-ffad-4bbd-8401-3140f3e55ac1, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, caller_component_id: f998fd2b-ace8-4f6d-aaef-0a2e1dfa0726, caller_name: reconciler, target_component_id: 54c8a28f-f6e2-4a35-bc38-2ecf9c43b817, target_name: ledger-api, protocol: Grpc, port: 7443}
+      - {link_id: ddee815c-6a82-4c26-95f9-7fc322e1cafa, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, caller_component_id: b749c8ea-c9aa-417b-83ea-36a8fe3d1d37, caller_name: collector, target_component_id: 03053909-963f-49bb-9c10-532a40e84f2b, target_name: transformer, protocol: Http, port: 8081}
+      - {link_id: d972cdc0-7d6b-4751-874e-0f2094abb340, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, caller_component_id: 8599ae51-a49c-4164-a5bc-a390f0061fda, caller_name: nightly-compact, target_component_id: 03053909-963f-49bb-9c10-532a40e84f2b, target_name: transformer, protocol: Tcp, port: 6000}
+  weft.formations.Endpoints:
+    rows:
+      - {endpoint_id: b9a63daf-8564-4167-ac55-9cd4c2d5b741, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, host: shop.example.test}
+      - {endpoint_id: d1cf4ebb-2fb2-41d6-8366-33743affef79, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, host: api.shop.example.test}
+      - {endpoint_id: 6154bff7-b322-45e2-8f4b-918d4e37a69d, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, host: ledger.example.test}
+      - {endpoint_id: 54892932-7654-41b2-9860-d9a1275fc5c8, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, host: collect.example.test}
+  weft.formations.FormationBorder:
+    rows:
+      - {route_id: 610cfd0b-e2d1-4b7e-a5d9-e8badf890549, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, endpoint_id: b9a63daf-8564-4167-ac55-9cd4c2d5b741, host: shop.example.test, path: /, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, component_name: web, port: 8000}
+      - {route_id: 658c9563-30f4-4e43-9a6c-686a7649fcfa, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, endpoint_id: d1cf4ebb-2fb2-41d6-8366-33743affef79, host: api.shop.example.test, path: /v1, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, component_name: api, port: 8080}
+      - {route_id: 33bc4d6b-2c59-4553-bbe3-cc272870e04c, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, endpoint_id: b9a63daf-8564-4167-ac55-9cd4c2d5b741, host: shop.example.test, path: /api, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, component_name: api, port: 8080}
+      - {route_id: d6aebe47-bf4e-41bb-9549-0c34cd1a5680, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, endpoint_id: 6154bff7-b322-45e2-8f4b-918d4e37a69d, host: ledger.example.test, path: /, component_id: 54c8a28f-f6e2-4a35-bc38-2ecf9c43b817, component_name: ledger-api, port: 7443}
+      - {route_id: cd16c6fa-c4b9-47db-9564-4cddf53cf897, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, endpoint_id: 54892932-7654-41b2-9860-d9a1275fc5c8, host: collect.example.test, path: /events, component_id: b749c8ea-c9aa-417b-83ea-36a8fe3d1d37, component_name: collector, port: 8081}
+  weft.formations.Configs:
+    rows:
+      - {config_id: 78557270-e34a-4003-91e0-459606eab3d8, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: web-settings, data: {LOG_LEVEL: info, FEATURE_NEW_CHECKOUT: "true", CDN_BASE: https://static.example.test}}
+      - {config_id: 0bb688da-14b8-4957-9bbf-3f734fe96e08, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, name: api-settings, data: {LOG_LEVEL: info, DB_POOL_SIZE: "20", REQUEST_TIMEOUT: 15s}}
+      - {config_id: bf3c2584-f3ef-4abf-96c5-5acb3c2e6c78, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, name: ledger, data: {CURRENCY: EUR, SETTLEMENT_WINDOW: 24h}}
+      - {config_id: fe99d0c4-1571-45fc-8e30-5f76ab6796f4, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, name: pipeline, data: {BATCH_SIZE: "500", FLUSH_EVERY: 5s, SCHEMA: events-v3}}
+  weft.formations.ConfigMounts:
+    rows:
+      - {mount_id: a105dd62-e10b-4d24-ba30-82a0d0946a18, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, config_id: 78557270-e34a-4003-91e0-459606eab3d8, kind: Env, target: WEB_}
+      - {mount_id: 7d74ab1b-221c-4043-9738-d163560aa090, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, config_id: 0bb688da-14b8-4957-9bbf-3f734fe96e08, kind: Env, target: API_}
+      - {mount_id: b6f7ec63-843d-40ac-a029-1c4139b9ce9e, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, config_id: 0bb688da-14b8-4957-9bbf-3f734fe96e08, kind: File, target: /etc/storefront/api.env}
+      - {mount_id: 40e72e54-63e5-4fca-9466-f171ad317f53, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, component_id: 54c8a28f-f6e2-4a35-bc38-2ecf9c43b817, config_id: bf3c2584-f3ef-4abf-96c5-5acb3c2e6c78, kind: File, target: /etc/ledger/settings.env}
+      - {mount_id: 4f24b8ee-958f-4a6f-b885-b5c259bd70f6, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, component_id: b749c8ea-c9aa-417b-83ea-36a8fe3d1d37, config_id: fe99d0c4-1571-45fc-8e30-5f76ab6796f4, kind: Env, target: PIPELINE_}
+  weft.formations.ScaleSettings:
+    rows:
+      - {scale_setting_id: 01723c76-a006-45ab-8a74-5a6fab0b8b6b, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, min_replicas: 3, max_replicas: 12}
+      - {scale_setting_id: dc8fc95b-40b8-44c2-9b82-755be0e7e4a8, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, component_id: 1db8523d-035a-4329-9d4f-ffd8b9fd7b19, min_replicas: 3, max_replicas: 8}
+      - {scale_setting_id: 6db5e345-d3a9-4170-93c1-af92e6c02f19, formation_id: 5fb49110-c71c-4123-a85a-9edd0134d148, environment_id: d5ad7afa-794f-4170-94bb-424b7d1c4409, component_id: c6323b5e-e13b-4dba-98ee-3da70fa81bc7, min_replicas: 1, max_replicas: 2}
+      - {scale_setting_id: ba371a61-9741-4894-9547-21fb2ae4d84c, formation_id: 29711f94-8be1-496d-83d3-f14c80a7ad33, environment_id: b34643e2-f824-4064-8be9-56b5c6c5b150, component_id: 54c8a28f-f6e2-4a35-bc38-2ecf9c43b817, min_replicas: 2, max_replicas: 4}
+      - {scale_setting_id: aa57bd08-a798-4208-ad78-f91f4f920020, formation_id: 2bbd614d-6207-40b3-929e-8fb74e3c3ca4, environment_id: 20a3c4cc-d573-4d0c-b685-0605c3c9f077, component_id: b749c8ea-c9aa-417b-83ea-36a8fe3d1d37, min_replicas: 2, max_replicas: 6}
+  weft.pipelines.DeployGatesOfEnvironment:
+    rows:
+      - {deploy_gate_id: 4d77b965-0d53-4ba1-a433-c8bc9bf4f484, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, kind: Approval, approver_role: admin, signer_key_id: null, builder: null, source_repository: null, window_opens_at: null, window_closes_at: null, created_by: 033c4566-9be4-4e65-bd34-328836684ec5, state: Active}
+      - {deploy_gate_id: 9409bccf-cffd-4955-b5c5-5283fafe7133, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, kind: SignedArtifact, approver_role: null, signer_key_id: release-signing-2026, builder: null, source_repository: null, window_opens_at: null, window_closes_at: null, created_by: 033c4566-9be4-4e65-bd34-328836684ec5, state: Active}
+      - {deploy_gate_id: 5c6e4252-e578-46a5-83c7-f42e49dea8c6, environment_id: f990dc15-e94f-446d-b08d-eeece15833ab, kind: Window, approver_role: null, signer_key_id: null, builder: null, source_repository: null, window_opens_at: 2026-11-28T06:00:00Z, window_closes_at: 2026-11-28T16:00:00Z, created_by: 033c4566-9be4-4e65-bd34-328836684ec5, state: Active}
+      - {deploy_gate_id: e3c89f3c-ba83-41f2-802a-d3c38647d693, environment_id: b34643e2-f824-4064-8be9-56b5c6c5b150, kind: Provenance, approver_role: null, signer_key_id: null, builder: ci.example.test/builders/standard, source_repository: git.example.test/orbit/ledger, window_opens_at: null, window_closes_at: null, created_by: 033c4566-9be4-4e65-bd34-328836684ec5, state: Active}

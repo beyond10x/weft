@@ -1,0 +1,8 @@
+# The host components the account console registers (src/hosts/index.tsx, accountHosts).
+HomeReplicaMeter
+ServiceListMeter
+ServiceDetailMeter
+StepMeter
+BudgetMeter
+LogTail
+AlertRuleName

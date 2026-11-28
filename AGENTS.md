@@ -15,6 +15,18 @@ none is written before the specification of what it implements.
 - `product/<product>/crates/<crate>`: the Rust crates of the root workspace. `product/cloud/` is
   weft's cloud (its operator CLI included); a consumer app, such as the user's management CLI,
   gets `product/<app>/`.
+- `product/console/`: the two web consoles. `ui/operator.ui.yaml` (actor ClusterOperator) and
+  `ui/account.ui.yaml` (Deployer, AccountAdmin) are ESS UI documents (`ess-ui/1`), with fixtures
+  in `ui/fixtures/<app>/` and the host components each app registers in `ui/<app>.hosts`. The
+  renderer is weft's own (React, TypeScript, Vite; not ESS's renderer): `build/` parses the
+  documents, fixtures and compiled model at build time, `src/renderer/` maps node kinds to
+  components, `src/ui/` is the component library, `src/hosts/` the host slot components.
+  `tools/check.d/40-console.sh` in `task check` runs `ess ui check --model ess --hosts` on both,
+  the type check, the unit tests (`test/`), one build (into the repository's target directory) and Playwright
+  (`e2e/`: every page loads, no axe violation, no overflow at 390 px); node work runs with
+  `slot --here` (a remote slot node does not sync `node_modules` back). Where ess-ui/1 cannot
+  express something, a host slot names it with a `reason`; do not work around it inside a
+  document. Page: `website/docs/run/consoles.md`.
 - `target/generated/`: the code ESS synthesizes from `ess/`, not committed; `tools/synth.sh`
   writes `target/generated/`, cached by the digest of its sources. Crates use it through path dependencies, so a cargo
   command in the root workspace fails with "failed to read

@@ -1,0 +1,61 @@
+# Tenants, their account trees, quotas, principals and role bindings.
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+views:
+  weft.accounts.Tenants:
+    rows:
+      - {tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, name: orbit, state: Active}
+      - {tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, name: harbor, state: Active}
+      - {tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, name: lumen, state: Active}
+      - {tenant_id: a587f04e-d41a-4daa-83f5-87d5d7d0e6a7, name: quarry, state: Active}
+      - {tenant_id: da23437f-cd1f-468f-b984-f8dba4189b2d, name: meadow, state: Active}
+      - {tenant_id: 15173eab-5f02-4ef5-ae39-9c4c91cdc37b, name: cinder, state: Closed}
+  weft.accounts.AccountTree:
+    rows:
+      - {account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_account_id: null, name: orbit, state: Open}
+      - {account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, name: orbit-platform, state: Open}
+      - {account_id: 97509f14-5924-4c33-ba9f-288fba2467f3, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, name: orbit-data, state: Open}
+      - {account_id: 9dee07a9-c208-4267-ba6a-84ce97d9c870, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_account_id: 97509f14-5924-4c33-ba9f-288fba2467f3, name: orbit-ml, state: Open}
+      - {account_id: 7225d6cb-2237-467e-923d-17fc153c0bc3, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, name: orbit-sandbox, state: Closed}
+      - {account_id: 1daa2a9d-3799-4ba2-8147-4acc0a6f1840, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_account_id: null, name: harbor, state: Open}
+      - {account_id: d6abf07f-b10d-436d-80fc-790ec466a0b9, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_account_id: 1daa2a9d-3799-4ba2-8147-4acc0a6f1840, name: harbor-prod, state: Open}
+      - {account_id: 279ffc86-2df6-48f1-9f00-bf3cb80333dc, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_account_id: 1daa2a9d-3799-4ba2-8147-4acc0a6f1840, name: harbor-dev, state: Open}
+      - {account_id: 0d235fd3-02bf-4731-85fc-de7dcd4058c4, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, parent_account_id: null, name: lumen, state: Open}
+      - {account_id: 5c33874b-a867-462e-bc0a-985e9284f667, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, parent_account_id: 0d235fd3-02bf-4731-85fc-de7dcd4058c4, name: lumen-research, state: Open}
+  weft.accounts.TenantQuotas:
+    rows:
+      - {quota_id: a8727e7e-0e91-4044-a6aa-28abc67e7709, account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: null, resource_class: cpu, limit: 256, remaining: 64}
+      - {quota_id: 88edb022-cf8c-43d3-9a7b-694c1f5b94c4, account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: null, resource_class: memory-gib, limit: 1024, remaining: 320}
+      - {quota_id: fffed916-d93c-4d09-b768-c08a0adaa4c3, account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: null, resource_class: gpu-a80, limit: 8, remaining: 2}
+      - {quota_id: 3f0e35ff-0cb1-4029-8308-d9ecb8f2ac22, account_id: 3ad6d89e-1b90-4ff5-ba5d-8c5235ac2e19, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: null, resource_class: volume-ssd, limit: 4096, remaining: 2900}
+      - {quota_id: bbaafdd5-2f97-4ad5-9f1f-1226bd09bb3d, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: a8727e7e-0e91-4044-a6aa-28abc67e7709, resource_class: cpu, limit: 128, remaining: 41}
+      - {quota_id: fe4d44af-c839-456f-ae0b-c299d07ee954, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: 88edb022-cf8c-43d3-9a7b-694c1f5b94c4, resource_class: memory-gib, limit: 512, remaining: 188}
+      - {quota_id: c1583bdf-7162-4f44-bbe9-e1492c8d823d, account_id: 97509f14-5924-4c33-ba9f-288fba2467f3, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: a8727e7e-0e91-4044-a6aa-28abc67e7709, resource_class: cpu, limit: 64, remaining: 12}
+      - {quota_id: 7c4fcb4d-c2f6-4f35-b6b0-e60007a6f266, account_id: 9dee07a9-c208-4267-ba6a-84ce97d9c870, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, parent_quota_id: fffed916-d93c-4d09-b768-c08a0adaa4c3, resource_class: gpu-a80, limit: 6, remaining: 0}
+      - {quota_id: 6ae4edde-72c1-44ce-ae32-3d6a74b77e1e, account_id: 1daa2a9d-3799-4ba2-8147-4acc0a6f1840, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_quota_id: null, resource_class: cpu, limit: 96, remaining: 30}
+      - {quota_id: 99607016-c380-412d-9af1-f9fffd75eaf1, account_id: 1daa2a9d-3799-4ba2-8147-4acc0a6f1840, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_quota_id: null, resource_class: memory-gib, limit: 384, remaining: 150}
+      - {quota_id: 41f91ed8-d89b-43a8-aee6-4d6a3b4a2b9b, account_id: d6abf07f-b10d-436d-80fc-790ec466a0b9, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_quota_id: 6ae4edde-72c1-44ce-ae32-3d6a74b77e1e, resource_class: cpu, limit: 64, remaining: 18}
+      - {quota_id: 8dbacd4d-5d08-46ae-9378-ffef6658be82, account_id: 279ffc86-2df6-48f1-9f00-bf3cb80333dc, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, parent_quota_id: 6ae4edde-72c1-44ce-ae32-3d6a74b77e1e, resource_class: cpu, limit: 16, remaining: 11}
+      - {quota_id: 8610082a-e3a3-4f2c-a60a-50cfd608a77f, account_id: 0d235fd3-02bf-4731-85fc-de7dcd4058c4, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, parent_quota_id: null, resource_class: gpu-a80, limit: 4, remaining: 1}
+      - {quota_id: 7983e881-f78e-4f11-891f-c2185d2a9b13, account_id: 0d235fd3-02bf-4731-85fc-de7dcd4058c4, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, parent_quota_id: null, resource_class: cpu, limit: 48, remaining: 40}
+  weft.accounts.Principals:
+    rows:
+      - {principal_id: 77eec27d-1c36-4c7a-97eb-93eb3f947cf2, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, kind: user, name: tenant-owner, subject: owner@orbit.example.test, workload_identity: null, state: Active}
+      - {principal_id: 033c4566-9be4-4e65-bd34-328836684ec5, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, kind: user, name: on-call-engineer, subject: oncall@orbit.example.test, workload_identity: null, state: Active}
+      - {principal_id: 0bb94427-424c-40d6-9699-04857e812008, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, kind: service-account, name: release-bot, subject: null, workload_identity: null, state: Active}
+      - {principal_id: 77e6ce42-f92d-4a2f-b9b4-0c0157c392e0, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, kind: workload-identity, name: ingest-collector, subject: null, workload_identity: spiffe://orbit.weft.example.test/ingest/production/collector, state: Active}
+      - {principal_id: 904c05bd-ffed-4b58-a684-78b5c61c1964, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, kind: user, name: former-contractor, subject: contractor@orbit.example.test, workload_identity: null, state: Disabled}
+      - {principal_id: f8f36971-5d0c-4d27-a071-52ee2e1ae410, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, kind: user, name: tenant-owner, subject: owner@harbor.example.test, workload_identity: null, state: Active}
+      - {principal_id: d1fe2ec6-f9d1-456f-99c7-3f27b28ded6d, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, kind: service-account, name: ci-deployer, subject: null, workload_identity: null, state: Active}
+      - {principal_id: 8cc3a477-1a6d-487c-84b4-0e6e21b07053, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, kind: user, name: tenant-owner, subject: owner@lumen.example.test, workload_identity: null, state: Active}
+  weft.accounts.RoleBindings:
+    rows:
+      - {role_binding_id: 8b5c17c9-5d73-4df7-ac5b-f8cba90d02b7, principal_id: 77eec27d-1c36-4c7a-97eb-93eb3f947cf2, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, account_id: null, role: owner, state: Active}
+      - {role_binding_id: 09378e25-68f1-4c45-8851-fc163e94edc8, principal_id: 033c4566-9be4-4e65-bd34-328836684ec5, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, role: deployer, state: Active}
+      - {role_binding_id: 923522d8-6ae2-404f-90a7-8246c52f43e1, principal_id: 033c4566-9be4-4e65-bd34-328836684ec5, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, role: admin, state: Active}
+      - {role_binding_id: 643987c0-5acf-403f-a615-dff58d1bd9a5, principal_id: 0bb94427-424c-40d6-9699-04857e812008, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, role: deployer, state: Active}
+      - {role_binding_id: c4461116-58fd-45e1-88ab-93ab77d91786, principal_id: 033c4566-9be4-4e65-bd34-328836684ec5, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, account_id: 97509f14-5924-4c33-ba9f-288fba2467f3, role: viewer, state: Active}
+      - {role_binding_id: 1b5badc7-4c5f-4a0b-b089-0e46945af9d2, principal_id: 904c05bd-ffed-4b58-a684-78b5c61c1964, tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880, account_id: e4a5db1f-595f-4057-b315-8750cf2855d3, role: deployer, state: Revoked}
+      - {role_binding_id: 2d98046e-f903-4a8e-a992-9379a5d173e6, principal_id: f8f36971-5d0c-4d27-a071-52ee2e1ae410, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, account_id: null, role: owner, state: Active}
+      - {role_binding_id: f2e66b3b-4c01-4ba9-adba-5e36831e74d2, principal_id: d1fe2ec6-f9d1-456f-99c7-3f27b28ded6d, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, account_id: d6abf07f-b10d-436d-80fc-790ec466a0b9, role: deployer, state: Active}
+      - {role_binding_id: b6027f83-7a35-4708-a74b-81c9c1eaea47, principal_id: f8f36971-5d0c-4d27-a071-52ee2e1ae410, tenant_id: b1a8c3e9-82c7-4d53-b4ce-e4a232179708, account_id: d6abf07f-b10d-436d-80fc-790ec466a0b9, role: billing, state: Active}
+      - {role_binding_id: 1138c4f1-a850-4e74-b6a0-daddbba92f6f, principal_id: 8cc3a477-1a6d-487c-84b4-0e6e21b07053, tenant_id: 13334727-b04c-4680-b9f0-d114b195567b, account_id: null, role: owner, state: Active}

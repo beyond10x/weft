@@ -1,0 +1,1054 @@
+# The account console of weft: one account of one tenant as the people who build and run in it
+# see it. Two actors of ess/9-actors/actors.yaml share it: weft.actors.Deployer (formations'
+# contents, workloads, instances, releases, secrets, managed services) and
+# weft.actors.AccountAdmin (creating and retiring formations, budgets). Each page names the actor
+# whose grants bind the commands it sends; `ess ui check --model ess` holds them to it.
+# Rendered by product/console (its own renderer); reads are answered from fixtures/account/.
+
+format: ess-ui/1
+app: account
+title: weft account
+model: weft
+actor: from_session
+placement_profile: fat
+fixtures: {dir: fixtures/account, index: fixtures/account/index.yaml}
+
+tokens:
+  color:
+    bg: "#f6f6fb"
+    surface: "#ffffff"
+    raised: "#fbfbfe"
+    text: "#16151f"
+    muted: "#585668"
+    line: "#e0dfea"
+    accent: "#5a3fd4"
+    on_accent: "#ffffff"
+    accent_soft: "#ece8fd"
+    focus: "#5a3fd4"
+    info: "#2459c4"
+    success: "#127247"
+    warning: "#8a5300"
+    danger: "#b4231b"
+    neutral_fill: "#eeedf4"
+    info_fill: "#e3ebfb"
+    success_fill: "#dcf2e6"
+    warning_fill: "#fbefd8"
+    danger_fill: "#fbe2df"
+    nav_bg: "#ffffff"
+    nav_text: "#1d1b2b"
+    nav_muted: "#5f5c72"
+    nav_active: "#ece8fd"
+    backdrop: rgb(22 20 40 / 0.4)
+  space: {xs: 0.25rem, sm: 0.5rem, md: 1rem, lg: 1.5rem}
+  radius: {sm: 6px, md: 8px, lg: 14px, pill: 999px}
+  type:
+    body: {family: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif", size: 14px}
+    caption: {size: 0.8rem}
+    heading: {size: 1.1rem, weight: 600}
+    mono: {family: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 0.82rem}
+  tone:
+    neutral: {text: muted, fill: neutral_fill}
+    info: {text: info, fill: info_fill}
+    success: {text: success, fill: success_fill}
+    warning: {text: warning, fill: warning_fill}
+    danger: {text: danger, fill: danger_fill}
+
+themes:
+  system: {}
+  light: {}
+  dark:
+    color:
+      bg: "#0f0e17"
+      surface: "#17161f"
+      raised: "#1d1c27"
+      text: "#ebeaf3"
+      muted: "#a7a4b8"
+      line: "#2d2b3a"
+      accent: "#a996ff"
+      on_accent: "#140c33"
+      accent_soft: "#2a2350"
+      focus: "#a996ff"
+      info: "#8bb3ff"
+      success: "#6fd6a0"
+      warning: "#f3c46b"
+      danger: "#ff958c"
+      neutral_fill: "#26242f"
+      info_fill: "#17243f"
+      success_fill: "#133023"
+      warning_fill: "#3a2a0e"
+      danger_fill: "#3e1916"
+      nav_bg: "#13121b"
+      nav_text: "#ebeaf3"
+      nav_muted: "#a19eb3"
+      nav_active: "#2a2350"
+      backdrop: rgb(0 0 0 / 0.6)
+theme: {default: system, chosen_by: shell.theme}
+
+tone_maps:
+  lifecycle: {Active: success, Declared: success, Registered: success, Defined: success, Enabled: success, Retired: neutral, Removed: neutral, Deleted: neutral, Closed: neutral, Revoked: neutral, Disabled: neutral, Withdrawn: neutral}
+  instance_state: {Running: success, Starting: info, Scheduled: info, Pending: info, Paused: warning, Exited: neutral, Evicted: warning, Failed: danger}
+  health: {Ready: success, Starting: info, Unknown: neutral, NotReady: warning, BackingOff: danger}
+  service_state: {Awake: success, Waking: info, Asleep: neutral, DrainingToSleep: warning, Retired: neutral}
+  release_state: {Live: success, Applying: info, Planned: neutral, Superseded: neutral, RolledBack: warning, Failed: danger}
+  plan_state: {Ready: success, Simulating: info, Blocked: danger, Discarded: neutral}
+  step_state: {Succeeded: success, Running: info, Pending: neutral, Skipped: neutral, Failed: danger}
+  drift_state: {Open: warning, Reapplying: info, Escalated: danger, Resolved: success}
+  service_instance: {Ready: success, Provisioning: info, Updating: info, Degraded: warning, Deprovisioning: warning, Gone: neutral}
+  job_state: {Succeeded: success, Running: info, Pending: neutral, Failed: danger, Cancelled: neutral}
+  alert_state: {Firing: danger, Resolved: success}
+  budget_state: {Active: success, Exhausted: danger, Removed: neutral}
+  observed: {Running: success, Starting: info, Paused: warning, Snapshotted: info, Stopped: neutral, Failed: danger, Refused: danger}
+  log_state: {Open: success, Closed: neutral, Expired: neutral}
+  backup_state: {Completed: success, Taking: info, Restoring: info, Failed: danger}
+  snapshot_state: {Ready: success, Taking: info, Failed: danger, Deleted: neutral}
+  gate_state: {Passed: success, Waiting: info, Failed: danger, Active: success, Removed: neutral}
+  desired: {Run: success, Pause: warning, Stop: neutral}
+  ready: {"true": success, "false": warning}
+
+label_maps:
+  ready: {"true": Ready, "false": Not ready}
+
+shells:
+  app:
+    regions:
+      nav: {kind: navigation, props: {collapsible: true}}
+      account:
+        kind: account_menu
+        props:
+          actions:
+            - {name: theme_system, sets: {shell.theme: system}, label: System theme}
+            - {name: theme_light, sets: {shell.theme: light}, label: Light theme}
+            - {name: theme_dark, sets: {shell.theme: dark}, label: Dark theme}
+      main: {kind: page_outlet}
+      overlay: {kind: overlay_outlet, props: {one_at_a_time: true}}
+      notify: {kind: notifications}
+    state:
+      theme: {type: {enum: [system, light, dark]}, class: preference, store: local_storage, pinned: true, scope: user, default: system}
+      nav_expanded: {type: boolean, class: preference, default: true}
+
+navigation:
+  home: home
+  visibility: by_actor_grants
+  sections:
+    - {name: home, label: Account, icon: home, pages: [home]}
+    - {name: build, label: Build, icon: layers, pages: [formations, workloads, services, instances]}
+    - {name: ship, label: Ship, icon: rocket, pages: [releases]}
+    - {name: data, label: Data and services, icon: database, pages: [catalog, managed, secrets]}
+    - {name: money, label: Usage, icon: chart, pages: [usage]}
+  hidden: [formations.detail, formations.network, formations.config, workloads.detail, instances.detail, environments.detail, releases.detail, managed.detail]
+
+pages:
+  # ── Account ──────────────────────────────────────────────────────────────────────────────
+  home:
+    kind: dashboard_page
+    title: Overview
+    actor: weft.actors.Deployer
+    state:
+      window:
+        type: {record: {from: timestamp, to: timestamp, preset: {enum: [this_month, last_30d, this_quarter, custom]}}}
+        class: page_state
+        store: url
+        pinned: true
+        default: {preset: last_30d}
+    layout:
+      areas:
+        grid:
+          - [formations, instances, services, cost]
+          - [spend, spend, alerts, alerts]
+          - [running, running, running, running]
+        place:
+          formations: [formations]
+          instances: [instances]
+          services: [services]
+          cost: [cost]
+          spend: [spend]
+          alerts: [alerts]
+          running: [running]
+    sections:
+      - {name: board, remove: true}
+      - {name: formations, component: metric, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, aggregate: count, label: Formations}
+      - {name: instances, component: metric, reads: {view: weft.workloads.Instances}, aggregate: count, label: Instances}
+      - {name: services, component: metric, reads: {view: weft.catalog.ServiceInstanceList, params: {account_id: actor.account_id}}, aggregate: count, label: Managed services}
+      - {name: cost, component: metric, reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}, aggregate: sum, field: cost, label: Cost in the last 30 days}
+      - name: spend
+        component: chart
+        title: Cost by meter, last 30 days
+        chart: bar
+        reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        x: meter
+        series: [cost]
+        degrades: {no_charts: table}
+      - name: alerts
+        component: collection
+        title: Alerts
+        style: list
+        reads: {view: weft.observability.Alerts, key: alert_id, params: {account_id: actor.account_id}}
+        sort: {by: fired_at, dir: desc, mode: client}
+        columns:
+          - {field: alert_rule_id, label: Rule, host: AlertRuleName, reason: "ess-ui/1 label_from reads its view without params; AlertRules takes account_id", stands_in_for: none, reads: {view: weft.observability.AlertRules, params: {account_id: actor.account_id}}}
+          - {field: value, as: number}
+          - {field: fired_at, label: Fired, as: timestamp}
+          - {field: state, as: badge, tone_by: alert_state}
+        states: {empty: {title: Quiet, message: No alert has fired.}}
+      - name: running
+        component: collection
+        title: Services
+        reads: {view: weft.workloads.Services, key: service_id}
+        columns:
+          - {field: workload_id, label: Workload}
+          - {field: running_replicas, label: Replicas, host: HomeReplicaMeter, reason: "ess-ui/1 has no meter: running replicas drawn against wanted replicas", stands_in_for: none}
+          - {field: scale_rule, label: Scale rule, as: map}
+          - {field: sleep_policy, label: Sleep, as: map}
+          - {field: state, as: badge, tone_by: service_state}
+        row_actions:
+          - {name: open, navigate: {to: workloads.detail, params: {workload_id: row.workload_id}}, label: Open workload}
+
+  # ── Build ────────────────────────────────────────────────────────────────────────────────
+  formations:
+    kind: list_page
+    title: Formations
+    nav: {synonyms: [apps, projects, systems]}
+    actor: weft.actors.AccountAdmin
+    header:
+      actions: [{name: create, opens: create, label: New formation}]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: Search formations}
+      - name: list
+        component: collection
+        style: cards
+        reads: {view: weft.formations.Formations, key: formation_id, params: {account_id: actor.account_id}, filter: row contains state.search}
+        columns:
+          - {field: name, label: Formation}
+          - {field: internal_domain, label: Internal domain}
+          - {field: quota_slice, label: Quota slice, as: list}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: open, navigate: {to: formations.detail, params: {formation_id: row.formation_id}}, label: Open}
+          - {name: retire, does: weft.formations.RetireFormation, bind: {formation_id: row.formation_id}, label: Retire, visible: "row.state == Active", confirm: {title: Retire this formation, confirm_label: Retire}}
+        states: {empty: {title: No formations, message: "A formation is one system: its components, links, routes and environments.", action: {name: create, opens: create, label: New formation}}}
+    overlays:
+      create:
+        kind: drawer
+        component: form
+        title: New formation
+        does: weft.formations.CreateFormation
+        fields:
+          - name
+          - {field: zones, as: tags, help: {text: The zones its instances may run in.}}
+          - {field: cluster_id, label: Cluster, as: choice, choice: {component: choice, reads: {view: weft.cluster.ClustersOfAccount, params: {account_id: actor.account_id}}, value: cluster_id, label: name}}
+        submit: {label: Create formation}
+
+  formations.detail:
+    kind: detail_page
+    title: Formation
+    params: {formation_id: FormationId}
+    switch_to: [formations.network, formations.config]
+    actor: weft.actors.Deployer
+    header:
+      title_from: {section: summary, field: name}
+      switch: [formations.detail, formations.network, formations.config]
+      actions:
+        - {name: commit, does: weft.formations.CommitRevision, bind: {formation_id: params.formation_id, account_id: actor.account_id}, label: Commit revision}
+    layout:
+      columns:
+        - {name: side, sections: [summary, revisions], width: narrow}
+        - {name: main, sections: [components, workloads, environments], width: wide}
+    sections:
+      - name: summary
+        component: collection
+        title: Formation
+        style: list
+        reads: {view: weft.formations.Formations, key: formation_id, params: {account_id: actor.account_id}, filter: "row.formation_id == params.formation_id"}
+        columns:
+          - {field: name, label: Formation}
+          - {field: internal_domain, label: Internal domain}
+          - {field: quota_slice, label: Quota slice, as: list}
+          - {field: state, as: badge, tone_by: lifecycle}
+      - name: revisions
+        component: collection
+        title: Revisions
+        style: list
+        reads: {view: weft.formations.FormationRevisions, key: revision_id, params: {formation_id: params.formation_id}}
+        sort: {by: number, dir: desc, mode: client}
+        columns: [{field: number, label: Revision, as: number}, {field: document_digest, label: Document}]
+      - name: components
+        component: collection
+        title: Components
+        reads: {view: weft.formations.FormationComponents, key: component_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: name, label: Component}
+          - {field: internal_name, label: Internal name}
+          - {field: on_border, label: On the border, as: badge, tone_by: ready, labels: {"true": "Yes", "false": "No"}}
+        row_actions:
+          - {name: remove, does: weft.formations.RemoveComponent, bind: {component_id: row.component_id}, label: Remove, confirm: {title: Remove this component, confirm_label: Remove}}
+      - name: workloads
+        component: collection
+        title: Workloads
+        reads: {view: weft.workloads.WorkloadList, key: workload_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: component}
+          - {field: package_kind, label: Package, as: badge, tone: info}
+          - {field: shape, as: badge, tone: neutral}
+          - {field: isolation}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: open, navigate: {to: workloads.detail, params: {workload_id: row.workload_id}}, label: Open}
+      - name: environments
+        component: collection
+        title: Environments
+        reads: {view: weft.formations.Environments, key: environment_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: name, label: Environment}
+          - {field: quota_slice, label: Quota slice, as: list}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: open, navigate: {to: environments.detail, params: {environment_id: row.environment_id}}, label: Releases}
+
+  formations.network:
+    kind: detail_page
+    title: Network
+    params: {formation_id: FormationId}
+    switch_to: [formations.detail, formations.config]
+    actor: weft.actors.Deployer
+    header:
+      switch: [formations.detail, formations.network, formations.config]
+    sections:
+      - name: summary
+        component: collection
+        title: Links between components
+        reads: {view: weft.formations.FormationLinks, key: link_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: caller_name, label: Caller}
+          - {field: target_name, label: Target}
+          - {field: protocol, as: badge, tone: info}
+          - {field: port, as: number}
+        row_actions:
+          - {name: remove, does: weft.formations.RemoveLink, bind: {link_id: row.link_id}, label: Remove, confirm: {title: Remove this link, confirm_label: Remove}}
+        states: {empty: {message: No component calls another.}}
+      - name: border
+        component: collection
+        title: Border routes
+        reads: {view: weft.formations.FormationBorder, key: route_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: host}
+          - {field: path}
+          - {field: component_name, label: Component}
+          - {field: port, as: number}
+        states: {empty: {message: Nothing of this formation is reachable from outside.}}
+      - name: endpoints
+        component: collection
+        title: Endpoints
+        style: list
+        reads: {view: weft.formations.Endpoints, key: endpoint_id, params: {formation_id: params.formation_id}}
+        columns: [{field: host}]
+
+  formations.config:
+    kind: detail_page
+    title: Configuration
+    params: {formation_id: FormationId}
+    switch_to: [formations.detail, formations.network]
+    actor: weft.actors.Deployer
+    header:
+      switch: [formations.detail, formations.network, formations.config]
+    sections:
+      - name: summary
+        component: collection
+        title: Configs
+        reads: {view: weft.formations.Configs, key: config_id, params: {formation_id: params.formation_id}}
+        columns: [{field: name, label: Config}, {field: data, as: map}]
+        states: {empty: {message: This formation has no config.}}
+      - name: mounts
+        component: collection
+        title: Mounts
+        reads: {view: weft.formations.ConfigMounts, key: mount_id, params: {formation_id: params.formation_id}}
+        columns: [{field: config_id, label: Config}, {field: component_id, label: Component}, {field: kind, as: badge, tone: info}, {field: target}]
+      - name: bindings
+        component: collection
+        title: Managed service bindings
+        reads: {view: weft.catalog.FormationServiceBindings, key: binding_id, params: {formation_id: params.formation_id}}
+        columns:
+          - {field: service_instance_id, label: Service}
+          - {field: component}
+          - {field: mode, as: badge, tone: info}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: unbind, does: weft.catalog.UnbindService, bind: {binding_id: row.binding_id}, label: Unbind, confirm: {title: Unbind this service, confirm_label: Unbind}}
+
+  workloads:
+    kind: list_page
+    title: Workloads
+    nav: {synonyms: [components, deployments, apps]}
+    actor: weft.actors.Deployer
+    state:
+      formation: {type: FormationId, class: page_state, store: url}
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.formation, state.search]
+        search: {binds: state.search, placeholder: Search component or package}
+        choices:
+          - {name: formation, component: choice, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
+      - name: list
+        component: collection
+        reads: {view: weft.workloads.WorkloadList, key: workload_id, params: {formation_id: state.formation}, filter: row contains state.search}
+        columns:
+          - {field: component}
+          - {field: package_kind, label: Package, as: badge, tone: info}
+          - {field: shape, as: badge, tone: neutral}
+          - {field: isolation}
+          - {field: environment_id, label: Environment}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: open, navigate: {to: workloads.detail, params: {workload_id: row.workload_id}}, label: Open}
+          - {name: retire, does: weft.workloads.RetireWorkload, bind: {workload_id: row.workload_id}, label: Retire, visible: "row.state == Defined", confirm: {title: Retire this workload, confirm_label: Retire}}
+        states: {empty: {title: Pick a formation, message: Workloads are listed per formation.}}
+
+  workloads.detail:
+    kind: detail_page
+    title: Workload
+    params: {workload_id: WorkloadId}
+    actor: weft.actors.Deployer
+    header:
+      title_from: {section: summary, field: component}
+      badge: {text: section.summary.row.shape, tone: info}
+      actions:
+        - {name: retire, does: weft.workloads.RetireWorkload, bind: {workload_id: params.workload_id}, label: Retire, confirm: {title: Retire this workload, confirm_label: Retire}}
+    layout:
+      columns:
+        - {name: side, sections: [summary, service], width: narrow}
+        - {name: main, sections: [instances, jobs, schedules, triggers, snapshots], width: wide}
+    sections:
+      - name: summary
+        component: record
+        title: Workload
+        reads: {view: weft.workloads.WorkloadDetail, params: {workload_id: params.workload_id}}
+        fields:
+          - {field: component}
+          - {field: package_kind, label: Package, as: badge, tone: info}
+          - {field: isolation}
+          - {field: state, as: badge, tone_by: lifecycle}
+        groups:
+          - name: artifact
+            label: Artifact
+            fields: [{field: artifact_digest, label: Digest}, {field: runtime_id, label: Runtime}]
+          - name: claims
+            label: Claims
+            fields: [{field: claims, label: Claims, as: list}]
+          - name: processes
+            label: Processes
+            collapsed: true
+            fields: [{field: processes, label: Processes, as: list}, {field: restart_policy, label: Restart policy, as: map}]
+      - name: service
+        component: record
+        title: Service
+        reads: {view: weft.workloads.ServiceDetail, params: {workload_id: params.workload_id}}
+        fields:
+          - {field: running_replicas, label: Replicas, host: ServiceDetailMeter, reason: "ess-ui/1 has no meter: running replicas drawn against wanted replicas", stands_in_for: none}
+          - {field: scale_rule, label: Scale rule, as: map}
+          - {field: sleep_policy, label: Sleep, as: map}
+          - {field: state, as: badge, tone_by: service_state}
+        actions:
+          - {name: scale, opens: scale, label: Scale}
+        states: {empty: {message: This workload is not a service.}}
+      - name: instances
+        component: collection
+        title: Instances
+        reads: {view: weft.workloads.InstanceList, key: instance_id, params: {workload_id: params.workload_id}}
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: replica_index, label: Replica, as: number}
+          - {field: node_id, label: Node}
+          - {field: health, as: badge, tone_by: health}
+          - {field: restarts, as: number}
+          - {field: state, as: badge, tone_by: instance_state}
+        row_actions:
+          - {name: open, navigate: {to: instances.detail, params: {instance_id: row.instance_id}}, label: Open}
+          - {name: pause, does: weft.workloads.PauseInstance, bind: {instance_id: row.instance_id}, label: Pause, visible: "row.state == Running"}
+          - {name: resume, does: weft.workloads.ResumeInstance, bind: {instance_id: row.instance_id}, label: Resume, visible: "row.state == Paused"}
+          - {name: stop, does: weft.workloads.StopInstance, bind: {instance_id: row.instance_id}, label: Stop, visible: "row.state in [Running, Paused]", confirm: {title: Stop this instance, confirm_label: Stop}}
+        states: {empty: {message: No instance runs.}}
+      - name: jobs
+        component: collection
+        title: Jobs
+        reads: {view: weft.workloads.JobList, key: job_id, params: {workload_id: params.workload_id}}
+        columns:
+          - {field: job_id, label: Job}
+          - {field: parallelism, as: number}
+          - {field: succeeded_tasks, label: Succeeded, as: number}
+          - {field: retries_used, label: Retries, as: number}
+          - {field: state, as: badge, tone_by: job_state}
+        row_actions:
+          - {name: cancel, does: weft.workloads.CancelJob, bind: {job_id: row.job_id}, label: Cancel, visible: "row.state in [Pending, Running]"}
+        states: {empty: {message: This workload ran no job.}}
+      - name: schedules
+        component: collection
+        title: Schedules
+        reads: {view: weft.workloads.ScheduleList, key: schedule_id, params: {workload_id: params.workload_id}}
+        columns: [{field: schedule_id, label: Schedule}, {field: last_fired_at, label: Last fired, as: timestamp}, {field: state, as: badge, tone_by: lifecycle}]
+        states: {empty: {message: No schedule fires this workload.}}
+      - name: triggers
+        component: collection
+        title: Triggers
+        reads: {view: weft.workloads.TriggerList, key: trigger_id, params: {workload_id: params.workload_id}}
+        columns: [{field: kind, as: badge, tone: info}, {field: source}, {field: state, as: badge, tone_by: lifecycle}]
+        states: {empty: {message: No trigger fires this workload.}}
+      - name: snapshots
+        component: collection
+        title: Snapshots
+        reads: {view: weft.workloads.SnapshotList, key: snapshot_id, params: {workload_id: params.workload_id}}
+        columns: [{field: snapshot_id, label: Snapshot}, {field: instance_id, label: Instance}, {field: state, as: badge, tone_by: snapshot_state}]
+        states: {empty: {message: No snapshot was taken.}}
+    overlays:
+      scale:
+        kind: dialog
+        component: form
+        title: Scale the service
+        does: weft.workloads.ScaleService
+        fields: [{field: replicas, as: number}]
+        submit: {label: Scale}
+
+  services:
+    kind: list_page
+    title: Services
+    nav: {synonyms: [replicas, scale, sleep]}
+    actor: weft.actors.Deployer
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: Search services}
+      - name: list
+        component: collection
+        reads: {view: weft.workloads.Services, key: service_id, filter: row contains state.search}
+        columns:
+          - {field: workload_id, label: Workload}
+          - {field: running_replicas, label: Replicas, host: ServiceListMeter, reason: "ess-ui/1 has no meter: running replicas drawn against wanted replicas", stands_in_for: none}
+          - {field: scale_rule, label: Scale rule, as: map}
+          - {field: sleep_policy, label: Sleep, as: map}
+          - {field: backoff_until, label: Backing off until, as: timestamp}
+          - {field: state, as: badge, tone_by: service_state}
+        row_actions:
+          - {name: open, navigate: {to: workloads.detail, params: {workload_id: row.workload_id}}, label: Open workload}
+          - {name: scale, opens: scale, label: Scale}
+    overlays:
+      scale:
+        kind: dialog
+        component: form
+        title: Scale the service
+        does: weft.workloads.ScaleService
+        fields: [{field: replicas, as: number}]
+        submit: {label: Scale}
+
+  instances:
+    kind: list_page
+    title: Instances
+    nav: {synonyms: [containers, processes, replicas, logs]}
+    actor: weft.actors.Deployer
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: Search instance, node or state}
+      - name: list
+        component: collection
+        reads: {view: weft.workloads.Instances, key: instance_id, filter: row contains state.search, paging: client, pager: {sizes: [25, 50]}}
+        group_by: state
+        group_order: [Failed, Running, Starting, Scheduled, Pending, Paused, Evicted, Exited]
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: replica_index, label: Replica, as: number}
+          - {field: node_id, label: Node}
+          - {field: minimum_isolation, label: Isolation}
+          - {field: health, as: badge, tone_by: health}
+          - {field: restarts, as: number}
+          - {field: desired, as: badge, tone_by: desired}
+          - {field: state, as: badge, tone_by: instance_state}
+        row_actions:
+          - {name: open, navigate: {to: instances.detail, params: {instance_id: row.instance_id}}, label: Open}
+          - {name: pause, does: weft.workloads.PauseInstance, bind: {instance_id: row.instance_id}, label: Pause, visible: "row.state == Running"}
+          - {name: resume, does: weft.workloads.ResumeInstance, bind: {instance_id: row.instance_id}, label: Resume, visible: "row.state == Paused"}
+          - {name: stop, does: weft.workloads.StopInstance, bind: {instance_id: row.instance_id}, label: Stop, visible: "row.state in [Running, Paused]", confirm: {title: Stop this instance, confirm_label: Stop}}
+
+  instances.detail:
+    kind: detail_page
+    title: Instance
+    params: {instance_id: InstanceId}
+    actor: weft.actors.Deployer
+    header:
+      badge: {text: section.summary.row.state, tone: info}
+      actions:
+        - {name: pause, does: weft.workloads.PauseInstance, bind: {instance_id: params.instance_id}, label: Pause}
+        - {name: resume, does: weft.workloads.ResumeInstance, bind: {instance_id: params.instance_id}, label: Resume}
+        - {name: snapshot, does: weft.workloads.TakeSnapshot, bind: {instance_id: params.instance_id, account_id: actor.account_id}, label: Take snapshot}
+        - {name: stop, does: weft.workloads.StopInstance, bind: {instance_id: params.instance_id}, label: Stop, confirm: {title: Stop this instance, confirm_label: Stop}}
+    layout:
+      columns:
+        - {name: side, sections: [summary, identity], width: narrow}
+        - {name: main, sections: [logs, tail, observations, assignments, exec], width: wide}
+    sections:
+      - name: summary
+        component: record
+        title: Instance
+        reads: {view: weft.workloads.InstanceDetail, params: {instance_id: params.instance_id}}
+        fields:
+          - {field: state, as: badge, tone_by: instance_state}
+          - {field: health, as: badge, tone_by: health}
+          - {field: ready, as: badge, tone_by: ready, labels: ready}
+          - {field: desired, as: badge, tone_by: desired}
+        groups:
+          - name: placement
+            label: Placement
+            fields: [{field: node_id, label: Node}, {field: isolation}, {field: minimum_isolation, label: Minimum isolation}]
+          - name: origin
+            label: Origin
+            fields: [{field: workload_id, label: Workload}, {field: artifact_digest, label: Artifact}, {field: replica_index, label: Replica, as: number}]
+          - name: restarts
+            label: Restarts
+            fields: [{field: restarts, as: number}, {field: restarts_in_window, label: In window, as: number}, {field: backoff_seconds, label: Backoff, as: duration, unit: s}, {field: exit_code, label: Exit code}, {field: failure_reason, label: Failure}]
+      - name: identity
+        component: collection
+        title: Identity documents
+        style: list
+        reads: {view: weft.identity.InstanceIdentityDocuments, key: identity_document_id, params: {instance_id: params.instance_id}}
+        columns: [{field: identity}, {field: format, as: badge, tone: info}, {field: expires_at, label: Expires, as: timestamp}, {field: state, as: badge, tone_by: lifecycle}]
+        states: {empty: {message: No identity document was issued.}}
+      - name: logs
+        component: collection
+        title: Log streams
+        reads: {view: weft.observability.InstanceLogStreams, key: log_stream_id, params: {account_id: actor.account_id, instance_id: params.instance_id}}
+        columns:
+          - {field: kind, as: badge, tone: info}
+          - {field: process}
+          - {field: retention_days, label: Retention, as: number}
+          - {field: opened_at, label: Opened, as: timestamp}
+          - {field: state, as: badge, tone_by: log_state}
+        states: {empty: {message: This instance writes no log stream.}}
+      - name: tail
+        host: LogTail
+        reason: "Log lines arrive over the exec channel (protocols/exec-channel.yaml, a logs session), not from an ESS view; ess-ui/1 has no node for a stream of lines"
+        stands_in_for: none
+        reads: {view: weft.observability.InstanceLogStreams, params: {account_id: actor.account_id, instance_id: params.instance_id}}
+        commands: [weft.nodes.OpenExecSession, weft.nodes.CloseExecSession]
+      - name: observations
+        component: collection
+        title: Observations from the node
+        reads: {view: weft.nodes.InstanceObservations, key: observation_id, params: {instance_id: params.instance_id}}
+        sort: {by: observed_at, dir: desc, mode: client}
+        columns:
+          - {field: observed, as: badge, tone_by: observed}
+          - {field: exit_code, label: Exit code}
+          - {field: detail}
+          - {field: observed_at, label: Observed, as: timestamp}
+      - name: assignments
+        component: collection
+        title: Assignments
+        reads: {view: weft.nodes.AssignmentsOfInstance, key: assignment_id, params: {instance_id: params.instance_id}}
+        columns:
+          - {field: node_id, label: Node}
+          - {field: desired, as: badge, tone: neutral}
+          - {field: assigned_at, label: Assigned, as: timestamp}
+          - {field: lease_renewed_at, label: Lease renewed, as: timestamp}
+          - {field: state, as: badge, tone_by: lifecycle}
+      - name: exec
+        component: collection
+        title: Exec sessions
+        reads: {view: weft.nodes.ExecSessionsOfInstance, key: exec_id, params: {instance_id: params.instance_id}}
+        columns:
+          - {field: kind, as: badge, tone: info}
+          - {field: principal_id, label: Principal}
+          - {field: opened_at, label: Opened, as: timestamp}
+          - {field: closed_at, label: Closed, as: timestamp}
+          - {field: state, as: badge, tone_by: log_state}
+        states: {empty: {message: Nobody opened a session into this instance.}}
+
+  # ── Ship ─────────────────────────────────────────────────────────────────────────────────
+  releases:
+    kind: list_page
+    title: Releases
+    nav: {synonyms: [deployments, rollouts, plans, rollback]}
+    actor: weft.actors.Deployer
+    state:
+      formation: {type: FormationId, class: page_state, store: url}
+      environment: {type: EnvironmentId, class: page_state, store: url}
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.formation, state.environment]
+        choices:
+          - {name: formation, component: choice, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
+          - {name: environment, component: choice, reads: {view: weft.formations.Environments, params: {formation_id: state.formation}}, value: environment_id, label: name, binds: state.environment, placeholder: Pick an environment}
+      - name: list
+        component: collection
+        reads: {view: weft.deployments.Releases, key: release_id, params: {environment_id: state.environment}}
+        sort: {by: created_at, dir: desc, mode: client}
+        columns:
+          - {field: release_id, label: Release}
+          - {field: strategy, as: badge, tone: info}
+          - {field: created_at, label: Created, as: timestamp}
+          - {field: live_at, label: Live since, as: timestamp}
+          - {field: failure}
+          - {field: state, as: badge, tone_by: release_state}
+        row_actions:
+          - {name: open, navigate: {to: releases.detail, params: {release_id: row.release_id}}, label: Open}
+          - {name: rollback, does: weft.deployments.PlanRollback, bind: {release_id: row.release_id, account_id: actor.account_id, environment_id: row.environment_id}, label: Plan rollback, visible: "row.state in [Live, Superseded]", confirm: {title: Plan a rollback to this release, confirm_label: Plan rollback}}
+        states: {empty: {title: Pick an environment, message: Releases are listed per environment of a formation.}}
+
+  environments.detail:
+    kind: detail_page
+    title: Environment
+    params: {environment_id: EnvironmentId}
+    actor: weft.actors.Deployer
+    sections:
+      - name: summary
+        component: collection
+        title: Releases
+        reads: {view: weft.deployments.Releases, key: release_id, params: {environment_id: params.environment_id}}
+        sort: {by: created_at, dir: desc, mode: client}
+        columns:
+          - {field: release_id, label: Release}
+          - {field: strategy, as: badge, tone: info}
+          - {field: created_at, label: Created, as: timestamp}
+          - {field: live_at, label: Live since, as: timestamp}
+          - {field: state, as: badge, tone_by: release_state}
+        row_actions:
+          - {name: open, navigate: {to: releases.detail, params: {release_id: row.release_id}}, label: Open}
+          - {name: rollback, does: weft.deployments.PlanRollback, bind: {release_id: row.release_id, account_id: actor.account_id, environment_id: params.environment_id}, label: Plan rollback, visible: "row.state in [Live, Superseded]", confirm: {title: Plan a rollback to this release, confirm_label: Plan rollback}}
+      - name: plans
+        component: collection
+        title: Plans
+        reads: {view: weft.deployments.Plans, key: plan_id, params: {environment_id: params.environment_id}}
+        columns:
+          - {field: plan_id, label: Plan}
+          - {field: created_at, label: Created, as: timestamp}
+          - {field: diff, as: map}
+          - {field: state, as: badge, tone_by: plan_state}
+        row_actions:
+          - {name: apply, opens: apply, label: Apply, visible: "row.state == Ready"}
+          - {name: discard, does: weft.deployments.DiscardPlan, bind: {plan_id: row.plan_id}, label: Discard, visible: "row.state in [Ready, Blocked]"}
+        states: {empty: {message: No plan waits for this environment.}}
+      - name: scale
+        component: collection
+        title: Scale settings
+        reads: {view: weft.formations.ScaleSettings, key: scale_setting_id, params: {environment_id: params.environment_id}}
+        columns: [{field: component_id, label: Component}, {field: min_replicas, label: Minimum, as: number}, {field: max_replicas, label: Maximum, as: number}]
+      - name: gates
+        component: collection
+        title: Deploy gates
+        reads: {view: weft.pipelines.DeployGatesOfEnvironment, key: deploy_gate_id, params: {environment_id: params.environment_id}}
+        columns: [{field: kind, as: badge, tone: info}, {field: approver_role, label: Approver}, {field: state, as: badge, tone_by: gate_state}]
+        states: {empty: {message: Releases to this environment pass no gate.}}
+    overlays:
+      apply:
+        kind: dialog
+        component: form
+        title: Apply the plan
+        does: weft.deployments.ApplyPlan
+        fields: [{field: strategy, as: choice, choice: {component: choice, options: weft.deployments.RolloutStrategy, style: segmented}}]
+        submit: {label: Apply}
+
+  releases.detail:
+    kind: detail_page
+    title: Release
+    params: {release_id: ReleaseId}
+    actor: weft.actors.Deployer
+    sections:
+      - name: summary
+        component: collection
+        title: Rollout steps
+        reads: {view: weft.deployments.ReleaseSteps, key: step_id, params: {release_id: params.release_id}}
+        sort: {by: position, dir: asc, mode: client}
+        columns:
+          - {field: position, label: Step, as: number}
+          - {field: kind, as: badge, tone: neutral}
+          - {field: component}
+          - {field: ready_replicas, label: Ready, host: StepMeter, reason: "ess-ui/1 has no meter: ready replicas drawn against the step's replicas", stands_in_for: none}
+          - {field: started_at, label: Started, as: timestamp}
+          - {field: ended_at, label: Ended, as: timestamp}
+          - {field: failure}
+          - {field: state, as: badge, tone_by: step_state}
+      - name: drifts
+        component: collection
+        title: Drift
+        reads: {view: weft.deployments.DriftReport, key: drift_id, params: {release_id: params.release_id}}
+        columns:
+          - {field: kind, as: badge, tone: warning}
+          - {field: component}
+          - {field: detail}
+          - {field: observed_at, label: Observed, as: timestamp}
+          - {field: state, as: badge, tone_by: drift_state}
+        states: {empty: {title: No drift, message: What runs matches what this release asked for.}}
+
+  # ── Data and services ────────────────────────────────────────────────────────────────────
+  catalog:
+    kind: list_page
+    title: Service catalog
+    nav: {label: Catalog, synonyms: [databases, queues, offerings, marketplace]}
+    actor: weft.actors.Deployer
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: "Search queue, sql, cache…"}
+      - name: list
+        component: collection
+        style: cards
+        reads: {view: weft.catalog.OfferingCatalog, key: offering_id, filter: row contains state.search}
+        columns:
+          - {field: name, label: Offering}
+          - {field: kind, as: badge, tone: info}
+          - {field: summary}
+        row_actions:
+          - {name: provision, opens: provision, label: Provision}
+      - name: products
+        component: collection
+        title: Products
+        style: cards
+        reads: {view: weft.catalog.ProductCatalog, key: product_id}
+        columns: [{field: name, label: Product}, {field: summary}]
+    overlays:
+      provision:
+        kind: drawer
+        component: form
+        title: Provision a managed service
+        does: weft.catalog.ProvisionServiceInstance
+        fields:
+          - name
+          - {field: plan_id, label: Plan, as: choice, choice: {component: choice, reads: {view: weft.catalog.OfferingPlans, params: {offering_id: params.offering_id}}, value: plan_id, label: name, style: radio}}
+          - {field: formation_id, label: Formation, as: choice, choice: {component: choice, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, value: formation_id, label: name}}
+        submit: {label: Provision}
+
+  managed:
+    kind: list_page
+    title: Managed services
+    nav: {synonyms: [databases, queues, backups]}
+    actor: weft.actors.Deployer
+    header:
+      actions: [{name: catalog, navigate: {to: catalog}, label: Browse catalog}]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: Search services}
+      - name: list
+        component: collection
+        reads: {view: weft.catalog.ServiceInstanceList, key: service_instance_id, params: {account_id: actor.account_id}, filter: row contains state.search}
+        columns:
+          - {field: name, label: Service}
+          - {field: kind, as: badge, tone: info}
+          - {field: durability, as: badge, tone: neutral}
+          - {field: sleep_policy, label: Sleep, as: map}
+          - {field: state, as: badge, tone_by: service_instance}
+        row_actions:
+          - {name: open, navigate: {to: managed.detail, params: {service_instance_id: row.service_instance_id}}, label: Open}
+          - {name: backup, does: weft.catalog.BackupServiceInstance, bind: {service_instance_id: row.service_instance_id, account_id: actor.account_id}, label: Back up, visible: "row.state == Ready"}
+          - {name: deprovision, does: weft.catalog.DeprovisionServiceInstance, bind: {service_instance_id: row.service_instance_id}, label: Deprovision, visible: "row.state in [Ready, Degraded]", confirm: {title: Deprovision this service, confirm_label: Deprovision}}
+        states: {empty: {title: No managed services, message: "Provision a queue, a database or a cache from the catalog.", action: {name: catalog, navigate: {to: catalog}, label: Browse catalog}}}
+
+  managed.detail:
+    kind: detail_page
+    title: Managed service
+    params: {service_instance_id: ServiceInstanceId}
+    actor: weft.actors.Deployer
+    header:
+      title_from: {section: summary, field: name}
+      actions:
+        - {name: backup, does: weft.catalog.BackupServiceInstance, bind: {service_instance_id: params.service_instance_id, account_id: actor.account_id}, label: Back up now}
+    layout:
+      columns:
+        - {name: side, sections: [summary], width: narrow}
+        - {name: main, sections: [bindings, backups, restores], width: wide}
+    sections:
+      # ServiceInstanceList(account_id), not ServiceInstanceDetail(service_instance_id): only the list
+      # is scoped to the account (as formations.detail reads Formations). It has no degraded_reason:
+      # shown again once the model scopes ServiceInstanceDetail by account_id.
+      - name: summary
+        component: collection
+        title: Service
+        style: list
+        reads: {view: weft.catalog.ServiceInstanceList, key: service_instance_id, params: {account_id: actor.account_id}, filter: "row.service_instance_id == params.service_instance_id"}
+        columns:
+          - {field: name, label: Service}
+          - {field: kind, as: badge, tone: info}
+          - {field: plan_id, label: Plan}
+          - {field: durability}
+          - {field: sleep_policy, label: Sleep, as: map}
+          - {field: state, as: badge, tone_by: service_instance}
+      - name: bindings
+        component: collection
+        title: Bindings
+        reads: {view: weft.catalog.ServiceBindingList, key: binding_id, params: {service_instance_id: params.service_instance_id}}
+        columns: [{field: formation_id, label: Formation}, {field: component}, {field: mode, as: badge, tone: info}, {field: state, as: badge, tone_by: lifecycle}]
+        states: {empty: {message: No component is bound to this service.}}
+      - name: backups
+        component: collection
+        title: Backups
+        reads: {view: weft.catalog.BackupList, key: backup_id, params: {service_instance_id: params.service_instance_id}}
+        columns: [{field: backup_id, label: Backup}, {field: failure_reason, label: Failure}, {field: state, as: badge, tone_by: backup_state}]
+        row_actions:
+          - {name: restore, does: weft.catalog.RestoreServiceInstance, bind: {service_instance_id: params.service_instance_id, backup_id: row.backup_id}, label: Restore, visible: "row.state == Completed", confirm: {title: Restore this backup, confirm_label: Restore}}
+        states: {empty: {message: No backup was taken.}}
+      - name: restores
+        component: collection
+        title: Restores
+        reads: {view: weft.catalog.RestoreList, key: restore_id, params: {service_instance_id: params.service_instance_id}}
+        columns: [{field: backup_id, label: Backup}, {field: failure_reason, label: Failure}, {field: state, as: badge, tone_by: backup_state}]
+        states: {empty: {message: Nothing was restored.}}
+
+  secrets:
+    kind: list_page
+    title: Secrets
+    nav: {synonyms: [credentials, keys, vault]}
+    actor: weft.actors.Deployer
+    header:
+      help: {text: "weft shows where a secret is and who may read it, never its value."}
+      actions: [{name: create, opens: create, label: New secret}]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: Search secrets}
+      - name: list
+        component: collection
+        reads: {view: weft.secrets.Secrets, key: secret_id, params: {account_id: actor.account_id}, filter: row contains state.search}
+        columns:
+          - {field: name, label: Secret}
+          - {field: scope, as: badge, tone: info}
+          - {field: formation_id, label: Formation}
+          - {field: environment_id, label: Environment}
+          - {field: backend_id, label: Backend, label_from: {view: weft.secrets.SecretBackends, field: name, key: backend_id}}
+          - {field: state, as: badge, tone_by: lifecycle}
+        expand:
+          component: collection
+          reads: {view: weft.secrets.SecretGrants, key: grant_id, params: {secret_id: row.secret_id}}
+          columns: [{field: identity, label: Workload identity}, {field: mode, as: badge, tone: neutral}, {field: target}, {field: pin, as: badge, tone: info}, {field: state, as: badge, tone_by: lifecycle}]
+        row_actions:
+          - {name: version, opens: version, label: New version}
+          - {name: grant, opens: grant, label: Grant}
+    overlays:
+      create:
+        kind: drawer
+        component: form
+        title: New secret
+        does: weft.secrets.CreateSecret
+        fields:
+          - name
+          - {field: scope, as: choice, choice: {component: choice, options: weft.secrets.SecretScope, style: segmented}}
+          - {field: backend_id, label: Backend, as: choice, choice: {component: choice, reads: {view: weft.secrets.SecretBackends}, value: backend_id, label: name}}
+        submit: {label: Create secret}
+      version:
+        kind: dialog
+        component: form
+        title: New secret version
+        does: weft.secrets.AddSecretVersion
+        fields: [{field: value, as: secret, help: {text: Sent once to the secret backend; weft never shows it again.}}]
+        submit: {label: Add version}
+      grant:
+        kind: drawer
+        component: form
+        title: Grant the secret to a workload
+        does: weft.secrets.GrantSecret
+        fields:
+          - {field: identity, label: Workload identity}
+          - {field: mode, as: choice, choice: {component: choice, options: weft.secrets.DeliveryMode, style: segmented}}
+          - {field: target, help: {text: A file path or an environment variable name.}}
+          - {field: pin, as: choice, choice: {component: choice, options: weft.secrets.VersionPin, style: segmented}}
+        submit: {label: Grant}
+
+  # ── Usage ────────────────────────────────────────────────────────────────────────────────
+  usage:
+    kind: report_page
+    title: Usage and cost
+    nav: {label: Usage and cost, synonyms: [billing, budget, invoice, statement]}
+    actor: weft.actors.AccountAdmin
+    header:
+      actions: [{name: budget, opens: budget, label: Set budget}]
+    layout:
+      areas:
+        grid:
+          - [filters, filters]
+          - [chart, total]
+          - [list, list]
+          - [budgets, budgets]
+          - [statements, statements]
+        place:
+          filters: [filters]
+          chart: [chart]
+          total: [total]
+          list: [list]
+          budgets: [budgets]
+          statements: [statements]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.window]
+        window: {binds: state.window}
+      - name: chart
+        component: chart
+        title: Cost by meter
+        chart: bar
+        reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        x: meter
+        series: [cost]
+        degrades: {no_charts: table}
+      - name: total
+        component: metric
+        reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        aggregate: sum
+        field: cost
+        label: Cost in the window
+      - name: list
+        component: collection
+        title: Usage by meter
+        reads: {view: weft.metering.UsageRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        columns:
+          - {field: meter}
+          - {field: qualifier, as: map}
+          - {field: amount, as: number}
+          - {field: records, as: number}
+        actions:
+          - {name: export, export: {reads: weft.metering.UsageRollup, as: csv, params: same_as(list)}, label: Export CSV}
+      - name: budgets
+        component: collection
+        title: Budgets
+        reads: {view: weft.metering.Budgets, key: budget_id, params: {account_id: actor.account_id}}
+        columns:
+          - {field: measure, as: badge, tone: info}
+          - {field: formation_id, label: Formation}
+          - {field: amount, as: number}
+          - {field: spent, label: Spent, host: BudgetMeter, reason: "ess-ui/1 has no meter: spent drawn against the budget amount", stands_in_for: none}
+          - {field: state, as: badge, tone_by: budget_state}
+        row_actions:
+          - {name: change, opens: change, label: Change}
+          - {name: remove, does: weft.metering.RemoveBudget, bind: {budget_id: row.budget_id}, label: Remove, confirm: {title: Remove this budget, confirm_label: Remove}}
+        states: {empty: {title: No budget, message: Without a budget nothing stops the spend., action: {name: budget, opens: budget, label: Set budget}}}
+      - name: statements
+        component: collection
+        title: Statements
+        reads: {view: weft.metering.Statements, key: statement_id, params: {account_id: actor.account_id}}
+        sort: {by: period_start, dir: desc, mode: client}
+        columns:
+          - {field: period_start, label: From, as: date}
+          - {field: period_end, label: To, as: date}
+          - {field: currency}
+          - {field: total, as: number}
+          - {field: issued_at, label: Issued, as: date}
+    overlays:
+      budget:
+        kind: drawer
+        component: form
+        title: Set a budget
+        does: weft.metering.SetBudget
+        fields:
+          - {field: measure, as: choice, choice: {component: choice, options: weft.metering.BudgetMeasure, style: segmented}}
+          - {field: amount, as: number}
+        submit: {label: Set budget}
+      change:
+        kind: dialog
+        component: form
+        title: Change the budget
+        does: weft.metering.ChangeBudget
+        fields: [{field: amount, as: number}]
+        submit: {label: Change}

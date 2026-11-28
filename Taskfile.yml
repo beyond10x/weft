@@ -24,6 +24,11 @@ tasks:
       - cargo nextest run --workspace --no-run
       - tools/test-step.sh
 
+  console:
+    desc: The consoles of product/console alone, as task check runs them (tools/check.d/40-console.sh). Both ESS UI documents against the model, then type check, unit tests, one build and the Playwright run, killed at 120 s.
+    cmds:
+      - tools/check.d/40-console.sh
+
   gate-budget:
     desc: Self-test of the test budget on the fixture tools/budget-fixture, both sides of each limit, and the real limits read from the files.
     cmds:

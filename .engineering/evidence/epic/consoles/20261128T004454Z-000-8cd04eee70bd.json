@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T00:44:54Z",
+  "actor": "human:operator",
+  "artifact": "epic:consoles",
+  "kind": "epic",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the owner, typed in a session 2026-11-28 about 00:45 CET: operator and end-user UIs in ESS UI spec with an own renderer"
+  }
+}

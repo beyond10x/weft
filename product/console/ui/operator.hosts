@@ -1,0 +1,4 @@
+# The host components the operator console registers (src/hosts/index.tsx, operatorHosts).
+PoolSizeMeter
+TenantQuotaMeter
+QuotaMeter

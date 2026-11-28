@@ -1,0 +1,945 @@
+# The operator console of weft: the control plane as the cluster operator sees it (actor
+# weft.actors.ClusterOperator, ess/9-actors/actors.yaml). Every page names that actor, so
+# `ess ui check --model ess` holds every command a page sends to the operator's grants.
+# Rendered by product/console (its own renderer); reads are answered from fixtures/operator/.
+
+format: ess-ui/1
+app: operator
+title: weft operator
+model: weft
+actor: from_session
+placement_profile: fat
+fixtures: {dir: fixtures/operator, index: fixtures/operator/index.yaml}
+
+tokens:
+  color:
+    bg: "#f4f5f7"
+    surface: "#ffffff"
+    raised: "#fafbfc"
+    text: "#14161b"
+    muted: "#555b66"
+    line: "#dcdfe5"
+    accent: "#b4470b"
+    on_accent: "#ffffff"
+    accent_soft: "#fbeadf"
+    focus: "#b4470b"
+    info: "#1f5fbf"
+    success: "#16713f"
+    warning: "#8a5300"
+    danger: "#b42318"
+    neutral_fill: "#eceef2"
+    info_fill: "#e3edfc"
+    success_fill: "#ddf3e5"
+    warning_fill: "#fbefd9"
+    danger_fill: "#fbe3e0"
+    nav_bg: "#15181e"
+    nav_text: "#e6e8ec"
+    nav_muted: "#a3aab6"
+    nav_active: "#2a2f39"
+    backdrop: rgb(10 12 16 / 0.45)
+  space: {xs: 0.25rem, sm: 0.5rem, md: 0.875rem, lg: 1.25rem}
+  radius: {sm: 4px, md: 6px, lg: 10px, pill: 999px}
+  type:
+    body: {family: "Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif", size: 14px}
+    caption: {size: 0.8rem}
+    heading: {size: 1.05rem, weight: 600}
+    mono: {family: "'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", size: 0.82rem}
+  tone:
+    neutral: {text: muted, fill: neutral_fill}
+    info: {text: info, fill: info_fill}
+    success: {text: success, fill: success_fill}
+    warning: {text: warning, fill: warning_fill}
+    danger: {text: danger, fill: danger_fill}
+
+themes:
+  system: {}
+  light: {}
+  dark:
+    color:
+      bg: "#0d0f13"
+      surface: "#15181e"
+      raised: "#1b1f27"
+      text: "#e8eaee"
+      muted: "#a2a9b5"
+      line: "#2b313b"
+      accent: "#f59a3c"
+      on_accent: "#1d1003"
+      accent_soft: "#3a2412"
+      focus: "#f59a3c"
+      info: "#86b4ff"
+      success: "#6fd69a"
+      warning: "#f3c26b"
+      danger: "#ff958a"
+      neutral_fill: "#252a33"
+      info_fill: "#17263f"
+      success_fill: "#13301f"
+      warning_fill: "#3a2a0d"
+      danger_fill: "#3d1814"
+      nav_bg: "#090b0e"
+      nav_text: "#e8eaee"
+      nav_muted: "#99a1ae"
+      nav_active: "#1f242d"
+      backdrop: rgb(0 0 0 / 0.6)
+theme: {default: system, chosen_by: shell.theme}
+
+tone_maps:
+  node_state: {Ready: success, Joining: info, Provisioning: info, Cordoned: warning, Draining: warning, Gone: neutral}
+  pool_state: {Active: success, Draining: warning, Deleted: neutral}
+  lifecycle: {Active: success, Declared: success, Registered: success, Configured: info, Retired: neutral, Removed: neutral, Deleted: neutral, Closed: neutral}
+  request_state: {Pending: info, Placed: success, Unschedulable: danger, Withdrawn: neutral}
+  placement_state: {Reserved: info, Bound: success, Evicting: warning, Released: neutral}
+  session_state: {Open: success, Lost: danger, Closed: neutral, Superseded: neutral}
+  device_state: {Free: success, Bound: info, Sliced: info, Wiping: warning, Faulted: danger, Removed: neutral}
+  scale_state: {Requested: info, Fulfilled: success, Refused: danger}
+  drain_state: {Draining: warning, Drained: success, Cancelled: neutral}
+  binding_state: {Active: success, Reserved: info, Released: neutral}
+  gang_state: {Forming: info, Bound: success, Abandoned: danger}
+  role: {Control: warning, Worker: info, Both: success}
+  token_used: {"true": neutral, "false": info}
+  yes_no: {"true": success, "false": neutral}
+
+label_maps:
+  token_used: {"true": Used, "false": Waiting}
+  yes_no: {"true": "Yes", "false": "No"}
+
+shells:
+  app:
+    regions:
+      nav: {kind: navigation, props: {collapsible: true}}
+      account:
+        kind: account_menu
+        props:
+          actions:
+            - {name: theme_system, sets: {shell.theme: system}, label: System theme}
+            - {name: theme_light, sets: {shell.theme: light}, label: Light theme}
+            - {name: theme_dark, sets: {shell.theme: dark}, label: Dark theme}
+      main: {kind: page_outlet}
+      overlay: {kind: overlay_outlet, props: {one_at_a_time: true}}
+      notify: {kind: notifications}
+    state:
+      theme: {type: {enum: [system, light, dark]}, class: preference, store: local_storage, pinned: true, scope: user, default: system}
+      nav_expanded: {type: boolean, class: preference, default: true}
+
+navigation:
+  home: overview
+  visibility: by_actor_grants
+  sections:
+    - {name: health, label: Control plane, icon: gauge, pages: [overview]}
+    - {name: infrastructure, label: Infrastructure, icon: server, pages: [nodes, node_pools, zones, join_tokens, inventory]}
+    - {name: scheduling, label: Scheduling, icon: calendar, pages: [scheduling, placements, priority_classes]}
+    - {name: tenancy, label: Tenancy, icon: users, pages: [tenants, quotas]}
+    - {name: platform, label: Platform, icon: layers, pages: [platform]}
+  hidden: [nodes.detail, tenants.detail]
+
+pages:
+  # ── Control plane ────────────────────────────────────────────────────────────────────────
+  overview:
+    kind: dashboard_page
+    title: Control plane
+    nav: {label: Overview, synonyms: [health, status, dashboard]}
+    actor: weft.actors.ClusterOperator
+    header:
+      help: {text: "What weft-control still has to do: requests to place, nodes that went quiet, placements being preempted."}
+      actions:
+        - {name: scale, opens: scale_control_plane, label: Scale control plane}
+        - {name: policy, opens: cloud_policy, label: Cloud policy}
+    layout:
+      areas:
+        grid:
+          - [nodes, pools, tenants, pending]
+          - [unschedulable, preempting, sessions_k, drains_k]
+          - [clouds, clouds, clouds, clouds]
+          - [stuck, stuck, lost, lost]
+          - [preemptions, preemptions, draining, draining]
+        place:
+          nodes: [nodes]
+          pools: [pools]
+          tenants: [tenants]
+          pending: [pending]
+          unschedulable: [unschedulable]
+          preempting: [preempting]
+          sessions_k: [node_sessions]
+          drains_k: [scale_k]
+          clouds: [clouds]
+          stuck: [stuck]
+          lost: [lost]
+          preemptions: [preemptions]
+          draining: [draining]
+    sections:
+      - {name: board, remove: true}
+      - {name: nodes, component: metric, reads: {view: weft.infrastructure.Nodes}, aggregate: count, label: Nodes}
+      - {name: pools, component: metric, reads: {view: weft.infrastructure.NodePools}, aggregate: count, label: Node pools}
+      - {name: tenants, component: metric, reads: {view: weft.accounts.Tenants}, aggregate: count, label: Tenants}
+      - {name: pending, component: metric, reads: {view: weft.scheduling.PendingRequests}, aggregate: count, label: Pending requests}
+      - {name: unschedulable, component: metric, reads: {view: weft.scheduling.UnschedulableRequests}, aggregate: count, label: Unschedulable}
+      - {name: preempting, component: metric, reads: {view: weft.scheduling.Preemptions}, aggregate: count, label: Preemptions}
+      - {name: node_sessions, component: metric, reads: {view: weft.nodes.NodeSessions}, aggregate: count, label: Agent sessions}
+      - {name: scale_k, component: metric, reads: {view: weft.scheduling.ScaleRequests}, aggregate: count, label: Pool scale requests}
+      - name: clouds
+        component: collection
+        title: Clouds
+        reads: {view: weft.infrastructure.Clouds, key: cloud_id}
+        columns:
+          - {field: name, label: Cloud}
+          - {field: placement, as: badge, tone: info}
+          - {field: access_mode, label: Access}
+          - {field: control_plane, label: Control plane, as: map}
+          - {field: policy, label: Policy, as: map}
+          - {field: state, as: badge, tone_by: lifecycle}
+        states: {empty: {message: No cloud is created yet.}}
+      - name: stuck
+        component: collection
+        title: Unschedulable requests
+        reads: {view: weft.scheduling.UnschedulableRequests, key: request_id}
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: unschedulable_reason, label: Reason, as: badge, tone: danger}
+          - {field: unschedulable_detail, label: Detail}
+          - {field: requested_at, label: Requested, as: timestamp}
+        states: {empty: {title: All placed, message: Every scheduling request found a node.}}
+      - name: lost
+        component: collection
+        title: Agent sessions not open
+        reads: {view: weft.nodes.NodeSessions, key: session_id, filter: "row.state in [Lost, Superseded]"}
+        columns:
+          - {field: node_id, label: Node}
+          - {field: agent_version, label: Agent}
+          - {field: last_seen_at, label: Last seen, as: timestamp}
+          - {field: end_reason, label: Reason}
+          - {field: state, as: badge, tone_by: session_state}
+        row_actions:
+          - {name: open, navigate: {to: nodes.detail, params: {node_id: row.node_id}}, label: Open node}
+        states: {empty: {title: All agents connected, message: Every node agent holds an open session.}}
+      - name: preemptions
+        component: collection
+        title: Preemptions in progress
+        reads: {view: weft.scheduling.Preemptions, key: decision_id}
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: node_id, label: Node}
+          - {field: preemption_reason, label: Reason, as: badge, tone: warning}
+          - {field: grace_seconds, label: Grace, as: duration, unit: s}
+          - {field: evicting_since, label: Evicting since, as: timestamp}
+        states: {empty: {message: No placement is being preempted.}}
+      - name: draining
+        component: collection
+        title: Drains in progress
+        reads: {view: weft.nodes.NodeDrains, key: drain_id, filter: "row.state == Draining"}
+        columns:
+          - {field: node_id, label: Node}
+          - {field: reason}
+          - {field: requested_at, label: Requested, as: timestamp}
+          - {field: state, as: badge, tone_by: drain_state}
+        row_actions:
+          - {name: open, navigate: {to: nodes.detail, params: {node_id: row.node_id}}, label: Open node}
+        states: {empty: {message: No node is draining.}}
+    overlays:
+      scale_control_plane:
+        kind: drawer
+        component: form
+        title: Scale the control plane
+        does: weft.infrastructure.ScaleControlPlane
+        fields:
+          - {field: cloud_id, label: Cloud, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.Clouds}, value: cloud_id, label: name}}
+          - {field: control_plane, label: Control plane, as: json, help: {text: "The ControlPlaneSpec record, for example {\"replicas\": 3}."}}
+        submit: {label: Scale}
+      cloud_policy:
+        kind: drawer
+        component: form
+        title: Cloud policy
+        does: weft.infrastructure.SetCloudPolicy
+        fields:
+          - {field: cloud_id, label: Cloud, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.Clouds}, value: cloud_id, label: name}}
+          - {field: policy, label: Policy, as: json, help: {text: "The CloudPolicy record, for example {\"minimum_isolation\": \"Container\"}."}}
+        submit: {label: Set policy}
+
+  # ── Infrastructure ───────────────────────────────────────────────────────────────────────
+  nodes:
+    kind: list_page
+    title: Nodes
+    nav: {synonyms: [machines, hosts, capacity]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: provision, opens: provision, label: Provision node}]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: "Search node, zone or state"}
+      - name: list
+        component: collection
+        reads: {view: weft.infrastructure.Nodes, key: node_id, filter: row contains state.search, paging: client, pager: {sizes: [25, 50, 100]}}
+        sort: {by: zone, dir: asc, mode: client, allowed: [zone, state, observed_at]}
+        columns:
+          - {field: node_id, label: Node}
+          - {field: zone, sortable: true}
+          - {field: node_pool_id, label: Pool, label_from: {view: weft.infrastructure.NodePools, field: name, key: node_pool_id}}
+          - {field: role, as: badge, tone_by: role}
+          - {field: capacity, label: Capacity, as: list}
+          - {field: isolation_facts, label: Isolation, as: map}
+          - {field: observed_at, label: Observed, as: timestamp, sortable: true}
+          - {field: state, as: badge, tone_by: node_state, sortable: true}
+        row_actions:
+          - {name: open, navigate: {to: nodes.detail, params: {node_id: row.node_id}}, label: Open}
+          - {name: cordon, does: weft.infrastructure.CordonNode, bind: {node_id: row.node_id}, label: Cordon, visible: "row.state == Ready"}
+          - {name: uncordon, does: weft.infrastructure.UncordonNode, bind: {node_id: row.node_id}, label: Uncordon, visible: "row.state == Cordoned"}
+          - {name: drain, does: weft.infrastructure.DrainNode, bind: {node_id: row.node_id}, label: Drain, visible: "row.state in [Ready, Cordoned]", confirm: {title: Drain this node, confirm_label: Drain}}
+          - {name: remove, does: weft.infrastructure.RemoveNode, bind: {node_id: row.node_id}, label: Remove, visible: "row.state == Gone", confirm: {title: Remove this node, confirm_label: Remove}}
+        states: {empty: {title: No nodes, message: No node has joined this cloud yet., action: {name: provision, opens: provision, label: Provision node}}}
+    overlays:
+      provision:
+        kind: drawer
+        component: form
+        title: Provision a node
+        does: weft.infrastructure.ProvisionNode
+        fields:
+          - {field: zone, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.Zones}, value: zone, label: zone}}
+          - {field: role, as: choice, choice: {component: choice, options: weft.infrastructure.NodeRole, style: segmented}}
+          - {field: join_token_expires_at, label: Join token expires, as: timestamp}
+        submit: {label: Provision}
+
+  nodes.detail:
+    kind: detail_page
+    title: Node
+    params: {node_id: NodeId}
+    actor: weft.actors.ClusterOperator
+    header:
+      badge: {text: section.summary.row.state, tone: info}
+      actions:
+        - {name: cordon, does: weft.infrastructure.CordonNode, bind: {node_id: params.node_id}, label: Cordon}
+        - {name: uncordon, does: weft.infrastructure.UncordonNode, bind: {node_id: params.node_id}, label: Uncordon}
+        - {name: drain, opens: drain, label: Drain}
+        - {name: token, opens: join_token, label: Issue join token}
+    layout:
+      columns:
+        - {name: side, sections: [summary, devices, sessions], width: narrow}
+        - {name: main, sections: [observations, placements, bindings, drains], width: wide}
+    sections:
+      - name: summary
+        component: collection
+        title: Node
+        style: list
+        reads: {view: weft.infrastructure.Nodes, key: node_id, filter: "row.node_id == params.node_id"}
+        columns:
+          - {field: node_id, label: Node}
+          - {field: zone}
+          - {field: node_pool_id, label: Pool, label_from: {view: weft.infrastructure.NodePools, field: name, key: node_pool_id}}
+          - {field: role, as: badge, tone_by: role}
+          - {field: state, as: badge, tone_by: node_state}
+          - {field: capacity, as: list}
+          - {field: isolation_facts, label: Isolation, as: map}
+          - {field: join_token_used, label: Join token, as: badge, tone_by: token_used, labels: token_used}
+          - {field: observed_at, label: Observed, as: timestamp}
+        states: {empty: {title: Unknown node, message: No node of this cloud has this identifier.}}
+      - name: devices
+        component: collection
+        title: Devices
+        style: list
+        reads: {view: weft.inventory.NodeDevices, key: device_id, params: {node_id: params.node_id}}
+        columns:
+          - {field: class_name, label: Class}
+          - {field: model}
+          - {field: memory_bytes, label: Memory, as: bytes}
+          - {field: state, as: badge, tone_by: device_state}
+        row_actions:
+          - {name: reset, does: weft.inventory.ResetDevice, bind: {device_id: row.device_id}, label: Reset, visible: "row.state == Faulted", confirm: {title: Reset this device, confirm_label: Reset}}
+        states: {empty: {message: This node reported no devices.}}
+      - name: sessions
+        component: collection
+        title: Agent sessions
+        style: list
+        reads: {view: weft.nodes.NodeSessionsOfNode, key: session_id, params: {node_id: params.node_id}}
+        columns:
+          - {field: agent_version, label: Agent}
+          - {field: last_seen_at, label: Last seen, as: timestamp}
+          - {field: state, as: badge, tone_by: session_state}
+        states: {empty: {message: The node agent has not connected yet.}}
+      - name: observations
+        component: collection
+        title: Observations
+        reads: {view: weft.nodes.NodeObservations, key: observation_id, params: {node_id: params.node_id}}
+        sort: {by: observed_at, dir: desc, mode: client}
+        columns:
+          - {field: observed_at, label: Observed, as: timestamp}
+          - {field: capacity, as: list}
+          - {field: isolation, as: map}
+        states: {empty: {message: The node has sent no observation.}}
+      - name: placements
+        component: collection
+        title: Placements on this node
+        reads: {view: weft.scheduling.PlacementsOnNode, key: decision_id, params: {node_id: params.node_id}}
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: isolation, as: badge, tone: info}
+          - {field: bindings, label: Claim bindings, as: list}
+          - {field: state, as: badge, tone_by: placement_state}
+        states: {empty: {message: Nothing is placed on this node.}}
+      - name: bindings
+        component: collection
+        title: Claim bindings
+        reads: {view: weft.claims.NodeBindings, key: binding_id, params: {node_id: params.node_id}}
+        columns:
+          - {field: class_name, label: Class}
+          - {field: sharing}
+          - {field: device_ids, label: Devices, as: list}
+          - {field: address}
+          - {field: state, as: badge, tone_by: binding_state}
+        states: {empty: {message: No claim is bound to this node.}}
+      - name: drains
+        component: collection
+        title: Drains
+        reads: {view: weft.nodes.NodeDrains, key: drain_id, filter: "row.node_id == params.node_id"}
+        columns:
+          - {field: reason}
+          - {field: requested_at, label: Requested, as: timestamp}
+          - {field: ended_at, label: Ended, as: timestamp}
+          - {field: state, as: badge, tone_by: drain_state}
+        row_actions:
+          - {name: cancel, does: weft.nodes.CancelDrain, bind: {drain_id: row.drain_id}, label: Cancel drain, visible: "row.state == Draining"}
+        states: {empty: {message: This node was never drained.}}
+    overlays:
+      drain:
+        kind: dialog
+        component: form
+        title: Drain this node
+        does: weft.nodes.Drain
+        fields: [{field: reason, help: {text: Shown to the owners of the evicted workloads.}}]
+        submit: {label: Drain}
+      join_token:
+        kind: dialog
+        component: form
+        title: Issue a join token
+        does: weft.infrastructure.IssueJoinToken
+        fields: [{field: join_token_expires_at, label: Expires, as: timestamp}]
+        submit: {label: Issue}
+
+  node_pools:
+    kind: list_page
+    title: Node pools
+    nav: {synonyms: [autoscaling, machine types]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: create, opens: create, label: New node pool}]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: "Search pool, zone or machine type"}
+      - name: list
+        component: collection
+        reads: {view: weft.infrastructure.NodePools, key: node_pool_id, filter: row contains state.search}
+        columns:
+          - {field: name, label: Pool}
+          - {field: zone}
+          - {field: machine_type, label: Machine type}
+          - {field: image}
+          - {field: desired_size, label: Size, host: PoolSizeMeter, reason: "ess-ui/1 has no meter: desired size drawn between min_size and max_size", stands_in_for: none}
+          - {field: state, as: badge, tone_by: pool_state}
+        row_actions:
+          - {name: up, does: weft.infrastructure.RequestNodePoolScaleUp, bind: {node_pool_id: row.node_pool_id}, label: Scale up, visible: "row.state == Active"}
+          - {name: down, does: weft.infrastructure.RequestNodePoolScaleDown, bind: {node_pool_id: row.node_pool_id}, label: Scale down, visible: "row.state == Active"}
+          - {name: edit, opens: edit, label: Edit, visible: "row.state == Active"}
+          - {name: delete, does: weft.infrastructure.DeleteNodePool, bind: {node_pool_id: row.node_pool_id}, label: Delete, visible: "row.state == Active", confirm: {title: Delete this node pool, confirm_label: Delete}}
+        states: {empty: {title: No node pools, message: Nodes join one by one until a pool makes them., action: {name: create, opens: create, label: New node pool}}}
+      - name: scale_requests
+        component: collection
+        title: Scale requests
+        reads: {view: weft.scheduling.ScaleRequests, key: scale_id}
+        sort: {by: requested_at, dir: desc, mode: client}
+        columns:
+          - {field: node_pool_id, label: Pool, label_from: {view: weft.infrastructure.NodePools, field: name, key: node_pool_id}}
+          - {field: direction, as: badge, tone: info}
+          - {field: count, as: number}
+          - {field: requested_at, label: Requested, as: timestamp}
+          - {field: answered_at, label: Answered, as: timestamp}
+          - {field: detail}
+          - {field: state, as: badge, tone_by: scale_state}
+        states: {empty: {message: The scheduler asked no pool to grow or shrink.}}
+    overlays:
+      create:
+        kind: drawer
+        component: form
+        title: New node pool
+        does: weft.infrastructure.CreateNodePool
+        fields:
+          - name
+          - {field: zone, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.Zones}, value: zone, label: zone}}
+          - {field: machine_type, label: Machine type}
+          - image
+          - {field: min_size, label: Minimum size, as: number}
+          - {field: max_size, label: Maximum size, as: number}
+        submit: {label: Create pool}
+      edit:
+        kind: drawer
+        component: form
+        title: Edit node pool
+        does: weft.infrastructure.UpdateNodePool
+        fields:
+          - {field: machine_type, label: Machine type}
+          - image
+          - {field: min_size, label: Minimum size, as: number}
+          - {field: max_size, label: Maximum size, as: number}
+        submit: {label: Save}
+
+  zones:
+    kind: list_page
+    title: Zones
+    nav: {synonyms: [failure domains, regions]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: declare, opens: declare, label: Declare zone}]
+      filters: null
+    sections:
+      - {name: filters, remove: true}
+      - name: list
+        component: collection
+        reads: {view: weft.infrastructure.Zones, key: zone}
+        columns:
+          - {field: zone, label: Zone}
+          - {field: cloud_id, label: Cloud, label_from: {view: weft.infrastructure.Clouds, field: name, key: cloud_id}}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: retire, does: weft.infrastructure.RetireZone, bind: {zone: row.zone}, label: Retire, visible: "row.state == Declared", confirm: {title: Retire this zone, confirm_label: Retire}}
+        states: {empty: {message: No zone is declared., action: {name: declare, opens: declare, label: Declare zone}}}
+    overlays:
+      declare:
+        kind: dialog
+        component: form
+        title: Declare a zone
+        does: weft.infrastructure.DeclareZone
+        fields:
+          - zone
+          - {field: cloud_id, label: Cloud, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.Clouds}, value: cloud_id, label: name}}
+        submit: {label: Declare}
+
+  join_tokens:
+    kind: list_page
+    title: Join tokens
+    nav: {synonyms: [bootstrap, enroll]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: pool_node, opens: pool_node, label: Provision pool node}]
+      filters: null
+    sections:
+      - {name: filters, remove: true}
+      - name: list
+        component: collection
+        reads: {view: weft.infrastructure.Nodes, key: node_id, filter: "row.state in [Provisioning, Joining]"}
+        columns:
+          - {field: node_id, label: Node}
+          - {field: zone}
+          - {field: role, as: badge, tone_by: role}
+          - {field: join_token_expires_at, label: Expires, as: timestamp}
+          - {field: join_token_used, label: Token, as: badge, tone_by: token_used, labels: token_used}
+          - {field: state, as: badge, tone_by: node_state}
+        row_actions:
+          - {name: reissue, opens: reissue, label: Issue new token}
+        states: {empty: {title: No node is waiting, message: Every provisioned node has joined.}}
+    overlays:
+      reissue:
+        kind: dialog
+        component: form
+        title: Issue a new join token
+        does: weft.infrastructure.IssueJoinToken
+        fields: [{field: join_token_expires_at, label: Expires, as: timestamp}]
+        submit: {label: Issue}
+      pool_node:
+        kind: drawer
+        component: form
+        title: Provision a node in a pool
+        does: weft.infrastructure.ProvisionPoolNode
+        fields:
+          - {field: node_pool_id, label: Pool, as: choice, choice: {component: choice, reads: {view: weft.infrastructure.NodePools}, value: node_pool_id, label: name}}
+          - {field: join_token_expires_at, label: Join token expires, as: timestamp}
+        submit: {label: Provision}
+
+  inventory:
+    kind: list_page
+    title: Resource classes
+    nav: {label: Inventory, synonyms: [gpu, devices, resource classes]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: define, opens: define, label: Define class}]
+      filters: null
+    sections:
+      - {name: filters, remove: true}
+      - name: list
+        component: collection
+        reads: {view: weft.inventory.ResourceClasses, key: class_name}
+        columns:
+          - {field: class_name, label: Class}
+          - {field: category, as: badge, tone: info}
+          - {field: unit}
+          - {field: divisible, as: badge, tone_by: yes_no, labels: yes_no}
+          - {field: sharing, as: list}
+          - {field: scope}
+          - {field: lifetime}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: retire, does: weft.inventory.RetireResourceClass, bind: {class_name: row.class_name}, label: Retire, visible: "row.state == Active", confirm: {title: Retire this resource class, confirm_label: Retire}}
+      - name: free
+        component: collection
+        title: Free devices
+        reads: {view: weft.inventory.FreeDevices, key: device_id}
+        group_by: class_name
+        columns:
+          - {field: node_id, label: Node}
+          - {field: vendor}
+          - {field: model}
+          - {field: memory_bytes, label: Memory, as: bytes}
+        row_actions:
+          - {name: node, navigate: {to: nodes.detail, params: {node_id: row.node_id}}, label: Open node}
+        states: {empty: {message: Every device is bound or sliced.}}
+    overlays:
+      define:
+        kind: drawer
+        component: form
+        title: Define a resource class
+        does: weft.inventory.DefineResourceClass
+        fields:
+          - {field: class_name, label: Class name}
+          - {field: category, as: choice, choice: {component: choice, options: weft.inventory.ResourceCategory}}
+          - {field: unit, as: choice, choice: {component: choice, options: weft.inventory.ResourceUnit}}
+          - {field: divisible, as: toggle}
+          - {field: sharing, as: choice, choice: {component: choice, options: weft.shared.Sharing, multiple: true, style: checklist}}
+          - {field: scope, as: choice, choice: {component: choice, options: weft.inventory.ResourceScope}}
+          - {field: lifetime, as: choice, choice: {component: choice, options: weft.inventory.ResourceLifetime}}
+        submit: {label: Define}
+
+  # ── Scheduling ───────────────────────────────────────────────────────────────────────────
+  scheduling:
+    kind: list_page
+    title: Scheduling requests
+    nav: {label: Requests, synonyms: [queue, pending, unschedulable]}
+    actor: weft.actors.ClusterOperator
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: "Search instance, tenant or reason"}
+      - name: list
+        component: collection
+        reads: {view: weft.scheduling.SchedulingRequests, key: request_id, filter: row contains state.search}
+        group_by: state
+        group_order: [Unschedulable, Pending, Placed, Withdrawn]
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: priority}
+          - {field: priority_value, label: Value, as: number}
+          - {field: min_isolation, label: Isolation, as: badge, tone: info}
+          - {field: claims, as: list}
+          - {field: zones, as: list}
+          - {field: unschedulable_reason, label: Reason, as: badge, tone: danger}
+          - {field: requested_at, label: Requested, as: timestamp}
+          - {field: state, as: badge, tone_by: request_state}
+        expand:
+          component: record
+          reads: {view: weft.scheduling.SchedulingRequestDetail, params: {request_id: row.request_id}}
+          fields: [{field: unschedulable_detail, label: Why}, {field: gang_id, label: Gang}, {field: cluster_id, label: Cluster}, {field: formation_id, label: Formation}]
+      - name: gangs
+        component: collection
+        title: Gangs
+        reads: {view: weft.scheduling.Gangs, key: gang_id}
+        columns:
+          - {field: gang_id, label: Gang}
+          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: size, as: number}
+          - {field: registered_at, label: Registered, as: timestamp}
+          - {field: state, as: badge, tone_by: gang_state}
+        states: {empty: {message: No gang is forming.}}
+
+  placements:
+    kind: list_page
+    title: Placements
+    nav: {synonyms: [decisions, bindings, preemption]}
+    actor: weft.actors.ClusterOperator
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: "Search instance, node or zone"}
+      - name: list
+        component: collection
+        reads: {view: weft.scheduling.PlacementDecisions, key: decision_id, filter: row contains state.search, paging: client, pager: {sizes: [25, 50]}}
+        sort: {by: decided_at, dir: desc, mode: client, allowed: [decided_at, zone, priority_value]}
+        columns:
+          - {field: instance_id, label: Instance}
+          - {field: tenant_id, label: Tenant, label_from: {view: weft.accounts.Tenants, field: name, key: tenant_id}}
+          - {field: node_id, label: Node}
+          - {field: zone, sortable: true}
+          - {field: isolation, as: badge, tone: info}
+          - {field: priority_value, label: Priority, as: number, sortable: true}
+          - {field: preemptible, as: badge, tone_by: yes_no, labels: yes_no}
+          - {field: decided_at, label: Decided, as: timestamp, sortable: true}
+          - {field: state, as: badge, tone_by: placement_state}
+        row_actions:
+          - {name: node, navigate: {to: nodes.detail, params: {node_id: row.node_id}}, label: Open node}
+
+  priority_classes:
+    kind: list_page
+    title: Priority classes
+    nav: {label: Priority classes, synonyms: [preemption, priority]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: define, opens: define, label: Define class}]
+      filters: null
+    sections:
+      - {name: filters, remove: true}
+      - name: list
+        component: collection
+        reads: {view: weft.infrastructure.PriorityClasses, key: name}
+        sort: {by: value, dir: desc, mode: client}
+        columns:
+          - {field: name, label: Class}
+          - {field: value, as: number}
+          - {field: preempts, as: badge, tone_by: yes_no, labels: yes_no}
+          - {field: preemptible, as: badge, tone_by: yes_no, labels: yes_no}
+          - {field: grace_seconds, label: Grace, as: duration, unit: s}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: retire, does: weft.infrastructure.RetirePriorityClass, bind: {name: row.name}, label: Retire, visible: "row.state == Active", confirm: {title: Retire this priority class, confirm_label: Retire}}
+    overlays:
+      define:
+        kind: drawer
+        component: form
+        title: Define a priority class
+        does: weft.infrastructure.DefinePriorityClass
+        fields:
+          - name
+          - {field: value, as: number}
+          - {field: preempts, as: toggle}
+          - {field: preemptible, as: toggle}
+          - {field: grace_seconds, label: Grace seconds, as: number}
+        submit: {label: Define}
+
+  # ── Tenancy ──────────────────────────────────────────────────────────────────────────────
+  tenants:
+    kind: list_page
+    title: Tenants
+    nav: {synonyms: [customers, organizations]}
+    actor: weft.actors.ClusterOperator
+    header:
+      actions: [{name: create, opens: create, label: New tenant}]
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.search]
+        search: {binds: state.search, placeholder: Search tenant}
+      - name: list
+        component: collection
+        reads: {view: weft.accounts.Tenants, key: tenant_id, filter: row contains state.search}
+        columns:
+          - {field: name, label: Tenant}
+          - {field: tenant_id, label: Identifier}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: open, navigate: {to: tenants.detail, params: {tenant_id: row.tenant_id}}, label: Open}
+          - {name: close, does: weft.accounts.CloseTenant, bind: {tenant_id: row.tenant_id}, label: Close, visible: "row.state == Active", confirm: {title: Close this tenant, confirm_label: Close tenant}}
+        states: {empty: {title: No tenants, message: "A tenant holds accounts, their quotas and their people.", action: {name: create, opens: create, label: New tenant}}}
+    overlays:
+      create:
+        kind: dialog
+        component: form
+        title: New tenant
+        does: weft.accounts.CreateTenant
+        fields: [name]
+        submit: {label: Create}
+
+  tenants.detail:
+    kind: detail_page
+    title: Tenant
+    params: {tenant_id: TenantId}
+    actor: weft.actors.ClusterOperator
+    header:
+      title_from: {section: summary, field: name}
+      badge: {text: section.summary.row.state, tone: success}
+      actions:
+        - {name: grant, opens: grant, label: Grant top quota}
+        - {name: owner, opens: owner, label: Bind owner}
+    layout:
+      columns:
+        - {name: side, sections: [summary, accounts], width: narrow}
+        - {name: main, sections: [quotas, roles, principals], width: wide}
+    sections:
+      - name: summary
+        component: collection
+        title: Tenant
+        style: list
+        reads: {view: weft.accounts.Tenants, key: tenant_id, filter: "row.tenant_id == params.tenant_id"}
+        columns: [{field: name, label: Tenant}, {field: tenant_id, label: Identifier}, {field: state, as: badge, tone_by: lifecycle}]
+      - name: accounts
+        component: collection
+        title: Accounts
+        style: tree
+        reads: {view: weft.accounts.AccountTree, key: account_id, params: {tenant_id: params.tenant_id}}
+        columns: [{field: name, label: Account}, {field: state, as: badge, tone_by: lifecycle}]
+        states: {empty: {message: The tenant has no account yet.}}
+      - name: quotas
+        component: collection
+        title: Quotas
+        reads: {view: weft.accounts.TenantQuotas, key: quota_id, params: {tenant_id: params.tenant_id}}
+        columns:
+          - {field: account_id, label: Account}
+          - {field: resource_class, label: Class}
+          - {field: limit, as: number}
+          - {field: remaining, label: Used, host: TenantQuotaMeter, reason: "ess-ui/1 has no meter: used (limit less remaining) drawn against the limit", stands_in_for: none}
+        row_actions:
+          - {name: raise, opens: raise, label: Raise}
+          - {name: lower, opens: lower, label: Lower}
+        states: {empty: {message: No quota is granted to this tenant., action: {name: grant, opens: grant, label: Grant top quota}}}
+      - name: roles
+        component: collection
+        title: Role bindings
+        reads: {view: weft.accounts.RoleBindings, key: role_binding_id, params: {tenant_id: params.tenant_id}}
+        columns:
+          - {field: principal_id, label: Principal}
+          - {field: account_id, label: Account}
+          - {field: role, as: badge, tone: info}
+          - {field: state, as: badge, tone_by: lifecycle}
+      - name: principals
+        component: collection
+        title: Principals
+        reads: {view: weft.accounts.Principals, key: principal_id, params: {tenant_id: params.tenant_id}}
+        columns:
+          - {field: name}
+          - {field: kind, as: badge, tone: neutral}
+          - {field: subject}
+          - {field: state, as: badge, tone_by: lifecycle}
+    overlays:
+      grant:
+        kind: drawer
+        component: form
+        title: Grant a top quota
+        does: weft.accounts.GrantTopQuota
+        fields:
+          - {field: account_id, label: Account, as: choice, choice: {component: choice, reads: {view: weft.accounts.AccountTree, params: {tenant_id: params.tenant_id}}, value: account_id, label: name}}
+          - {field: resource_class, label: Resource class, as: choice, choice: {component: choice, reads: {view: weft.inventory.ResourceClasses}, value: class_name, label: class_name}}
+          - {field: limit, as: number}
+        submit: {label: Grant}
+      owner:
+        kind: dialog
+        component: form
+        title: Bind a tenant owner
+        does: weft.accounts.BindTenantOwner
+        fields:
+          - {field: principal_id, label: Principal, as: choice, choice: {component: choice, reads: {view: weft.accounts.Principals, params: {tenant_id: params.tenant_id}}, value: principal_id, label: name}}
+        submit: {label: Bind owner}
+      raise:
+        kind: dialog
+        component: form
+        title: Raise quota
+        does: weft.accounts.RaiseTopQuota
+        fields: [{field: by, label: Raise by, as: number}]
+        submit: {label: Raise}
+      lower:
+        kind: dialog
+        component: form
+        title: Lower quota
+        does: weft.accounts.LowerTopQuota
+        fields: [{field: by, label: Lower by, as: number}]
+        submit: {label: Lower}
+
+  quotas:
+    kind: list_page
+    title: Quotas
+    nav: {synonyms: [limits, capacity]}
+    actor: weft.actors.ClusterOperator
+    state:
+      tenant: {type: TenantId, class: page_state, store: url}
+    header:
+      help: {text: "Top quotas of one tenant and the quotas its accounts drew from them. Pick a tenant."}
+    sections:
+      - name: filters
+        component: filter_bar
+        binds: [state.tenant, state.search]
+        search: {binds: state.search, placeholder: Search class or account}
+        choices:
+          - {name: tenant, component: choice, reads: {view: weft.accounts.Tenants}, value: tenant_id, label: name, binds: state.tenant, placeholder: Pick a tenant}
+      - name: list
+        component: collection
+        reads: {view: weft.accounts.TenantQuotas, key: quota_id, params: {tenant_id: state.tenant}, filter: row contains state.search}
+        columns:
+          - {field: account_id, label: Account}
+          - {field: resource_class, label: Class}
+          - {field: limit, as: number}
+          - {field: remaining, label: Used, host: QuotaMeter, reason: "ess-ui/1 has no meter: used (limit less remaining) drawn against the limit", stands_in_for: none}
+          - {field: parent_quota_id, label: Drawn from}
+        row_actions:
+          - {name: raise, opens: raise, label: Raise, visible: "row.parent_quota_id == null"}
+          - {name: lower, opens: lower, label: Lower, visible: "row.parent_quota_id == null"}
+        states: {empty: {title: Pick a tenant, message: Quotas are listed per tenant.}}
+    overlays:
+      raise:
+        kind: dialog
+        component: form
+        title: Raise quota
+        does: weft.accounts.RaiseTopQuota
+        fields: [{field: by, label: Raise by, as: number}]
+        submit: {label: Raise}
+      lower:
+        kind: dialog
+        component: form
+        title: Lower quota
+        does: weft.accounts.LowerTopQuota
+        fields: [{field: by, label: Lower by, as: number}]
+        submit: {label: Lower}
+
+  # ── Platform ─────────────────────────────────────────────────────────────────────────────
+  platform:
+    kind: dashboard_page
+    title: Platform
+    nav: {synonyms: [runtimes, translators, trust, secrets backends]}
+    actor: weft.actors.ClusterOperator
+    layout:
+      columns:
+        - {name: left, sections: [runtimes, translators], width: normal}
+        - {name: right, sections: [trust, backends], width: normal}
+    sections:
+      - {name: board, remove: true}
+      - name: runtimes
+        component: collection
+        title: Runtimes
+        reads: {view: weft.workloads.RuntimeList, key: runtime_id}
+        columns:
+          - {field: name, label: Runtime}
+          - version
+          - {field: package_kinds, label: Packages, as: list}
+          - {field: minimum_isolation, label: Isolation, as: badge, tone: info}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: retire, does: weft.workloads.RetireRuntime, bind: {runtime_id: row.runtime_id}, label: Retire, visible: "row.state == Registered", confirm: {title: Retire this runtime, confirm_label: Retire}}
+      - name: translators
+        component: collection
+        title: Translators
+        reads: {view: weft.deployments.Translators, key: translator_id}
+        columns:
+          - {field: source_kind, label: Source, as: badge, tone: info}
+          - {field: source_format_version, label: Format}
+          - {field: translator_version, label: Version}
+          - {field: registered_at, label: Registered, as: timestamp}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: retire, does: weft.deployments.RetireTranslator, bind: {translator_id: row.translator_id}, label: Retire, visible: "row.state == Registered", confirm: {title: Retire this translator, confirm_label: Retire}}
+      - name: trust
+        component: collection
+        title: Trust domains
+        reads: {view: weft.identity.TrustDomains, key: trust_domain_id}
+        columns:
+          - {field: name, label: Domain}
+          - {field: signing_key_ref, label: Signing key}
+          - {field: document_ttl_seconds, label: Document TTL, as: duration, unit: s}
+          - {field: state, as: badge, tone_by: lifecycle}
+        row_actions:
+          - {name: rotate, does: weft.identity.RequestKeyRotation, bind: {trust_domain_id: row.trust_domain_id}, label: Rotate key, visible: "row.state == Active", confirm: {title: Rotate the signing key, confirm_label: Rotate}}
+      - name: backends
+        component: collection
+        title: Secret backends
+        reads: {view: weft.secrets.SecretBackends, key: backend_id}
+        columns:
+          - {field: name, label: Backend}
+          - {field: kind, as: badge, tone: info}
+          - {field: address}
+          - {field: state, as: badge, tone_by: lifecycle}

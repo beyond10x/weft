@@ -1,0 +1,11 @@
+# The signed-in actor of the account console in fixture mode (read by product/console, not part of ess-ui/1).
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+# `roles` are wire names of weft.actors actors (ess/9-actors/actors.yaml, `naming.wire`); the
+# renderer shows the pages and actions their grants allow (navigation.visibility: by_actor_grants).
+principal_id: 033c4566-9be4-4e65-bd34-328836684ec5
+tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880
+account_id: e4a5db1f-595f-4057-b315-8750cf2855d3
+roles:
+  - deployer
+  - account_admin
+display: on-call-engineer

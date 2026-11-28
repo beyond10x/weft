@@ -75,6 +75,13 @@ jobs:
         with:
           tool: cargo-nextest@${{ steps.toolchain.outputs.nextest }}
 
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        if: steps.paths.outputs.skip != 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: product/console/package-lock.json
+
       - name: Install the ESS CLI the specification requires (requires of ess/ess-inputs.yaml, release binary)
         if: steps.paths.outputs.skip != 'true'
         env:

@@ -1,0 +1,39 @@
+# Fixture index of the operator console (ess-ui/1 FixtureIndex).
+# Invented sample data for product/console (fixture mode); no real person, company or host.
+views:
+  weft.infrastructure.Clouds: infrastructure.yaml
+  weft.infrastructure.Zones: infrastructure.yaml
+  weft.infrastructure.NodePools: infrastructure.yaml
+  weft.infrastructure.Nodes: infrastructure.yaml
+  weft.inventory.ResourceClasses: infrastructure.yaml
+  weft.inventory.NodeDevices: infrastructure.yaml
+  weft.inventory.FreeDevices: infrastructure.yaml
+  weft.nodes.NodeObservations: infrastructure.yaml
+  weft.nodes.NodeSessions: infrastructure.yaml
+  weft.nodes.NodeDrains: infrastructure.yaml
+  weft.claims.NodeBindings: infrastructure.yaml
+  weft.infrastructure.PriorityClasses: scheduling.yaml
+  weft.scheduling.SchedulingRequests: scheduling.yaml
+  weft.scheduling.PendingRequests: scheduling.yaml
+  weft.scheduling.UnschedulableRequests: scheduling.yaml
+  weft.scheduling.PlacementDecisions: scheduling.yaml
+  weft.scheduling.Preemptions: scheduling.yaml
+  weft.scheduling.ScaleRequests: scheduling.yaml
+  weft.scheduling.Gangs: scheduling.yaml
+  weft.accounts.Tenants: tenancy.yaml
+  weft.accounts.AccountTree: tenancy.yaml
+  weft.accounts.TenantQuotas: tenancy.yaml
+  weft.accounts.Principals: tenancy.yaml
+  weft.accounts.RoleBindings: tenancy.yaml
+  weft.workloads.RuntimeList: platform.yaml
+  weft.deployments.Translators: platform.yaml
+  weft.identity.TrustDomains: platform.yaml
+  weft.secrets.SecretBackends: platform.yaml
+derived:
+  weft.nodes.NodeSessionsOfNode:
+    same_as: weft.nodes.NodeSessions
+  weft.scheduling.PlacementsOnNode:
+    same_as: weft.scheduling.PlacementDecisions
+  weft.scheduling.SchedulingRequestDetail:
+    by_id_from: weft.scheduling.SchedulingRequests
+    key: request_id
