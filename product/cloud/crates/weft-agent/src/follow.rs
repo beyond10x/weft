@@ -334,6 +334,9 @@ impl<'a> Follower<'a> {
         let start = Arc::new(Start {
             instance_id,
             left: AtomicUsize::new(specs.len().max(1)),
+            never: instance["restart_policy"]["mode"] == "Never",
+            processes: specs.len(),
+            end: Mutex::new(End::default()),
         });
         if specs.is_empty() {
             self.ran(&start);
@@ -352,7 +355,7 @@ impl<'a> Follower<'a> {
     fn supervise(
         &self,
         workloads: &(dyn Workloads + Sync),
-        start: &Start,
+        start: &Arc<Start>,
         key: &WorkloadKey,
         spec: &WorkloadSpec,
     ) {
