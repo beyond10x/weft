@@ -1,5 +1,6 @@
-//! One process of an instance, run as one confined exec of `substrate-daemon` (`docs/implementation.md`
-//! A6): the daemon's Unix socket, reached through `b10x-substrate-sdk`.
+//! The local adapter of the node-layer ports [`Exec`] and [`NodeFacts`] (`docs/platform-ports.md`
+//! § 12.2): one `substrate-daemon` on this host, reached on its Unix socket through
+//! `b10x-substrate-sdk`. This is the only source file of weft that names the SDK.
 //!
 //! [`Confine::run`] creates an empty workspace, starts the process there with its command, its
 //! environment and the host files it is given read-only, reports each state the exec enters
@@ -7,151 +8,27 @@
 //! exit code and the captured output. The exec has no network: substrate runs every exec under
 //! `--unshare-net` unless an egress aperture is named, and none is. The exec is retired and the
 //! workspace destroyed when the run ends, also when it fails.
+//!
+//! [`Confine::observe`] reads the daemon's machine facts (`GET /v1/machine`) and the host's own:
+//! its CPUs and whether it has KVM.
 
-use std::collections::BTreeMap;
-use std::fmt;
-use std::path::{Path, PathBuf};
+use std::future::Future;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use b10x_substrate_sdk as sdk;
 use b10x_substrate_sdk::{
-    Client, Event, EventPage, Exec, ExecutionPolicy, OutputStream, ReadOnlyFile, SdkError, Signal,
+    Client, Event, EventPage, ExecutionPolicy, OutputStream, ReadOnlyFile, SdkError, Signal,
     Workspace, MAX_EVENT_PAGE_ITEMS, MAX_IO_BYTES,
 };
 use serde_json::Value;
 
-pub use b10x_substrate_sdk::ExecState;
-
-/// A host file bound read-only into the exec at `mount`: a program or a configuration file.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HostFile {
-    pub host_path: PathBuf,
-    pub mount: String,
-}
-
-impl HostFile {
-    pub fn new(host_path: impl Into<PathBuf>, mount: impl Into<String>) -> Self {
-        Self {
-            host_path: host_path.into(),
-            mount: mount.into(),
-        }
-    }
-}
-
-/// The bounds of one exec. Substrate takes no default for any of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Limits {
-    pub timeout: Duration,
-    pub cpu_time: Duration,
-    pub memory_bytes: u64,
-    pub processes: u32,
-    pub output_bytes: u64,
-}
-
-impl Default for Limits {
-    fn default() -> Self {
-        Self {
-            timeout: Duration::from_secs(20),
-            cpu_time: Duration::from_secs(10),
-            memory_bytes: 256 * 1024 * 1024,
-            processes: 64,
-            output_bytes: 1024 * 1024,
-        }
-    }
-}
-
-/// One process of an instance: its command line, its environment and the host files it reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Process {
-    pub argv: Vec<String>,
-    pub env: BTreeMap<String, String>,
-    pub files: Vec<HostFile>,
-    pub limits: Limits,
-}
-
-impl Process {
-    pub fn new<I, S>(argv: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        Self {
-            argv: argv.into_iter().map(Into::into).collect(),
-            env: BTreeMap::new(),
-            files: Vec::new(),
-            limits: Limits::default(),
-        }
-    }
-
-    pub fn env(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.env.insert(name.into(), value.into());
-        self
-    }
-
-    pub fn file(mut self, file: HostFile) -> Self {
-        self.files.push(file);
-        self
-    }
-
-    pub fn limits(mut self, limits: Limits) -> Self {
-        self.limits = limits;
-        self
-    }
-}
-
-/// The end of an exec that reached `exited`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Exited {
-    /// The exit code; absent when a signal ended the process.
-    pub code: Option<u8>,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-    /// Substrate kept less than the process wrote (`output_bytes`).
-    pub truncated: bool,
-}
-
-#[derive(Debug)]
-pub enum Error {
-    /// The daemon refused, could not be reached, or answered outside its contract.
-    Substrate(SdkError),
-    /// The process has no command.
-    EmptyCommand,
-    /// A host file has no path in UTF-8.
-    HostPath(PathBuf),
-    /// The exec ended in a state other than `exited` (`cancelled`, `expired`).
-    Ended {
-        state: ExecState,
-        refusal: Option<String>,
-    },
-    /// No `exec.exited` within the exec's timeout and a grace.
-    NoExit(Duration),
-}
-
-impl fmt::Display for Error {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Substrate(error) => write!(f, "{error}"),
-            Self::EmptyCommand => write!(f, "the process has no command"),
-            Self::HostPath(path) => write!(f, "the host file {} has no UTF-8 path", path.display()),
-            Self::Ended { state, refusal } => {
-                write!(f, "the exec ended {state:?}, not exited")?;
-                match refusal {
-                    Some(refusal) => write!(f, ": {refusal}"),
-                    None => Ok(()),
-                }
-            }
-            Self::NoExit(after) => write!(f, "no exec.exited after {after:?}"),
-        }
-    }
-}
-
-impl std::error::Error for Error {}
-
-impl From<SdkError> for Error {
-    fn from(error: SdkError) -> Self {
-        Self::Substrate(error)
-    }
-}
+use crate::node::{
+    Capacity, Exec, ExecError, ExecState, Exited, Facts, Isolation, IsolationLevel, NodeFacts,
+    Process,
+};
+use crate::Refusal;
 
 /// How long past the exec's own timeout `run` waits for `exec.exited`.
 const EXIT_GRACE: Duration = Duration::from_secs(10);
@@ -165,7 +42,7 @@ const POLL: Duration = Duration::from_millis(50);
 /// The most events one page of `GET /v1/events` holds.
 const PAGE_ITEMS: usize = MAX_EVENT_PAGE_ITEMS as usize;
 
-/// A connection to one `substrate-daemon`.
+/// A connection to one `substrate-daemon`, with the current-thread runtime its client runs on.
 ///
 /// A run follows its exec through the daemon's pulled event pages (`GET /v1/events` from a
 /// cursor), never through an event stream: substrate grants each subject only four streams, and
@@ -177,24 +54,49 @@ pub struct Confine {
     /// A cursor of the daemon's event history at or before now: where the last run stopped, or
     /// the end of the history at `connect`.
     position: Mutex<Option<String>>,
+    /// Dropped last, after the client whose tasks it holds.
+    runtime: tokio::runtime::Runtime,
 }
 
 impl Confine {
-    pub async fn connect(socket: &Path) -> Result<Self, Error> {
-        let client = Client::builder().unix_socket(socket).connect().await?;
-        let mut cursor = None;
-        loop {
-            let page = events_after(&client, cursor.as_deref()).await?;
-            let full = page.events.len() >= PAGE_ITEMS;
-            cursor = Some(page.next_cursor);
-            if !full {
-                break;
+    /// Connects to the daemon at `socket` and takes the end of its event history.
+    ///
+    /// # Errors
+    ///
+    /// The runtime cannot be built, or the daemon does not answer.
+    pub fn connect(socket: &Path) -> Result<Self, ExecError> {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| Refusal::Unavailable {
+                detail: format!("a runtime for the substrate client: {error}"),
+            })?;
+        let (client, cursor) = runtime.block_on(async {
+            let client = Client::builder()
+                .unix_socket(socket)
+                .connect()
+                .await
+                .map_err(refused)?;
+            let mut cursor = None;
+            loop {
+                let page = events_after(&client, cursor.as_deref()).await?;
+                let full = page.events.len() >= PAGE_ITEMS;
+                cursor = Some(page.next_cursor);
+                if !full {
+                    break;
+                }
             }
-        }
+            Ok::<_, ExecError>((client, cursor))
+        })?;
         Ok(Self {
             client,
             position: Mutex::new(cursor),
+            runtime,
         })
+    }
+
+    fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
     }
 
     fn position(&self) -> Option<String> {
@@ -211,21 +113,18 @@ impl Confine {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = cursor;
     }
 
-    /// Runs `process` as one exec and returns its end once the daemon reports `exec.exited`.
-    /// `on_state` gets each state the daemon's events record for the exec, in their order, once
-    /// per change ([`state_of`]); `accepted` comes first.
-    pub async fn run(
+    async fn run_async(
         &self,
         process: &Process,
-        mut on_state: impl FnMut(ExecState),
-    ) -> Result<Exited, Error> {
-        let (program, args) = process.argv.split_first().ok_or(Error::EmptyCommand)?;
+        on_state: &mut dyn FnMut(ExecState),
+    ) -> Result<Exited, ExecError> {
+        let (program, args) = process.argv.split_first().ok_or(ExecError::EmptyCommand)?;
         let mut files = Vec::with_capacity(process.files.len());
         for file in &process.files {
             let host_path = file
                 .host_path
                 .to_str()
-                .ok_or_else(|| Error::HostPath(file.host_path.clone()))?;
+                .ok_or_else(|| ExecError::HostPath(file.host_path.clone()))?;
             files.push(ReadOnlyFile {
                 host_path: host_path.to_owned(),
                 mount: file.mount.clone(),
@@ -238,11 +137,18 @@ impl Confine {
             .memory_bytes(limits.memory_bytes)
             .processes(limits.processes)
             .output_bytes(limits.output_bytes)
-            .build()?;
+            .build()
+            .map_err(refused)?;
 
         // A position taken before the start, so no event of this exec can precede it.
         let mut cursor = self.position();
-        let workspace = self.client.workspace().empty().create().await?;
+        let workspace = self
+            .client
+            .workspace()
+            .empty()
+            .create()
+            .await
+            .map_err(refused)?;
         let mut command = workspace
             .command(program.clone())
             .args(args.iter().cloned())
@@ -258,7 +164,7 @@ impl Confine {
             Ok(exec) => exec,
             Err(error) => {
                 let _ = workspace.destroy().await;
-                return Err(error.into());
+                return Err(refused(error));
             }
         };
         let id = exec.id().to_owned();
@@ -282,7 +188,7 @@ impl Confine {
                         return Ok(());
                     }
                     if next.terminal() {
-                        return Err(Error::Ended {
+                        return Err(ExecError::Ended {
                             state: next,
                             refusal: None,
                         });
@@ -294,18 +200,18 @@ impl Confine {
             }
         })
         .await
-        .unwrap_or(Err(Error::NoExit(wait)));
+        .unwrap_or(Err(ExecError::NoExit(wait)));
         self.remember(cursor);
 
         let ended = match followed {
             Ok(()) => collect(&mut exec).await,
-            Err(Error::Ended { state, .. }) => {
+            Err(ExecError::Ended { state, .. }) => {
                 let refusal = exec
                     .refresh()
                     .await
                     .ok()
                     .and_then(|observed| observed.refusal.as_ref().map(|r| format!("{r:?}")));
-                Err(Error::Ended { state, refusal })
+                Err(ExecError::Ended { state, refusal })
             }
             Err(error) => Err(error),
         };
@@ -314,11 +220,70 @@ impl Confine {
     }
 }
 
+impl Exec for Confine {
+    fn run(
+        &self,
+        process: &Process,
+        on_state: &mut dyn FnMut(ExecState),
+    ) -> Result<Exited, ExecError> {
+        self.block_on(self.run_async(process, on_state))
+    }
+}
+
+impl NodeFacts for Confine {
+    /// The node's CPUs as its capacity, and its isolation facts: what the daemon proves for its
+    /// execs, and whether the host has KVM. The level is `Container`, the confinement substrate
+    /// gives; a GPU is not passed through. A fact the daemon withholds stays `None`.
+    fn observe(&self) -> Result<Facts, Refusal> {
+        let machine = self
+            .block_on(self.client.refresh_machine())
+            .map_err(|error| Refusal::Unavailable {
+                detail: error.to_string(),
+            })?;
+        let facts = &machine.facts;
+        let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+        Ok(Facts {
+            capacity: vec![Capacity {
+                resource_class: "cpu".to_owned(),
+                amount: u64::try_from(cpus).unwrap_or(u64::MAX),
+            }],
+            isolation: Isolation {
+                levels: vec![IsolationLevel::Container],
+                cgroups_delegated: facts
+                    .exec_cgroup_limits
+                    .as_ref()
+                    .map(|limits| limits.cpu && limits.memory && limits.processes),
+                egress_denied: facts.exec_no_egress,
+                kvm_present: Some(Path::new("/dev/kvm").exists()),
+                gpu_passthrough: Some(false),
+            },
+        })
+    }
+}
+
+/// A refusal of the daemon with its code; anything else (no answer, an answer outside its
+/// contract, a request the client did not send) as `Unavailable`.
+fn refused(error: SdkError) -> ExecError {
+    match error {
+        SdkError::Refusal(refusal) => ExecError::Refused {
+            code: refusal.code,
+            message: refusal.message,
+        },
+        SdkError::Builder { field } => ExecError::Shared(Refusal::Invalid {
+            field: field.to_owned(),
+            reason: "is required".to_owned(),
+        }),
+        error => ExecError::Shared(Refusal::Unavailable {
+            detail: error.to_string(),
+        }),
+    }
+}
+
 /// One page of the daemon's events after `cursor`, or from the oldest it keeps when `cursor` is
 /// none. A cursor the daemon no longer serves (`event.retention-gap`: more events since than it
 /// keeps; `event.source-mismatch`: a new event history) is read again from the oldest kept event:
 /// the events of an exec started after the cursor are the newest and are kept.
-async fn events_after(client: &Client, cursor: Option<&str>) -> Result<EventPage, Error> {
+async fn events_after(client: &Client, cursor: Option<&str>) -> Result<EventPage, ExecError> {
     match client.events(cursor, MAX_EVENT_PAGE_ITEMS).await {
         Err(SdkError::Refusal(refusal))
             if cursor.is_some()
@@ -327,9 +292,12 @@ async fn events_after(client: &Client, cursor: Option<&str>) -> Result<EventPage
                     "event.retention-gap" | "event.source-mismatch"
                 ) =>
         {
-            Ok(client.events(None, MAX_EVENT_PAGE_ITEMS).await?)
+            client
+                .events(None, MAX_EVENT_PAGE_ITEMS)
+                .await
+                .map_err(refused)
         }
-        page => Ok(page?),
+        page => page.map_err(refused),
     }
 }
 
@@ -362,11 +330,23 @@ fn state_of(event: &Event, id: &str) -> Option<ExecState> {
     }
 }
 
-async fn collect(exec: &mut Exec) -> Result<Exited, Error> {
-    let observed = exec.refresh().await?.clone();
-    if observed.state != ExecState::Exited {
-        return Err(Error::Ended {
-            state: observed.state,
+/// weft's state for the SDK's.
+fn state(state: sdk::ExecState) -> ExecState {
+    match state {
+        sdk::ExecState::Accepted => ExecState::Accepted,
+        sdk::ExecState::Running => ExecState::Running,
+        sdk::ExecState::Exited => ExecState::Exited,
+        sdk::ExecState::Cancelled => ExecState::Cancelled,
+        sdk::ExecState::Expired => ExecState::Expired,
+        _ => ExecState::Unknown,
+    }
+}
+
+async fn collect(exec: &mut sdk::Exec) -> Result<Exited, ExecError> {
+    let observed = exec.refresh().await.map_err(refused)?.clone();
+    if observed.state != sdk::ExecState::Exited {
+        return Err(ExecError::Ended {
+            state: state(observed.state),
             refusal: observed.refusal.as_ref().map(|r| format!("{r:?}")),
         });
     }
@@ -380,12 +360,15 @@ async fn collect(exec: &mut Exec) -> Result<Exited, Error> {
     })
 }
 
-async fn output(exec: &Exec, stream: OutputStream) -> Result<(Vec<u8>, bool), Error> {
+async fn output(exec: &sdk::Exec, stream: OutputStream) -> Result<(Vec<u8>, bool), ExecError> {
     let mut bytes = Vec::new();
     let mut truncated = false;
     let mut offset = 0;
     loop {
-        let page = exec.output_page(stream, offset, MAX_IO_BYTES).await?;
+        let page = exec
+            .output_page(stream, offset, MAX_IO_BYTES)
+            .await
+            .map_err(refused)?;
         bytes.extend_from_slice(&page.bytes);
         truncated |= page.truncated;
         offset = page.next_offset;
@@ -397,7 +380,7 @@ async fn output(exec: &Exec, stream: OutputStream) -> Result<(Vec<u8>, bool), Er
 
 /// Kills the exec when it has not ended, retires it and destroys its workspace. A failure here
 /// leaves both to the daemon's bounds and does not change the run's answer.
-async fn finish(mut exec: Exec, workspace: Workspace) {
+async fn finish(mut exec: sdk::Exec, workspace: Workspace) {
     if !exec.observation().state.terminal() {
         let _ = exec.signal(Signal::Kill, KILL_GRACE).await;
         let _ = exec.wait_for(KILL_GRACE).await;

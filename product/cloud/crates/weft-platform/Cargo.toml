@@ -1,0 +1,29 @@
+[package]
+name = "weft-platform"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+autobins = false
+autotests = false
+
+[lib]
+path = "src/lib.rs"
+test = false
+doctest = false
+
+[[bin]]
+name = "weft-probe"
+path = "src/bin/weft-probe.rs"
+test = false
+
+[[test]]
+name = "main"
+path = "tests/main.rs"
+
+[dependencies]
+b10x-substrate-sdk = { git = "https://github.com/beyond10x/substrate", rev = "1a10a30d6856e6b4e20d55104638d26d37a1b992" }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time"] }
+
+[lints]
+workspace = true

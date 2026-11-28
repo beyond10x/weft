@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T01:05:45Z",
+  "actor": "human:operator",
+  "artifact": "story:ports-node-exec-facts",
+  "kind": "story",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the owner's order of epic:platform-ports, typed 2026-11-28 about 00:55 CET: build the cheapest, most local ports first"
+  }
+}

@@ -1,8 +1,8 @@
 //! The node agent's run (decision A5, `protocols/node-channel.yaml`): it dials the control host
 //! over HTTP with the join token `ProvisionPoolNode` issued; the node has no inbound port.
 //!
-//! 1. It asks the substrate daemon for the confinement it proves (`GET /v1/machine`), which it
-//!    reports as its isolation facts: the level substrate confinement gives is `Container`.
+//! 1. It asks its `NodeFacts` port for its capacity and the confinement the node proves, which it
+//!    reports as its isolation facts (`weft_platform::node`).
 //! 2. `weft.infrastructure.JoinNode` as the NodeAgent with its node id and join token (`joined`,
 //!    or `token-used` when it was joined before and restarts).
 //! 3. `weft.infrastructure.RecordNodeObservation` as the NodeAgent with its capacity and isolation
@@ -17,13 +17,14 @@
 //! with later stories.
 
 use std::net::ToSocketAddrs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde_json::{json, Value};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use weft_client::{Addresses, Answer, Client};
+use weft_platform::node::{Capacity, Exec, Isolation, NodeFacts};
 
 use crate::report::Report;
 
@@ -105,13 +106,17 @@ fn address(url: &str) -> Result<Addresses, String> {
 }
 
 /// Runs the agent: join, observe, open the session, then hold it. Returns only on a failure.
+/// It reaches the node through its ports only: `node` for what it observes about itself, and
+/// `_exec` for the processes of its instances, which it starts with a later story.
 ///
 /// # Errors
 ///
-/// The substrate daemon does not answer, the join or the observation is refused, the control
-/// host cannot be reached for them, or the report file cannot be written.
-pub fn run(options: &Options) -> Result<(), String> {
-    let isolation_facts = isolation_facts(&options.substrate)?;
+/// The node facts are unavailable, the join or the observation is refused, the control host
+/// cannot be reached for them, or the report file cannot be written.
+pub fn run(options: &Options, _exec: &dyn Exec, node: &dyn NodeFacts) -> Result<(), String> {
+    let facts = node
+        .observe()
+        .map_err(|error| format!("node facts: {error}"))?;
     let mut report = Report::open(&options.report)
         .map_err(|error| format!("report {}: {error}", options.report.display()))?;
     let client = Client::new(options.control.clone());
@@ -128,8 +133,8 @@ pub fn run(options: &Options) -> Result<(), String> {
         "weft.infrastructure.RecordNodeObservation",
         json!({
             "node_id": options.node_id,
-            "capacity": capacity(),
-            "isolation_facts": isolation_facts,
+            "capacity": capacity(&facts.capacity),
+            "isolation_facts": isolation_facts(&facts.isolation),
             "observed_at": now(),
         }),
     )?;
@@ -191,37 +196,25 @@ fn now() -> String {
         .expect("an instant formats in RFC 3339")
 }
 
-/// The node's capacity: its CPUs.
-fn capacity() -> Value {
-    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
-    json!([{"resource_class": "cpu", "amount": cpus}])
+/// The node's capacity as `RecordNodeObservation` takes it (`weft.shared.ResourceAmount`).
+fn capacity(capacity: &[Capacity]) -> Value {
+    capacity
+        .iter()
+        .map(|amount| json!({"resource_class": amount.resource_class, "amount": amount.amount}))
+        .collect()
 }
 
-/// The isolation facts of this node: what the substrate daemon proves for its execs, and whether
-/// the host has KVM. The level is `Container`, the confinement substrate gives; a GPU is not
-/// passed through.
-///
-/// # Errors
-///
-/// The daemon at `socket` does not answer.
-fn isolation_facts(socket: &Path) -> Result<Value, String> {
-    let machine = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("a runtime for the substrate client: {error}"))?
-        .block_on(async {
-            let client = b10x_substrate_sdk::Client::builder()
-                .unix_socket(socket)
-                .connect()
-                .await?;
-            client.refresh_machine().await
-        })
-        .map_err(|error| format!("substrate daemon {}: {error}", socket.display()))?;
-    Ok(json!({
-        "kvm_present": Path::new("/dev/kvm").exists(),
-        "cgroups_delegated": machine.exec_cgroup_limits,
-        "egress_denied": machine.exec_no_egress,
-        "gpu_passthrough": false,
-        "levels": ["Container"],
-    }))
+/// The isolation facts as `RecordNodeObservation` takes them (`weft.shared.IsolationFacts`).
+/// Each of its facts is a required Boolean there: a fact the port answers absent is reported
+/// `false`, a capability the node does not claim (default deny).
+fn isolation_facts(isolation: &Isolation) -> Value {
+    let claimed = |fact: Option<bool>| fact.unwrap_or(false);
+    let levels: Vec<&str> = isolation.levels.iter().map(|level| level.name()).collect();
+    json!({
+        "kvm_present": claimed(isolation.kvm_present),
+        "cgroups_delegated": claimed(isolation.cgroups_delegated),
+        "egress_denied": claimed(isolation.egress_denied),
+        "gpu_passthrough": claimed(isolation.gpu_passthrough),
+        "levels": levels,
+    })
 }

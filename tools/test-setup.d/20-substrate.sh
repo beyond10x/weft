@@ -1,6 +1,7 @@
 #!/bin/sh
 # Setup hook: one substrate-daemon for this test run (docs/implementation.md A6), the confinement
-# the tests of product/cloud/crates/weft-agent start their execs under.
+# the tests of product/cloud/crates/weft-platform start their execs under, and the node the
+# weft-agent processes of the join tests observe.
 #
 #   1. The daemon: substrate-daemon of release $version from PATH when it answers that version;
 #      otherwise the release archive below, checked against its SHA-256 and unpacked into
