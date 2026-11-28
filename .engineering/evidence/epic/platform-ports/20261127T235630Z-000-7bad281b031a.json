@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-27T23:56:30Z",
+  "actor": "human:operator",
+  "artifact": "epic:platform-ports",
+  "kind": "epic",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "the owner, typed in the session 2026-11-28 about 00:55 CET: let's do the architectural change, design now, implement the cheapest most local adapter"
+  }
+}
