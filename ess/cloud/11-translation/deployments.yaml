@@ -1,0 +1,1519 @@
+# Moved from weft@6798e7d:ess/6-delivery/deployments.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
+# Deployments: what a user deploys, how weft translates it into a FormationRevision, and how a
+# revision reaches an environment as a release. Source: docs/domain-sketch.md section
+# "5. Deployments" (all of it), with "Goals, in order" items 2 to 5 and "Ecosystem formats".
+#
+# Goalpost (sketch, section 5, the owner, 2026-11-26): the Helm chart of a Kubernetes SaaS product
+# deploys and runs on weft unchanged. The enum weft.deployments.KubernetesKind carries, per
+# object kind the sketch lists, whether it maps, is refused or is OPEN, so a coverage report
+# answers the goalpost per chart.
+domain: weft.deployments
+
+summary: >-
+  Deployment sources (weft, Compose, Helm, Kubernetes, ESS system, agent), their
+  deterministic translation into formation revisions with a coverage report, and plans of a
+  revision for an environment, with simulation. Releases, their steps, rollbacks and drift are
+  weft's run-time records (D7 A).
+
+naming:
+  wire: weft
+  display: Deployments
+
+types:
+  # Local identities. The sketch names these nouns only inside section 5; no other domain refers
+  # to them, so they are not in weft.shared.
+
+  # Section 5 "Deployment sources": the kinds. Sketch spelling in the comment.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:26
+  - name: weft.deployments.SourceKind
+    kind: enum
+    variants:
+      - Weft        # weft: weft's own formation document (section 3)
+      - Compose     # compose: a Docker Compose file
+      - Helm        # helm: a Helm chart + values, rendered, then read as kubernetes
+      - Kubernetes  # kubernetes: a set of Kubernetes manifests
+      - EssSystem   # ess-system: an ESS system.yaml
+      - Agent       # agent: an agent document (a runtime and a task, both by digest)
+      - Training    # training (later): a model program + corpus + data pipeline
+
+  # Section 5 "Translation": "source digest". The content digest of the source's bytes (for
+  # helm: the chart archive). Values files are digested apart (HelmValues).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:39
+  - name: weft.deployments.SourceDigest
+    kind: newtype
+    of: String
+
+  # Section 5 "Translator: registered per source kind and version". The version of the source
+  # format the translator reads (Compose spec, Helm chart API, an agent document format, ess/37 ...).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:45
+  - name: weft.deployments.SourceFormatVersion
+    kind: newtype
+    of: String
+
+  # Section 5 "Translation: source digest + translator version".
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:50
+  - name: weft.deployments.TranslatorVersion
+    kind: newtype
+    of: String
+
+  # Section 5 brief: "a helm source carries values per environment" (`--values prod.yaml`).
+  # Only the values file's digest is held here; its bytes are part of the source upload.
+  # OPEN: a values file that holds secret values (a common chart habit): refused, moved to
+  # secret custody, or allowed? Smallest safe answer taken: the translator reports each such
+  # value as a refused object (RefusalReason SecretValueInValues), so no value enters a revision.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:59
+  - name: weft.deployments.HelmValues
+    kind: struct
+    fields:
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: values_digest
+        type: weft.deployments.SourceDigest
+
+  # Section 5 "A spec source can also be one component's package ...; then its translation
+  # becomes a sub-formation in that place."
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:69
+  - name: weft.deployments.EmbeddingPlace
+    kind: struct
+    fields:
+      - name: parent_source_id
+        type: weft.shared.DeploymentSourceId
+      - name: component
+        type: weft.shared.ComponentName
+
+  # Section 5 "CoverageReport: every object of the source with its outcome: mapped (to which
+  # formation element), mapped with loss (what was dropped), or refused (the named reason)."
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:79
+  - name: weft.deployments.CoverageOutcome
+    kind: enum
+    variants: [Mapped, MappedWithLoss, Refused]
+
+  # Section 5, the elements a source object maps to (sections 3, 4, 6, 7, 8). The element of the
+  # FormationRevision a coverage entry names.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:85
+  - name: weft.deployments.FormationElementKind
+    kind: enum
+    variants:
+      - Component           # section 3/4: one workload
+      - ServiceShape        # section 4 Shape: Service
+      - StatefulService     # section 4 Shape: Service, stateful
+      - DaemonShape         # section 4 Shape: Daemon
+      - JobShape            # section 4 Shape: Job
+      - ScheduleShape       # section 4 Shape: Schedule
+      - Process             # section 4 "Inside one instance"
+      - Check               # section 4 Check
+      - InternalName        # section 3 InternalName
+      - Link                # section 3 Link
+      - BorderRoute         # section 3 Border Route
+      - Config              # section 3 Config
+      - SecretReference     # section 7 Secret; the value goes to secret custody, never here
+      - VolumeClaim         # section 6 volume claim
+      - ResourceClaim       # section 6 Claim (cpu, memory, gpu)
+      - WorkloadIdentity    # section 8 workload identity
+      - ScaleRule           # section 4 ScaleRule
+      - DisruptionBudget    # section 4 DisruptionBudget
+      - ReleaseStep         # section 5 ReleaseStep (Helm hooks)
+      - SubFormation        # section 5: a spec source embedded as one component's package
+      - Nothing             # a refused object maps to no element
+
+  # Section 5 "kubernetes" list, as the goalpost's checklist: per kind, whether it maps, is
+  # refused, or is OPEN in the sketch. A kind marked Open is refused until it is decided
+  # (security default: deny). A kind the sketch does not list is Unlisted, refused by name.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:113
+  - name: weft.deployments.KindDisposition
+    kind: enum
+    variants: [Maps, Refused, Open]
+
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:117
+  - name: weft.deployments.KubernetesKind
+    kind: enum
+    attributes:
+      - {name: disposition, type: weft.deployments.KindDisposition}
+      - {name: element, type: weft.deployments.FormationElementKind}
+    variants:
+      # "Deployment -> Service shape; StatefulSet -> stateful Service; DaemonSet -> Daemon;
+      # Job -> Job; CronJob -> Schedule."
+      - {name: Deployment, attributes: {disposition: Maps, element: ServiceShape}}
+      - {name: StatefulSet, attributes: {disposition: Maps, element: StatefulService}}
+      - {name: DaemonSet, attributes: {disposition: Maps, element: DaemonShape}}
+      - {name: Job, attributes: {disposition: Maps, element: JobShape}}
+      - {name: CronJob, attributes: {disposition: Maps, element: ScheduleShape}}
+      # "Pod containers -> Processes; probes -> Checks." A bare Pod is not listed as a kind.
+      # OPEN: a bare Pod manifest (no controller): map to a Service of one replica, or refuse?
+      # Smallest safe answer taken: Open, so refused.
+      - {name: Pod, attributes: {disposition: Open, element: Nothing}}
+      # "Service -> InternalName + Link targets; Ingress -> Border Routes."
+      - {name: Service, attributes: {disposition: Maps, element: InternalName}}
+      - {name: Ingress, attributes: {disposition: Maps, element: BorderRoute}}
+      # "ConfigMap -> Config; Secret -> Secret (values go to secret custody, never into the
+      # formation document)."
+      - {name: ConfigMap, attributes: {disposition: Maps, element: Config}}
+      # OPEN: how a Secret manifest's value reaches secret custody (section 7: "a value is
+      # written once through the API"): does the translator write it, or must the deployer set
+      # it before apply? Taken: the revision holds a reference only; this domain never handles
+      # the value, and a missing value is the secrets domain's refusal at delivery.
+      - {name: Secret, attributes: {disposition: Maps, element: SecretReference}}
+      # "PersistentVolumeClaim -> volume claim; resource limits and nvidia.com/gpu -> claims."
+      - {name: PersistentVolumeClaim, attributes: {disposition: Maps, element: VolumeClaim}}
+      # "ServiceAccount -> workload identity; HorizontalPodAutoscaler -> ScaleRule;
+      # PodDisruptionBudget -> DisruptionBudget; NetworkPolicy -> Links."
+      - {name: ServiceAccount, attributes: {disposition: Maps, element: WorkloadIdentity}}
+      - {name: HorizontalPodAutoscaler, attributes: {disposition: Maps, element: ScaleRule}}
+      - {name: PodDisruptionBudget, attributes: {disposition: Maps, element: DisruptionBudget}}
+      - {name: NetworkPolicy, attributes: {disposition: Maps, element: Link}}
+      # "# OPEN: custom resources (CRDs) and operators, and workloads that call the Kubernetes
+      # API." The kinds below carry that OPEN point: refused until decided.
+      - {name: CustomResourceDefinition, attributes: {disposition: Open, element: Nothing}}
+      - {name: CustomResource, attributes: {disposition: Open, element: Nothing}}
+      - {name: Role, attributes: {disposition: Open, element: Nothing}}
+      - {name: RoleBinding, attributes: {disposition: Open, element: Nothing}}
+      - {name: ClusterRole, attributes: {disposition: Open, element: Nothing}}
+      - {name: ClusterRoleBinding, attributes: {disposition: Open, element: Nothing}}
+      # Any kind the sketch does not list (Namespace, PersistentVolume, StorageClass, webhook
+      # configurations, ...). OPEN: which further kinds common SaaS charts need.
+      - {name: Unlisted, attributes: {disposition: Refused, element: Nothing}}
+
+  # Section 5 "Refused by name: privileged pods, host paths, host network, kernel capabilities
+  # beyond the isolation level", and the OPEN kinds above. A refusal is always one of these names.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:167
+  - name: weft.deployments.RefusalReason
+    kind: enum
+    variants:
+      - PrivilegedPod            # securityContext.privileged
+      - HostPath                 # a hostPath volume
+      - HostNetwork              # hostNetwork: true
+      # OPEN: hostPID / hostIPC are not named by the sketch; taken as refused like host network.
+      - HostNamespace
+      - KernelCapability         # a capability beyond the workload's isolation level
+      - CustomResource           # OPEN in the sketch: CRDs, custom resources, operators
+      - KubernetesApiAccess      # OPEN in the sketch: a workload that calls the Kubernetes API
+      - BarePod                  # OPEN (see KubernetesKind Pod)
+      - UnlistedKind             # a Kubernetes kind the sketch does not list
+      - SecretValueInValues      # OPEN (see HelmValues): a secret value in a values file
+      - UnsupportedConstruct     # any other source construct the translator cannot represent
+
+  # Section 5 "every object of the source": how a coverage entry names one source object. `kind`
+  # is the source's own word (a Compose `services` entry, a Kubernetes `Deployment`); `path` is
+  # the file and position inside the source (a rendered template for helm).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:186
+  - name: weft.deployments.SourceObject
+    kind: struct
+    fields:
+      - name: kind
+        type: String
+      - name: name
+        type: String
+      - name: path
+        type: String
+
+  # Section 5 "Plan: the diff between the live release and a new revision".
+  # OPEN: the diff's granularity (components only, or every link, route, claim and config key).
+  # Smallest answer taken: component names added, changed and removed.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:220
+  - name: weft.deployments.PlanDiff
+    kind: struct
+    fields:
+      - name: added
+        type: List<weft.shared.ComponentName>
+      - name: changed
+        type: List<weft.shared.ComponentName>
+      - name: removed
+        type: List<weft.shared.ComponentName>
+
+  # Section 5 "Simulation": the three checks.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:231
+  - name: weft.deployments.SimulationCheck
+    kind: enum
+    variants: [Placement, Policy, Reachability]
+
+  # Section 5 "Result: pass, or a list of named violations." The names, one per rule the sketch
+  # states for each check.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:237
+  - name: weft.deployments.ViolationName
+    kind: enum
+    variants:
+      - ExceedsCapacity       # placement: an instance does not fit the cluster's capacity
+      - ExceedsQuota          # placement: an instance does not fit the account's quota
+      - NoMatchingResource    # placement: no node offers a claimed resource class
+      - LinkNotAllowed        # policy: a link the account's policy refuses
+      - EgressNotAllowed      # policy: an egress the account's policy refuses
+      - SecretGrantNotAllowed # policy: a secret grant the account's policy refuses
+      - UnreachableComponent  # reachability: a link's target cannot be reached
+      - UnintendedExposure    # reachability: a component reachable from outside not on the border
+
+  # A violation names the check, the rule and the subject by name only: "a value never appears in
+  # logs, plans, simulations or events" (section 7), so a secret is named, never shown.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:251
+  - name: weft.deployments.Violation
+    kind: struct
+    fields:
+      - name: check
+        type: weft.deployments.SimulationCheck
+      - name: name
+        type: weft.deployments.ViolationName
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: subject
+        type: String
+
+  # Section 5 "reachability: which component can reach which, inside and outside". An absent
+  # side is outside the formation.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:265
+  - name: weft.deployments.ReachabilityEdge
+    kind: struct
+    fields:
+      - name: caller
+        type: Optional<weft.shared.ComponentName>
+      - name: callee
+        type: Optional<weft.shared.ComponentName>
+
+  # Section 5 "Simulation: a release checked without running it ... Result: pass, or a list of
+  # named violations." Held on the Plan it checks: the sketch has no simulation without a plan.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:275
+  - name: weft.deployments.Simulation
+    kind: struct
+    fields:
+      - name: reachability
+        type: List<weft.deployments.ReachabilityEdge>
+      - name: violations
+        type: List<weft.deployments.Violation>
+
+entities:
+  # Section 5 "Translation": "Translator: registered per source kind and version." "A new source
+  # kind arrives as a new translator, not as a change to the scheduler or the node agent."
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:297
+  - name: weft.deployments.Translator
+    naming:
+      summary: A registered translator of one source kind and source format version.
+    identity:
+      name: translator_id
+      type: weft.shared.TranslatorId
+    fields:
+      - name: source_kind
+        type: weft.deployments.SourceKind
+      - name: source_format_version
+        type: weft.deployments.SourceFormatVersion
+      - name: translator_version
+        type: weft.deployments.TranslatorVersion
+      # OPEN: how a translator's artifact is identified and verified (signed like a package,
+      # section 4?). Taken: its artifact digest is recorded.
+      - name: artifact_digest
+        type: weft.shared.ArtifactDigest
+      - name: registered_at
+        type: Timestamp
+    relations:
+      - {name: artifact, kind: references, target: weft.artifacts.Artifact, cardinality: one, via: artifact_digest}
+    # OPEN: the sketch gives no translator lifecycle. Taken: registered until retired; a retired
+    # translator translates nothing new, and its translations stay readable.
+    lifecycle:
+      initial: Registered
+      states: [Registered, Retired]
+      terminal: [Retired]
+      transitions:
+        - name: retire
+          from: [Registered]
+          to: Retired
+
+  # Section 5 "Deployment sources": "A user deploys a DeploymentSource: a document weft
+  # translates into a FormationRevision."
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:331
+  - name: weft.deployments.DeploymentSource
+    naming:
+      summary: A document a user deploys, by kind and content digest, that the cloud translates.
+    identity:
+      name: source_id
+      type: weft.shared.DeploymentSourceId
+    fields:
+      - name: scope_id
+        type: weft.shared.ScopeId
+      # The formation the translation becomes a revision of (section 3: a formation is named
+      # inside one account).
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: kind
+        type: weft.deployments.SourceKind
+      - name: format_version
+        type: weft.deployments.SourceFormatVersion
+      - name: source_digest
+        type: weft.deployments.SourceDigest
+      # helm only: the values files per environment (`--values prod.yaml`).
+      - name: helm_values
+        type: List<weft.deployments.HelmValues>
+      # A spec source embedded as one component's package of another source.
+      - name: embedded_in
+        type: Optional<weft.deployments.EmbeddingPlace>
+      - name: submitted_by
+        type: weft.shared.PrincipalId
+      - name: submitted_at
+        type: Timestamp
+    relations:
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
+    # UNMAPPED: embedded_in.parent_source_id names another DeploymentSource; a relation through a
+    # member of an Optional struct is not a relation entry this file found. Open question for the
+    # integrator: flatten it into a field `parent_source_id` with a `references` relation.
+    # OPEN: the sketch gives no source lifecycle. Taken: submitted until withdrawn; a withdrawn
+    # source is not translated again, and its translations and releases stay.
+    lifecycle:
+      initial: Submitted
+      states: [Submitted, Withdrawn]
+      terminal: [Withdrawn]
+      transitions:
+        - name: withdraw
+          from: [Submitted]
+          to: Withdrawn
+
+  # Section 5 "Translation: source digest + translator version -> FormationRevision +
+  # CoverageReport." "Deterministic: the same source and translator version give the same
+  # revision, byte for byte."
+  # UNMAPPED: byte-for-byte determinism is a property of the translator's output, which lives in
+  # the formations domain (the revision's document); this file can only key a translation by
+  # source, translator and environment (TranslateSource answers AlreadyTranslated). Open question
+  # for the integrator: a check that compares the revision digests of two translations.
+  # UNMAPPED: "A translator cannot grant more than the source declares: an agent that names no
+  # secret gets no secret grant." The grants are part of the FormationRevision (formations,
+  # secrets domains); nothing in this domain sees them. Open question for the integrator.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:388
+  - name: weft.deployments.Translation
+    naming:
+      summary: One translation of a source by a translator into a formation revision.
+    identity:
+      name: translation_id
+      type: weft.shared.TranslationId
+    fields:
+      - name: source_id
+        type: weft.shared.DeploymentSourceId
+      # Isolation pass 2: the source's account, copied so a plan ties the translation to the
+      # caller's account without a second hop.
+      - name: scope_id
+        type: weft.shared.ScopeId
+      # The source's formation, copied so a plan is checked against it.
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: source_digest
+        type: weft.deployments.SourceDigest
+      - name: translator_id
+        type: weft.shared.TranslatorId
+      - name: translator_version
+        type: weft.deployments.TranslatorVersion
+      # helm only: the environment whose values file the chart was rendered with.
+      - name: environment_id
+        type: Optional<weft.shared.EnvironmentId>
+      # Set when the translation completes. OPEN: whether a translation with a refused object
+      # still writes a revision. Taken: no; a refused translation has no revision to deploy.
+      - name: formation_revision_id
+        type: Optional<weft.shared.FormationRevisionId>
+      - name: failure
+        type: Optional<String>
+      - name: requested_at
+        type: Timestamp
+      - name: completed_at
+        type: Optional<Timestamp>
+    relations:
+      - name: source
+        kind: references
+        target: weft.deployments.DeploymentSource
+        cardinality: one
+        via: source_id
+      - name: translator
+        kind: references
+        target: weft.deployments.Translator
+        cardinality: one
+        via: translator_id
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
+      - {name: environment, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
+      # The revision this translation produced. formations.FormationRevision stores no
+      # translation_id (docs/layers.md, cycle 3): this field is the only link between the two.
+      - {name: formation_revision, kind: references, target: weft.architecture.FormationRevision, cardinality: one, via: formation_revision_id}
+      # The CoverageReport of this translation: an entry has no meaning without it.
+      - name: coverage
+        kind: owns
+        target: weft.deployments.CoverageEntry
+        cardinality: many
+        via: translation_id
+    # OPEN: the sketch names no translation states. Taken: Requested while the translator runs;
+    # Translated (every object mapped, with or without loss); Refused (at least one object
+    # refused: "a deploy with a refused object stops"); Failed (the translator itself failed).
+    lifecycle:
+      initial: Requested
+      states: [Requested, Translated, Refused, Failed]
+      terminal: [Translated, Refused, Failed]
+      transitions:
+        - name: complete
+          from: [Requested]
+          to: Translated
+        - name: refuse
+          from: [Requested]
+          to: Refused
+        - name: fail
+          from: [Requested]
+          to: Failed
+
+  # Section 5 "CoverageReport: every object of the source with its outcome: mapped (to which
+  # formation element), mapped with loss (what was dropped), or refused (the named reason)."
+  # The report of a translation is the set of its entries (view CoverageReport).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:467
+  - name: weft.deployments.CoverageEntry
+    naming:
+      summary: The outcome of one source object in one translation.
+    identity:
+      name: entry_id
+      type: weft.shared.CoverageEntryId
+    fields:
+      - name: translation_id
+        type: weft.shared.TranslationId
+      - name: object
+        type: weft.deployments.SourceObject
+      # helm and kubernetes sources: the object's kind as the goalpost checklist names it.
+      - name: kubernetes_kind
+        type: Optional<weft.deployments.KubernetesKind>
+      - name: outcome
+        type: weft.deployments.CoverageOutcome
+      - name: element
+        type: weft.deployments.FormationElementKind
+      # The element's name in the revision (a component, a link, a route ...).
+      - name: element_name
+        type: Optional<String>
+      # MappedWithLoss: what was dropped.
+      - name: lost
+        type: Optional<String>
+      # Refused: the named reason.
+      - name: refusal
+        type: Optional<weft.deployments.RefusalReason>
+    lifecycle:
+      initial: Recorded
+      states: [Recorded]
+      terminal: [Recorded]
+
+  # Section 5 "Releases": "Plan: the diff between the live release and a new revision, plus a
+  # simulation, shown before apply." CLI `weft plan shop.yaml --env prod`; `weft deploy` is
+  # "plan, simulate, ask, apply".
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:502
+  - name: weft.deployments.Plan
+    naming:
+      summary: The diff and simulation of one revision against an environment's live release.
+    identity:
+      name: plan_id
+      type: weft.shared.PlanId
+    fields:
+      # Isolation pass 2: the account of the translation or the release it was made from.
+      - name: scope_id
+        type: weft.shared.ScopeId
+      - name: formation_id
+        type: weft.shared.FormationId
+      - name: environment_id
+        type: weft.shared.EnvironmentId
+      - name: formation_revision_id
+        type: weft.shared.FormationRevisionId
+      # A plan of a new revision names its translation (CreatePlan). cloudspec (D7 A): weft's plan
+      # of a rollback (rollback_of, PlanRollback) names a release, a run-time record of weft.
+      - name: translation_id
+        type: Optional<weft.shared.TranslationId>
+      # The release the diff was taken against; absent for the first release of an environment.
+      - name: live_release_id
+        type: Optional<weft.shared.ReleaseId>
+      - name: diff
+        type: Optional<weft.deployments.PlanDiff>
+      - name: simulation
+        type: Optional<weft.deployments.Simulation>
+      - name: created_by
+        type: weft.shared.PrincipalId
+      - name: created_at
+        type: Timestamp
+    relations:
+      - name: translation
+        kind: references
+        target: weft.deployments.Translation
+        cardinality: one
+        via: translation_id
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
+      - {name: environment, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
+      - {name: formation_revision, kind: references, target: weft.architecture.FormationRevision, cardinality: one, via: formation_revision_id}
+    # OPEN: the sketch names no plan states. Taken: Simulating until the control plane records
+    # the diff and simulation; Ready (simulation passed) or Blocked (named violations);
+    # Discarded by the user. Applying a Ready plan creates its release; the plan stays Ready, and
+    # a second release of it does not start (StartRelease already-applied).
+    # OPEN: a plan whose environment got a new live release after the plan was made (a stale
+    # diff). Taken: not detected here; the integrator decides whether ApplyPlan re-simulates.
+    lifecycle:
+      initial: Simulating
+      states: [Simulating, Ready, Blocked, Discarded]
+      terminal: [Discarded]
+      transitions:
+        - name: pass
+          from: [Simulating]
+          to: Ready
+        - name: block
+          from: [Simulating]
+          to: Blocked
+        - name: discard
+          from: [Simulating, Ready, Blocked]
+          to: Discarded
+
+errors:
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:792
+  - name: weft.deployments.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:794
+  - name: weft.deployments.StateConflict
+    summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:796
+  - name: weft.deployments.TranslatorExists
+    summary: A translator of this source kind, format version and translator version is registered.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:798
+  - name: weft.deployments.NoTranslator
+    summary: >-
+      No registered translator reads this source kind and format version, so the cloud cannot
+      translate it (training sources, until their translator exists).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:802
+  - name: weft.deployments.ValuesOnlyForHelm
+    summary: Values per environment were given for a source that is not a helm chart.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:804
+  - name: weft.deployments.NotASpecSource
+    summary: >-
+      Only a spec source (ess-system, agent, training) can be one component's package; a
+      weft, compose, helm or kubernetes source cannot be embedded.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:808
+  - name: weft.deployments.SourceIsWithdrawn
+    summary: The source was withdrawn, so it is not translated again.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:810
+  - name: weft.deployments.TranslatorIsRetired
+    summary: The translator is retired, so it translates nothing new.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:812
+  - name: weft.deployments.SourceMismatch
+    summary: >-
+      The source's kind, format version, digest or formation is not what the request names, so the
+      translation would not be of the bytes the caller meant.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:816
+  - name: weft.deployments.TranslatorMismatch
+    summary: The translator's source kind, format version or version is not what the request names.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:818
+  - name: weft.deployments.EnvironmentRequired
+    summary: A helm chart is rendered with one environment's values, and the request names none.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:820
+  - name: weft.deployments.NoValuesForEnvironment
+    summary: The helm source holds no values file for the named environment.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:822
+  - name: weft.deployments.AlreadyTranslated
+    summary: >-
+      This source was already translated by this translator for this environment; the same input
+      gives the same revision, so the existing translation is the answer.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:826
+  - name: weft.deployments.TranslationClosed
+    summary: The translation is no longer running, so its coverage report is not changed.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:828
+  - name: weft.deployments.RefusalUnnamed
+    summary: A refused object must name its refusal reason.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:830
+  - name: weft.deployments.LossUnnamed
+    summary: An object mapped with loss must say what was dropped.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:832
+  - name: weft.deployments.ElementMissing
+    summary: A mapped object must name the formation element it maps to.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:834
+  - name: weft.deployments.KindNotMappable
+    summary: >-
+      The Kubernetes kind is refused or OPEN in the translator's checklist, so a translator cannot report it
+      as mapped.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:838
+  - name: weft.deployments.HasRefusedObjects
+    summary: The coverage report holds a refused object, so the translation does not complete.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:840
+  - name: weft.deployments.NoRefusedObject
+    summary: The coverage report holds no refused object, so the translation is not refused.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:842
+  - name: weft.deployments.DeployRefused
+    summary: >-
+      The translation's coverage report holds a refused object, so the deploy stops; the
+      report names each refused object and its reason.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:846
+  - name: weft.deployments.TranslationNotReady
+    summary: The translation has not completed, so there is no revision to plan.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:848
+  - name: weft.deployments.TranslationMismatch
+    summary: The translation's formation or revision is not what the request names.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:850
+  - name: weft.deployments.ValuesForOtherEnvironment
+    summary: The helm chart was rendered with another environment's values.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:858
+  - name: weft.deployments.PlanMismatch
+    summary: The plan's environment is not what the request names.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:906
+  - name: weft.deployments.NoStepToReapply
+    summary: The drift names no release step, so there is nothing to re-apply; it is escalated.
+
+events:
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:924
+  - name: weft.deployments.TranslatorRegistered
+    fields:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:930
+  - name: weft.deployments.TranslatorRetired
+    fields:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:933
+  - name: weft.deployments.SourceSubmitted
+    fields:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: kind, type: weft.deployments.SourceKind}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:940
+  - name: weft.deployments.SourceWithdrawn
+    fields:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:943
+  - name: weft.deployments.TranslationRequested
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:951
+  - name: weft.deployments.CoverageEntryRecorded
+    fields:
+      - {name: entry_id, type: weft.shared.CoverageEntryId}
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: object, type: weft.deployments.SourceObject}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:958
+  - name: weft.deployments.SourceTranslated
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:962
+  - name: weft.deployments.TranslationRefused
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:965
+  - name: weft.deployments.TranslationFailed
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: failure, type: String}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:969
+  - name: weft.deployments.PlanCreated
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:980
+  - name: weft.deployments.PlanSimulated
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:983
+  - name: weft.deployments.PlanBlocked
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: violations, type: List<weft.deployments.Violation>}
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:987
+  - name: weft.deployments.PlanDiscarded
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+
+commands:
+  # Section 5 "Translator: registered per source kind and version"; "A new source kind arrives
+  # as a new translator".
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1068
+  - name: weft.deployments.RegisterTranslator
+    naming:
+      display: Register a translator
+    input:
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+    outcomes:
+      - name: exists
+        when_related:
+          entity: weft.deployments.Translator
+          where:
+            all:
+              - source_kind == input.source_kind
+              - source_format_version == input.source_format_version
+              - translator_version == input.translator_version
+          exists: true
+        error: weft.deployments.TranslatorExists
+      - name: registered
+        creates: weft.deployments.Translator
+        instance: translator_id
+        sets:
+          source_kind: input.source_kind
+          source_format_version: input.source_format_version
+          translator_version: input.translator_version
+          artifact_digest: input.artifact_digest
+          registered_at: {generated: true}
+        emits: [weft.deployments.TranslatorRegistered]
+        payload:
+          weft.deployments.TranslatorRegistered:
+            translator_id: {generated: true}
+            source_kind: input.source_kind
+            source_format_version: input.source_format_version
+            translator_version: input.translator_version
+
+  # Section 5 "Translator" (OPEN lifecycle, see the entity).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1105
+  - name: weft.deployments.RetireTranslator
+    naming:
+      display: Retire a translator
+    input:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+    outcomes:
+      - name: no-such-translator
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: retired
+        moves: weft.deployments.Translator.retire
+        instance: translator_id
+        emits: [weft.deployments.TranslatorRetired]
+        payload:
+          weft.deployments.TranslatorRetired:
+            translator_id: input.translator_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "A user deploys a DeploymentSource"; CLI `weft deploy shop.yaml`,
+  # `weft deploy chart/ --values prod.yaml`, `weft deploy system.yaml`.
+  # The role binding itself is checked by the management API's authorization (section 2: "every
+  # management call is authorized against RoleBindings"), which sets caller.scope_id; this
+  # command ties the account, the formation and each values file's environment to it.
+  # The submitter is the caller (hardening pass 1 D2): the request no longer names it.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1131
+  - name: weft.deployments.SubmitDeploymentSource
+    naming:
+      display: Submit a deployment source
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: kind, type: weft.deployments.SourceKind}
+      - {name: format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: helm_values, type: List<weft.deployments.HelmValues>}
+      - {name: embedded_in, type: Optional<weft.deployments.EmbeddingPlace>}
+      # Section 5 "Translator: registered per source kind and version": the translator the caller
+      # means to translate this source with, the same choice TranslateSource takes (the CLI picks
+      # the newest registered one for the kind and format version). Checked here by its row, so a
+      # source no registered translator reads is refused at submit.
+      - {name: translator_id, type: weft.shared.TranslatorId}
+    outcomes:
+      # hardening pass 1 D3: the account must be the one the request acts in; another account
+      # answers like a missing row, so it is not disclosed.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.deployments.NotFound
+      - name: values-not-helm
+        when:
+          all:
+            - kind != Helm
+            - helm_values.count > 0
+        error: weft.deployments.ValuesOnlyForHelm
+      - name: not-a-spec-source
+        when:
+          all:
+            - embedded_in: {defined: true}
+            - kind: {in: [Weft, Compose, Helm, Kubernetes]}
+        error: weft.deployments.NotASpecSource
+      # hardening pass 1 W4: a source of one account is never filed under another account's
+      # formation (TranslateSource copies the formation into the translation, and every plan and
+      # release follows it). A foreign formation answers like a missing one.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.deployments.NotFound
+      # The translator is read by the row the input names, not as a row set over every
+      # translator: ESS 0.99.2 synthesis does not arrange a row-set guard's rows on a creating
+      # command used as a scenario prefix (beyond10x/ess#642), which left every later outcome of
+      # this domain without a scenario.
+      - name: no-translator
+        when_related: {via: input.translator_id, exists: false}
+        error: weft.deployments.NoTranslator
+      # hardening pass 1 W4 (see formation-missing).
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.deployments.NotFound
+      - name: translator-not-for-source
+        when_related:
+          via: input.translator_id
+          predicate:
+            any:
+              - state != Registered
+              - source_kind != input.kind
+              - source_format_version != input.format_version
+        error: weft.deployments.NoTranslator
+      # hardening pass 1 W8: every values file names an environment of the source's formation, so
+      # TranslateSource (no-values-for-environment) cannot render the chart with another
+      # formation's environment. A foreign environment answers like a missing one.
+      # OPEN: a row set on this creating command may meet beyond10x/ess#642 (rows of a prefix
+      # step's row-set guard not arranged); the integrator's synthesis run decides whether it stays.
+      - name: values-environment-foreign
+        when_related:
+          entity: weft.architecture.Formation
+          where:
+            all:
+              - formation_id == input.formation_id
+              - exists:
+                  in: input.helm_values
+                  as: v
+                  that:
+                    not:
+                      exists:
+                        in: {entity: weft.architecture.Environment}
+                        as: e
+                        that: {all: [e.environment_id == v.environment_id, e.formation_id == formation_id]}
+          exists: true
+        error: weft.deployments.NotFound
+      - name: submitted
+        creates: weft.deployments.DeploymentSource
+        instance: source_id
+        sets:
+          scope_id: input.scope_id
+          formation_id: input.formation_id
+          kind: input.kind
+          format_version: input.format_version
+          source_digest: input.source_digest
+          helm_values: input.helm_values
+          embedded_in: input.embedded_in
+          # hardening pass 1 D2: the submitter is the authenticated caller, not a request field.
+          submitted_by: {caller: principal_id}
+          submitted_at: {generated: true}
+        emits: [weft.deployments.SourceSubmitted]
+        payload:
+          weft.deployments.SourceSubmitted:
+            source_id: {generated: true}
+            scope_id: input.scope_id
+            formation_id: input.formation_id
+            kind: input.kind
+            source_digest: input.source_digest
+
+  # Section 5 "Deployment sources" (OPEN lifecycle, see the entity).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1237
+  - name: weft.deployments.WithdrawDeploymentSource
+    naming:
+      display: Withdraw a deployment source
+    input:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+    outcomes:
+      - name: no-such-source
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # hardening pass 1 D3: a source of another account than the one the request acts in answers
+      # like a missing one, before its state is read.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.deployments.NotFound
+      - name: withdrawn
+        moves: weft.deployments.DeploymentSource.withdraw
+        instance: source_id
+        emits: [weft.deployments.SourceWithdrawn]
+        payload:
+          weft.deployments.SourceWithdrawn:
+            source_id: input.source_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Translation: source digest + translator version -> FormationRevision +
+  # CoverageReport"; "Helm: rendered with its values, then read as kubernetes". The request names
+  # the source kind and format version it means; both are checked against the source and the
+  # translator, so the translator reads the source's kind and version. The digest, formation and
+  # translator version are copied from the rows (no command changes them), so the translation
+  # records exactly the bytes and the translator that ran. (The request named them too, compared
+  # field by field: the refusals got no scenario and made synthesis of this command take minutes
+  # in ESS 0.99.2.)
+  # OPEN: whether the caller picks the translator or weft picks the newest registered one for the
+  # kind and format version. Taken: the caller names it (the CLI picks the newest).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1272
+  - name: weft.deployments.TranslateSource
+    naming:
+      display: Translate a deployment source
+    input:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      # Isolation pass 2: the account the request acts in, so the source can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+    outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing source (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.deployments.NotFound
+      - name: environment-required
+        when:
+          all:
+            - source_kind == Helm
+            - environment_id: {defined: false}
+        error: weft.deployments.EnvironmentRequired
+      - name: environment-not-helm
+        when:
+          all:
+            - source_kind != Helm
+            - environment_id: {defined: true}
+        error: weft.deployments.ValuesOnlyForHelm
+      - name: no-such-source
+        when_related: {via: input.source_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: no-such-translator
+        when_related: {via: input.translator_id, exists: false}
+        error: weft.deployments.NotFound
+      # Isolation pass 2: a source of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: source-of-other-scope
+        when_related: {via: input.source_id, predicate: scope_id != input.scope_id}
+        error: weft.deployments.NotFound
+      - name: source-withdrawn
+        when_related: {via: input.source_id, predicate: state == Withdrawn}
+        error: weft.deployments.SourceIsWithdrawn
+      - name: translator-retired
+        when_related: {via: input.translator_id, predicate: state == Retired}
+        error: weft.deployments.TranslatorIsRetired
+      - name: source-mismatch
+        when_related:
+          via: input.source_id
+          predicate:
+            any:
+              - kind != input.source_kind
+              - format_version != input.source_format_version
+        error: weft.deployments.SourceMismatch
+      - name: translator-mismatch
+        when_related:
+          via: input.translator_id
+          predicate:
+            any:
+              - source_kind != input.source_kind
+              - source_format_version != input.source_format_version
+        error: weft.deployments.TranslatorMismatch
+      - name: no-values-for-environment
+        when_related:
+          via: input.source_id
+          predicate:
+            all:
+              - kind == Helm
+              - not:
+                  exists:
+                    in: helm_values
+                    as: v
+                    that: v.environment_id == input.environment_id
+        error: weft.deployments.NoValuesForEnvironment
+      # UNMAPPED: the refusal of a second translation of one source by one translator for one
+      # environment (error AlreadyTranslated, a row set over Translation) is not declared. ESS
+      # 0.99.2 synthesis arranges no row beside a row-set guard when another guard of the command
+      # compares a required field of a related row with the input (source-mismatch,
+      # translator-mismatch): every outcome of this command and every later step of the domain went
+      # without a scenario. The comparisons are what makes the translator read the source's kind
+      # and version, so they stay. A repeated request makes a second translation of the same
+      # revision (the translator is deterministic). Open question for ESS (strict beside-row search
+      # in synthesize/related_guard.rs) and for the owner: whether the refusal is wanted back once
+      # ESS arranges it.
+      - name: requested
+        creates: weft.deployments.Translation
+        instance: translation_id
+        sets:
+          source_id: input.source_id
+          scope_id: {related: {via: input.source_id, field: scope_id}}
+          formation_id: {related: {via: input.source_id, field: formation_id}}
+          source_digest: {related: {via: input.source_id, field: source_digest}}
+          translator_id: input.translator_id
+          translator_version: {related: {via: input.translator_id, field: translator_version}}
+          environment_id: input.environment_id
+          requested_at: {generated: true}
+        emits: [weft.deployments.TranslationRequested]
+        payload:
+          weft.deployments.TranslationRequested:
+            translation_id: {generated: true}
+            source_id: input.source_id
+            source_digest: {related: {via: input.source_id, field: source_digest}}
+            translator_id: input.translator_id
+            translator_version: {related: {via: input.translator_id, field: translator_version}}
+            environment_id: input.environment_id
+
+  # Section 5 "CoverageReport: every object of the source with its outcome: mapped (to which
+  # formation element), mapped with loss (what was dropped), or refused (the named reason)."
+  # Issued by the Translator actor while the translation runs.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1382
+  - name: weft.deployments.RecordCoverageEntry
+    naming:
+      display: Record one source object's coverage
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: object, type: weft.deployments.SourceObject}
+      - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - {name: element, type: weft.deployments.FormationElementKind}
+      - {name: element_name, type: Optional<String>}
+      - {name: lost, type: Optional<String>}
+      - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
+    outcomes:
+      - name: refusal-unnamed
+        when:
+          all:
+            - outcome == Refused
+            - refusal: {defined: false}
+        error: weft.deployments.RefusalUnnamed
+      - name: loss-unnamed
+        when:
+          all:
+            - outcome == MappedWithLoss
+            - lost: {defined: false}
+        error: weft.deployments.LossUnnamed
+      - name: element-missing
+        when:
+          all:
+            - outcome: {in: [Mapped, MappedWithLoss]}
+            - element == Nothing
+        error: weft.deployments.ElementMissing
+      # Security default: a kind refused or OPEN in the checklist is never reported as mapped.
+      - name: kind-not-mappable
+        when:
+          all:
+            - outcome: {in: [Mapped, MappedWithLoss]}
+            - kubernetes_kind.disposition: {in: [Refused, Open]}
+        error: weft.deployments.KindNotMappable
+      - name: no-such-translation
+        when_related: {via: input.translation_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: translation-closed
+        when_related: {via: input.translation_id, predicate: state != Requested}
+        error: weft.deployments.TranslationClosed
+      - name: recorded
+        creates: weft.deployments.CoverageEntry
+        instance: entry_id
+        sets:
+          translation_id: input.translation_id
+          object: input.object
+          kubernetes_kind: input.kubernetes_kind
+          outcome: input.outcome
+          element: input.element
+          element_name: input.element_name
+          lost: input.lost
+          refusal: input.refusal
+        emits: [weft.deployments.CoverageEntryRecorded]
+        payload:
+          weft.deployments.CoverageEntryRecorded:
+            entry_id: {generated: true}
+            translation_id: input.translation_id
+            object: input.object
+            outcome: input.outcome
+            refusal: input.refusal
+
+  # Section 5 "Translation: ... -> FormationRevision + CoverageReport". The translator ends a
+  # translation with no refused object by naming the revision it wrote.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1449
+  - name: weft.deployments.CompleteTranslation
+    naming:
+      display: Complete a translation
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+    outcomes:
+      - name: no-such-translation
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # hardening pass 1 (CompleteTranslation formation_revision_id): the revision a translator
+      # names is a revision of the translation's own formation, never another formation's.
+      - name: no-such-revision
+        when_related: {via: input.formation_revision_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: revision-of-other-formation
+        when_related:
+          entity: weft.architecture.FormationRevision
+          where:
+            all:
+              - revision_id == input.formation_revision_id
+              - formation_id != subject.formation_id
+          exists: true
+        error: weft.deployments.TranslationMismatch
+      - name: has-refused-objects
+        when_related:
+          entity: weft.deployments.CoverageEntry
+          where:
+            all:
+              - translation_id == input.translation_id
+              - outcome == Refused
+          exists: true
+        error: weft.deployments.HasRefusedObjects
+      - name: translated
+        moves: weft.deployments.Translation.complete
+        instance: translation_id
+        sets:
+          formation_revision_id: input.formation_revision_id
+          completed_at: {generated: true}
+        emits: [weft.deployments.SourceTranslated]
+        payload:
+          weft.deployments.SourceTranslated:
+            translation_id: input.translation_id
+            formation_revision_id: input.formation_revision_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "A deploy with a refused object stops." The translator ends a translation that
+  # holds at least one refused object; it writes no revision. The translator names one refused
+  # entry of the translation's report as the reason. (A row set over CoverageEntry here left
+  # every scenario that passes through a refused translation without a witness in ESS 0.99.2:
+  # a prefix step's row-set refusal is not arranged, beyond10x/ess#642.)
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1502
+  - name: weft.deployments.RefuseTranslation
+    naming:
+      display: Refuse a translation
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: entry_id, type: weft.shared.CoverageEntryId}
+    outcomes:
+      - name: no-such-translation
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: no-refused-object
+        when_related: {via: input.entry_id, exists: false}
+        error: weft.deployments.NoRefusedObject
+      - name: entry-not-refused
+        when_related:
+          via: input.entry_id
+          predicate:
+            any:
+              - translation_id != input.translation_id
+              - outcome != Refused
+        error: weft.deployments.NoRefusedObject
+      - name: refused
+        moves: weft.deployments.Translation.refuse
+        instance: translation_id
+        sets:
+          completed_at: {generated: true}
+        emits: [weft.deployments.TranslationRefused]
+        payload:
+          weft.deployments.TranslationRefused:
+            translation_id: input.translation_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Translator" (OPEN: the sketch says nothing of a translator that fails; taken: the
+  # translation ends Failed with the translator's message, and a new request may run again).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1538
+  - name: weft.deployments.FailTranslation
+    naming:
+      display: Record a failed translation
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: failure, type: String}
+    outcomes:
+      - name: no-such-translation
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: failed
+        moves: weft.deployments.Translation.fail
+        instance: translation_id
+        sets:
+          failure: input.failure
+          completed_at: {generated: true}
+        emits: [weft.deployments.TranslationFailed]
+        payload:
+          weft.deployments.TranslationFailed:
+            translation_id: input.translation_id
+            failure: input.failure
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Plan: the diff between the live release and a new revision, plus a simulation,
+  # shown before apply"; "A deploy with a refused object stops." CLI `weft plan`, and the first
+  # step of `weft deploy`. The formation is the translation's, copied from its row (the request
+  # named it too, compared beside the revision: that refusal got no scenario in ESS 0.99.2).
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1567
+  - name: weft.deployments.CreatePlan
+    naming:
+      display: Plan a revision for an environment
+    input:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      # Isolation pass 2: the account the request acts in, so the translation can be tied to the
+      # caller (a related row is not compared with the caller directly).
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+    outcomes:
+      # Isolation pass 2: the account must be the one the request acts in; it reads no row and
+      # answers like a missing translation (an input guard answers ahead of every row check).
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.deployments.NotFound
+      - name: no-such-translation
+        when_related: {via: input.translation_id, exists: false}
+        error: weft.deployments.NotFound
+      # hardening pass 1 W4: the environment must exist (see environment-foreign).
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.deployments.NotFound
+      # Isolation pass 2: a translation of another account answers like a missing one, after the
+      # existence checks and before its state is read.
+      - name: translation-of-other-scope
+        when_related: {via: input.translation_id, predicate: scope_id != input.scope_id}
+        error: weft.deployments.NotFound
+      # hardening pass 1 disclosure (CreatePlan translation_id): the revision tie answers before
+      # any state of the translation, with the not-found error, so a translation of another
+      # formation discloses neither its existence nor its state to a caller who does not hold its
+      # revision. A translation that holds no revision yet (Requested, Refused, Failed) still
+      # answers its state below.
+      - name: translation-mismatch
+        when_related:
+          via: input.translation_id
+          predicate:
+            all:
+              - formation_revision_id: {defined: true}
+              - formation_revision_id != input.formation_revision_id
+        error: weft.deployments.NotFound
+      # hardening pass 1 W4: a plan's environment is an environment of the translation's
+      # formation, so no plan (and no release) of one formation targets another formation's or
+      # another account's environment. A foreign environment answers like a missing one.
+      # OPEN: an earlier row set over CoverageEntry beside translation-mismatch left this command
+      # without scenarios in ESS 0.99.2; the integrator's synthesis run decides whether this stays.
+      - name: environment-foreign
+        when_related:
+          entity: weft.architecture.Environment
+          where:
+            all:
+              - environment_id == input.environment_id
+              - not:
+                  exists:
+                    in: {entity: weft.deployments.Translation}
+                    as: t
+                    that: {all: [t.translation_id == input.translation_id, t.formation_id == formation_id]}
+          exists: true
+        error: weft.deployments.NotFound
+      # The goalpost's stop: any refused object in the coverage report stops the deploy. Read as
+      # the translation's state: a translation is Refused exactly when its report holds a refused
+      # object (RefuseTranslation requires one, CompleteTranslation refuses with one, and a closed
+      # translation takes no new entry). A row set over CoverageEntry here left the command without
+      # scenarios beside translation-mismatch (ESS 0.99.2, see TranslateSource).
+      - name: deploy-refused
+        when_related: {via: input.translation_id, predicate: state == Refused}
+        error: weft.deployments.DeployRefused
+      - name: not-translated
+        when_related: {via: input.translation_id, predicate: state != Translated}
+        error: weft.deployments.TranslationNotReady
+      - name: values-for-other-environment
+        when_related:
+          via: input.translation_id
+          predicate:
+            all:
+              - environment_id: {defined: true}
+              - environment_id != input.environment_id
+        error: weft.deployments.ValuesForOtherEnvironment
+      - name: created
+        creates: weft.deployments.Plan
+        instance: plan_id
+        sets:
+          scope_id: {related: {via: input.translation_id, field: scope_id}}
+          formation_id: {related: {via: input.translation_id, field: formation_id}}
+          environment_id: input.environment_id
+          formation_revision_id: input.formation_revision_id
+          translation_id: input.translation_id
+          # hardening pass 1 D2: the creator is the authenticated caller, not a request field.
+          created_by: {caller: principal_id}
+          created_at: {generated: true}
+        emits: [weft.deployments.PlanCreated]
+        payload:
+          weft.deployments.PlanCreated:
+            plan_id: {generated: true}
+            environment_id: input.environment_id
+            formation_revision_id: input.formation_revision_id
+
+  # Section 5 "Simulation: a release checked without running it: placement, policy,
+  # reachability. Result: pass, or a list of named violations." The control plane records the
+  # diff and the simulation of a plan. Secret values never appear: a violation names a secret.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1730
+  - name: weft.deployments.RecordPlanResult
+    naming:
+      display: Record a plan's diff and simulation
+    input:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: live_release_id, type: Optional<weft.shared.ReleaseId>}
+      - {name: diff, type: weft.deployments.PlanDiff}
+      - {name: simulation, type: weft.deployments.Simulation}
+    outcomes:
+      - name: no-such-plan
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      - name: blocked
+        when: simulation.violations.count > 0
+        moves: weft.deployments.Plan.block
+        instance: plan_id
+        sets:
+          live_release_id: input.live_release_id
+          diff: input.diff
+          simulation: input.simulation
+        emits: [weft.deployments.PlanBlocked]
+        payload:
+          weft.deployments.PlanBlocked:
+            plan_id: input.plan_id
+            violations: input.simulation.violations
+      - name: passed
+        moves: weft.deployments.Plan.pass
+        instance: plan_id
+        sets:
+          live_release_id: input.live_release_id
+          diff: input.diff
+          simulation: input.simulation
+        emits: [weft.deployments.PlanSimulated]
+        payload:
+          weft.deployments.PlanSimulated:
+            plan_id: input.plan_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+  # Section 5 "Plan ... shown before apply": the user's "ask" step of `weft deploy` answered no.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:1782
+  - name: weft.deployments.DiscardPlan
+    naming:
+      display: Discard a plan
+    input:
+      - {name: plan_id, type: weft.shared.PlanId}
+    outcomes:
+      - name: no-such-plan
+        unknown_instance: true
+        error: weft.deployments.NotFound
+      # Isolation pass 2: only the plan's own account acts on it; another account's plan
+      # answers like a missing one, before its state is read.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.deployments.NotFound
+      - name: discarded
+        moves: weft.deployments.Plan.discard
+        instance: plan_id
+        emits: [weft.deployments.PlanDiscarded]
+        payload:
+          weft.deployments.PlanDiscarded:
+            plan_id: input.plan_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.deployments.StateConflict
+
+views:
+  # Section 5 "Translator: registered per source kind and version".
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:2541
+  - name: weft.deployments.Translators
+    source: weft.deployments.Translator
+    consistency: read_your_writes
+    fields:
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: source_kind, type: weft.deployments.SourceKind}
+      - {name: source_format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: artifact_digest, type: weft.shared.ArtifactDigest}
+      - {name: registered_at, type: Timestamp}
+      - {name: state, type: weft.deployments.Translator.State}
+
+  # Section 5 "Deployment sources", per account.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:2554
+  - name: weft.deployments.DeploymentSources
+    source: weft.deployments.DeploymentSource
+    consistency: read_your_writes
+    params:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
+    fields:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: kind, type: weft.deployments.SourceKind}
+      - {name: format_version, type: weft.deployments.SourceFormatVersion}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: helm_values, type: List<weft.deployments.HelmValues>}
+      - {name: embedded_in, type: Optional<weft.deployments.EmbeddingPlace>}
+      - {name: submitted_by, type: weft.shared.PrincipalId}
+      - {name: submitted_at, type: Timestamp}
+      - {name: state, type: weft.deployments.DeploymentSource.State}
+
+  # Section 5 "Translation", per source.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:2574
+  - name: weft.deployments.Translations
+    source: weft.deployments.Translation
+    consistency: read_your_writes
+    params:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+    filter: source_id == param.source_id
+    fields:
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      - {name: source_digest, type: weft.deployments.SourceDigest}
+      - {name: translator_id, type: weft.shared.TranslatorId}
+      - {name: translator_version, type: weft.deployments.TranslatorVersion}
+      - {name: environment_id, type: Optional<weft.shared.EnvironmentId>}
+      - {name: formation_revision_id, type: Optional<weft.shared.FormationRevisionId>}
+      - {name: failure, type: Optional<String>}
+      - {name: requested_at, type: Timestamp}
+      - {name: completed_at, type: Optional<Timestamp>}
+      - {name: state, type: weft.deployments.Translation.State}
+
+  # Section 5 "CoverageReport: every object of the source with its outcome". Shown by
+  # `weft plan` and by a stopped `weft deploy`.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:2595
+  - name: weft.deployments.CoverageReport
+    source: weft.deployments.CoverageEntry
+    consistency: read_your_writes
+    params:
+      - {name: translation_id, type: weft.shared.TranslationId}
+    filter: translation_id == param.translation_id
+    fields:
+      - {name: entry_id, type: weft.shared.CoverageEntryId}
+      - {name: translation_id, type: weft.shared.TranslationId}
+      - {name: object, type: weft.deployments.SourceObject}
+      - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - {name: element, type: weft.deployments.FormationElementKind}
+      - {name: element_name, type: Optional<String>}
+      - {name: lost, type: Optional<String>}
+      - {name: refusal, type: Optional<weft.deployments.RefusalReason>}
+      - {name: state, type: weft.deployments.CoverageEntry.State}
+
+  # Section 5 goalpost: "the Helm chart of a Kubernetes SaaS product deploys and runs on weft
+  # unchanged". Per translation, how many objects of each Kubernetes kind mapped, mapped with
+  # loss or were refused: the goalpost holds for a chart when no row has outcome Refused.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:2616
+  - name: weft.deployments.KubernetesCoverage
+    source: weft.deployments.CoverageEntry
+    consistency: read_your_writes
+    params:
+      - {name: translation_id, type: weft.shared.TranslationId}
+    filter: translation_id == param.translation_id
+    group_by: [kubernetes_kind, outcome]
+    fields:
+      - {name: kubernetes_kind, type: Optional<weft.deployments.KubernetesKind>}
+      - {name: outcome, type: weft.deployments.CoverageOutcome}
+      - name: objects
+        type: Integer
+        aggregate: {count: {}}
+
+  # Section 5 "Plan ... shown before apply"; CLI `weft plan shop.yaml --env prod`.
+  # weft@6798e7d:ess/6-delivery/deployments.yaml:2631
+  - name: weft.deployments.Plans
+    source: weft.deployments.Plan
+    consistency: read_your_writes
+    params:
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    filter: environment_id == param.environment_id
+    fields:
+      - {name: plan_id, type: weft.shared.PlanId}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+      - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
+      - {name: translation_id, type: Optional<weft.shared.TranslationId>}
+      - {name: live_release_id, type: Optional<weft.shared.ReleaseId>}
+      - {name: diff, type: Optional<weft.deployments.PlanDiff>}
+      - {name: simulation, type: Optional<weft.deployments.Simulation>}
+      - {name: created_by, type: weft.shared.PrincipalId}
+      - {name: created_at, type: Timestamp}
+      - {name: state, type: weft.deployments.Plan.State}

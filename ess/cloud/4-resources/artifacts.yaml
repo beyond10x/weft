@@ -1,3 +1,6 @@
+# Moved from weft@6798e7d:ess/3-resources/artifacts.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
 domain: weft.artifacts
 
 summary: >-
@@ -12,6 +15,7 @@ types:
   # Sketch lines 213-239: the package kinds an artifact holds. A copy of the variants of
   # weft.workloads.PackageKind, which this layer may not name, plus two kinds that are no package.
   # OPEN: whether one kind enum moves to weft.shared for both domains (integrator).
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:15
   - name: weft.artifacts.ArtifactKind
     kind: enum
     variants:
@@ -33,13 +37,14 @@ types:
       # (FormationRevision.document_digest). Decided in integration 2.
       - FormationDocument
       # Sketch lines 314-315: "A user deploys a `DeploymentSource`": a Compose file, Helm chart,
-      # Kubernetes manifests, ESS system or Loom agent document, as uploaded. Decided in
+      # Kubernetes manifests, ESS system or agent document, as uploaded. Decided in
       # integration 2.
       - DeploymentSource
 
 entities:
   # Sketch lines 215-216: "Every package is an Artifact: content-addressed, signed, verified by the
   # node before start."
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:43
   - name: weft.artifacts.Artifact
     naming:
       summary: Content-addressed, signed bytes of a package; the node verifies the signature before start.
@@ -47,8 +52,8 @@ entities:
       name: artifact_digest
       type: weft.shared.ArtifactDigest
     fields:
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: kind
         type: weft.artifacts.ArtifactKind
       - name: size_bytes
@@ -66,11 +71,11 @@ entities:
     relations:
       # Decided in integration 2: references. An artifact is registered by an account; what a
       # close of the account does to its artifacts is a command outcome, not this relation.
-      - name: account_id
+      - name: scope_id
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       # The build recipe outlives the artifact it produced, and the reverse.
       - name: recipe
         kind: references
@@ -103,6 +108,7 @@ entities:
   # signature and key id like Artifact's, checked on record (external).
   # OPEN: may an attestation be withdrawn (a compromised builder)? Taken: no; append-only. A
   # revoked artifact keeps its attestations; the gate also reads the artifact's state.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:106
   - name: weft.artifacts.Attestation
     naming:
       summary: Provenance of one artifact, who built it from which repository, commit and run.
@@ -146,42 +152,56 @@ entities:
       terminal: [Recorded]
 
 errors:
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:149
   - name: weft.artifacts.NotFound
     summary: The addressed record does not exist, and nothing changed.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:151
   - name: weft.artifacts.StateConflict
     summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:153
   - name: weft.artifacts.InvalidAmount
     summary: A count, size or bound is out of range (not positive, or a minimum above its maximum).
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:155
   - name: weft.artifacts.ArtifactExists
     summary: An artifact with this digest is already registered.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:157
   - name: weft.artifacts.ArtifactUnsigned
-    summary: The artifact carries no signature; weft runs no unsigned bytes.
+    summary: The artifact carries no signature; no unsigned bytes run.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:159
   - name: weft.artifacts.ArtifactSignatureInvalid
-    summary: The signature does not verify against a key the account trusts.
+    summary: The signature does not verify against a key the scope trusts.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:161
   - name: weft.artifacts.ArtifactUnavailable
     summary: The artifact is not registered, or it is revoked; nothing was attested.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:163
   - name: weft.artifacts.AttestationIncomplete
     summary: The attestation names no builder, source repository, commit or run.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:165
   - name: weft.artifacts.AttestationExists
     summary: This builder already attested this artifact for this run.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:167
   - name: weft.artifacts.AttestationUnsigned
     summary: The attestation carries no signature.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:169
   - name: weft.artifacts.AttestationSignatureInvalid
     summary: The attestation's signature does not verify against a key the cluster trusts for the builder.
 
 events:
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:173
   - name: weft.artifacts.ArtifactRegistered
     fields:
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: kind, type: weft.artifacts.ArtifactKind}
       - {name: signer_key_id, type: String}
 
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:180
   - name: weft.artifacts.ArtifactRevoked
     fields:
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
       - {name: reason, type: String}
 
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:185
   - name: weft.artifacts.AttestationRecorded
     fields:
       - {name: attestation_id, type: weft.shared.AttestationId}
@@ -193,12 +213,13 @@ events:
 
 commands:
   # Sketch lines 215-216: an artifact is content-addressed and signed; unsigned bytes are refused.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:196
   - name: weft.artifacts.RegisterArtifact
     naming:
       display: Register an artifact
     input:
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: kind, type: weft.artifacts.ArtifactKind}
       - {name: size_bytes, type: Integer}
       - {name: signature, type: String}
@@ -207,8 +228,8 @@ commands:
     outcomes:
       # hardening pass 1 D3: the account the artifact is registered in is the caller's account;
       # another account answers like a missing one.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.artifacts.NotFound
       - name: unsigned
         when: signature == ""
@@ -219,11 +240,11 @@ commands:
       # hardening pass 1 disclosure (RegisterArtifact artifact_digest): the signature is checked
       # from the request, before any row is read, so a caller learns whether a digest is
       # registered only with a signature by a key its account trusts. The digest stays one row
-      # for the whole cluster until D8 keys the artifact by (account_id, artifact_digest).
+      # for the whole cluster until D8 keys the artifact by (scope_id, artifact_digest).
       # OPEN (D8, design change): ArtifactExists still answers for another account's digest, and a
       # first registration squats the digest for every other account.
       - name: bad-signature
-        external: the signature does not verify against a signing key the account trusts
+        external: the signature does not verify against a signing key the scope trusts
         before_row: true
         error: weft.artifacts.ArtifactSignatureInvalid
       # hardening pass 1 W7: an artifact is built only from a registered artifact of its own
@@ -233,7 +254,7 @@ commands:
         when_related: {via: input.built_from, exists: false}
         error: weft.artifacts.NotFound
       - name: built-from-foreign
-        when_related: {via: input.built_from, predicate: account_id != input.account_id}
+        when_related: {via: input.built_from, predicate: scope_id != input.scope_id}
         error: weft.artifacts.NotFound
       - name: exists
         when_related:
@@ -245,7 +266,7 @@ commands:
         creates: weft.artifacts.Artifact
         instance: artifact_digest
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           kind: input.kind
           size_bytes: input.size_bytes
           signature: input.signature
@@ -255,12 +276,13 @@ commands:
         payload:
           weft.artifacts.ArtifactRegistered:
             artifact_digest: input.artifact_digest
-            account_id: input.account_id
+            scope_id: input.scope_id
             kind: input.kind
             signer_key_id: input.signer_key_id
 
   # Sketch lines 215-216. OPEN: the sketch has no revocation; a key compromise needs one. Smallest
   # safe answer: a revoked artifact starts nothing new; running instances are not stopped by it.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:264
   - name: weft.artifacts.RevokeArtifact
     naming:
       display: Revoke an artifact
@@ -273,8 +295,8 @@ commands:
         error: weft.artifacts.NotFound
       # hardening pass 1 D3: only the artifact's own account revokes it; another account's
       # artifact answers like a missing one, before its state is read.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.artifacts.NotFound
       - name: revoked
         moves: weft.artifacts.Artifact.revoke
@@ -292,6 +314,7 @@ commands:
   # attestation. Recorded once per builder run; never changed (append-only).
   # OPEN: which actor records it; the design says only that the job's artifact gets one. Taken:
   # the control plane, when a runner job registers an artifact (actors.yaml, integrator).
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:295
   - name: weft.artifacts.RecordAttestation
     naming:
       display: Record the provenance of an artifact
@@ -364,6 +387,7 @@ commands:
 views:
   # Design ci-cd-support § Stage 2 "Provenance": "The `provenance` gate reads it." The
   # attestations of one artifact, with the artifact's state beside them.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:367
   - name: weft.artifacts.AttestationsOfArtifact
     source: weft.artifacts.Attestation
     consistency: read_your_writes
@@ -386,15 +410,16 @@ views:
       - {name: state, type: weft.artifacts.Attestation.State}
 
   # Sketch lines 215-216.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:389
   - name: weft.artifacts.ArtifactList
     source: weft.artifacts.Artifact
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: artifact_digest, type: weft.shared.ArtifactDigest}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: kind, type: weft.artifacts.ArtifactKind}
       - {name: size_bytes, type: Integer}
       - {name: signer_key_id, type: String}
@@ -402,6 +427,7 @@ views:
       - {name: state, type: weft.artifacts.Artifact.State}
 
   # An invariant reads size_bytes: this view holds every artifact in every state.
+  # weft@6798e7d:ess/3-resources/artifacts.yaml:405
   - name: weft.artifacts.Artifacts
     source: weft.artifacts.Artifact
     consistency: read_your_writes

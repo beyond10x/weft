@@ -1,3 +1,6 @@
+# Moved from weft@6798e7d:ess/1-infrastructure/inventory.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
 # Inventory: the operator-owned resource classes and the devices the nodes report. Source:
 # docs/domain-sketch.md section 6 "Resources" (lines 384-405), the GPU wipe of section 10 (line
 # 459) and the node reports of section 11 (lines 468-470). Moved here from weft.resources
@@ -15,7 +18,7 @@ domain: weft.inventory
 
 summary: >-
   The operator-owned inventory of what the nodes offer: resource classes and the devices each node
-  reports. No tenant owns anything here.
+  reports. No scope owns anything here.
 
 naming:
   wire: weft
@@ -23,21 +26,25 @@ naming:
 
 types:
   # Section 6 line 389: `unit`: count, quantity or attachment.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:26
   - name: weft.inventory.ResourceUnit
     kind: enum
     variants: [Count, Quantity, Attachment]
 
   # Section 6 line 392: `scope`: node-local or movable within a zone or cluster.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:31
   - name: weft.inventory.ResourceScope
     kind: enum
     variants: [NodeLocal, Zone, Cluster]
 
   # Section 6 line 393: `lifetime`: dies with the instance, or lives on its own.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:36
   - name: weft.inventory.ResourceLifetime
     kind: enum
     variants: [Instance, Independent]
 
   # Section 6 lines 399-405: the groups of the class list. Limits are metering's.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:41
   - name: weft.inventory.ResourceCategory
     kind: enum
     variants: [Compute, Storage, Network, Security]
@@ -49,6 +56,7 @@ entities:
   # the ClusterOperator through DefineResourceClass; seeding is the cluster domain's question.
   # OPEN: which base unit an amount of each class counts in (millicores, bytes, devices). Taken:
   # an amount is an Integer in the class's base unit, and the unit is not stored.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:52
   - name: weft.inventory.ResourceClass
     naming:
       summary: A kind of resource a workload can claim, described by the five attributes the scheduler reads.
@@ -92,6 +100,7 @@ entities:
   # as a device with `parent_device_id`; a Sliced GPU is never bound whole.
   # OPEN: a device the node reports gone or faulted while bound leaves its binding Active; the
   # scheduling domain decides how the instance is moved. Not decided here.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:95
   - name: weft.inventory.Device
     naming:
       summary: One concrete unit on a node (a GPU, a GPU slice, an accelerator, an interconnect domain), bound to at most one claim at a time.
@@ -164,28 +173,39 @@ entities:
         - {name: remove, from: [Wiping, Free, Bound, Sliced, Faulted], to: Removed}
 
 errors:
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:167
   - name: weft.inventory.NotFound
     summary: The addressed record does not exist, and nothing changed.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:169
   - name: weft.inventory.StateConflict
     summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:171
   - name: weft.inventory.ClassExists
     summary: A resource class of this name is already defined.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:173
   - name: weft.inventory.NoSharingMode
     summary: A class must admit at least one sharing mode.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:175
   - name: weft.inventory.ClassInUse
     summary: Claims of this class are still pending or bound, so it is not retired.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:177
   - name: weft.inventory.UnknownClass
     summary: No resource class of this name is defined.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:179
   - name: weft.inventory.ClassRetired
     summary: The resource class is retired and takes no new claim or device.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:181
   - name: weft.inventory.DeviceKnown
     summary: The node already reported a present device with this hardware identifier.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:183
   - name: weft.inventory.ParentNotSliced
     summary: The GPU a slice names is missing, on another node, or not Sliced.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:185
   - name: weft.inventory.UnknownInterconnect
     summary: The interconnect domain the device names is not a device of the same node.
 
 events:
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:189
   - name: weft.inventory.ResourceClassDefined
     fields:
       - {name: class_name, type: weft.shared.ResourceClassName}
@@ -196,10 +216,12 @@ events:
       - {name: scope, type: weft.inventory.ResourceScope}
       - {name: lifetime, type: weft.inventory.ResourceLifetime}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:199
   - name: weft.inventory.ResourceClassRetired
     fields:
       - {name: class_name, type: weft.shared.ResourceClassName}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:203
   - name: weft.inventory.DeviceReported
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
@@ -209,29 +231,35 @@ events:
       - {name: vendor, type: String}
       - {name: model, type: String}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:212
   - name: weft.inventory.DeviceWiped
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:216
   - name: weft.inventory.DeviceSliced
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:220
   - name: weft.inventory.DeviceFaulted
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
       - {name: reason, type: String}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:225
   - name: weft.inventory.DeviceReset
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
 
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:229
   - name: weft.inventory.DeviceRemoved
     fields:
       - {name: device_id, type: weft.shared.DeviceId}
 
 commands:
   # Section 6 lines 384-393 and 397-405.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:235
   - name: weft.inventory.DefineResourceClass
     naming:
       display: Define a resource class
@@ -277,6 +305,7 @@ commands:
   # Section 6 lines 384-393. A class with open claims is not retired, so no bound unit loses the
   # class it was bound under. Claims are tenant-owned (weft.claims, a higher layer), so this
   # domain cannot read them: the check is an external refusal.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:280
   - name: weft.inventory.RetireResourceClass
     naming:
       display: Retire a resource class
@@ -308,6 +337,7 @@ commands:
   # (`parent_device_id`, `interconnect_id`); synthesis arranges a parent row instead of leaving the
   # absent reference out. A two-command model with only those two guards reproduces it. The guards
   # stay: each refuses a report the stored rows contradict.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:311
   - name: weft.inventory.ReportDevice
     naming:
       display: Report a device
@@ -381,6 +411,7 @@ commands:
             model: input.model
 
   # Section 10 line 459: the wipe ends; the device is bindable again.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:384
   - name: weft.inventory.ReportDeviceWiped
     naming:
       display: Report a device wiped
@@ -403,6 +434,7 @@ commands:
 
   # Section 6 line 399 `gpu-slice` and line 390 `divisible`: the agent reports a GPU cut into
   # slices. See the OPEN on Device.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:406
   - name: weft.inventory.ReportDeviceSliced
     naming:
       display: Report a GPU sliced
@@ -424,6 +456,7 @@ commands:
         error: weft.inventory.StateConflict
 
   # Section 11 line 470: the agent reports a fault it observed (a failed wipe included).
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:427
   - name: weft.inventory.ReportDeviceFault
     naming:
       display: Report a device fault
@@ -447,6 +480,7 @@ commands:
         error: weft.inventory.StateConflict
 
   # Actors line 102 (the ClusterOperator runs nodes): a repaired device goes back through the wipe.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:450
   - name: weft.inventory.ResetDevice
     naming:
       display: Reset a faulted device
@@ -469,6 +503,7 @@ commands:
 
   # Section 11 line 470: the agent reports a device no longer present, from any state: it reports
   # what it observed. A binding on it stays Active (see the OPEN on Device).
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:472
   - name: weft.inventory.ReportDeviceRemoved
     naming:
       display: Report a device removed
@@ -489,15 +524,9 @@ commands:
         wrong_state: true
         error: weft.inventory.StateConflict
 
-  # Section 6 line 395 and section 10 line 459: no command of this domain binds or releases a
-  # device. weft.claims (layer 5) moves Device rows itself, all or nothing per binding:
-  # weft.claims.CommitBinding moves every device of the binding Free -> Bound (Device.bind) and
-  # refuses the whole commit when one is not Free or not on the binding's node;
-  # weft.claims.ReleaseBinding moves every device of an Active binding that is still Bound
-  # Bound -> Wiping (Device.release). ReportDeviceWiped above moves Wiping -> Free.
-
 views:
   # Section 6 line 387: the scheduler reads only these attributes.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:501
   - name: weft.inventory.ResourceClasses
     source: weft.inventory.ResourceClass
     consistency: read_your_writes
@@ -512,6 +541,7 @@ views:
       - {name: state, type: weft.inventory.ResourceClass.State}
 
   # Brief (Device) and section 9 line 444 (a node reports capacity): the devices of one node.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:515
   - name: weft.inventory.NodeDevices
     source: weft.inventory.Device
     consistency: read_your_writes
@@ -532,6 +562,7 @@ views:
       - {name: state, type: weft.inventory.Device.State}
 
   # Section 10 line 451 (the scheduler's input) and section 6 line 387: the bindable devices.
+  # weft@6798e7d:ess/1-infrastructure/inventory.yaml:535
   - name: weft.inventory.FreeDevices
     source: weft.inventory.Device
     consistency: read_your_writes

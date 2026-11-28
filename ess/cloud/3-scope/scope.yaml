@@ -1,0 +1,108 @@
+# New in cloudspec (docs/boundary.md, decision D1 A); no weft source. Every owned entity of the
+# blocks above carries `scope_id`, and every guard that ties a request to its owner compares it
+# with `caller.scope_id`. A deployment maps its own boundary onto a scope: a Kubernetes namespace,
+# a vendor account or project, an account of a multi-tenant product.
+domain: weft.scope
+
+summary: >-
+  The ownership and isolation boundary: every owned row names one scope, a request acts in one
+  scope, and instances of different scopes never share a kernel.
+
+naming:
+  wire: weft
+  display: Scope
+
+entities:
+  - name: weft.scope.Scope
+    naming:
+      summary: One ownership and isolation boundary; rows of a scope are invisible to a caller acting in another.
+    identity:
+      name: scope_id
+      type: weft.shared.ScopeId
+    fields:
+      - name: name
+        type: String
+    lifecycle:
+      initial: Open
+      states:
+        - {name: Open, summary: Rows may be created in the scope.}
+        - {name: Closed, summary: The scope takes no new rows; what it owns is removed by the commands bound to its close.}
+      terminal: [Closed]
+      transitions:
+        - {name: close, from: [Open], to: Closed}
+
+errors:
+  - name: weft.scope.NotFound
+    summary: No scope has this identifier, and nothing changed.
+  - name: weft.scope.StateConflict
+    summary: The scope is not in a state this command acts from, and nothing changed.
+  - name: weft.scope.ScopeNameTaken
+    summary: An open scope already has this name, and nothing was created.
+
+events:
+  - name: weft.scope.ScopeOpened
+    fields:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: name, type: String}
+  - name: weft.scope.ScopeClosed
+    fields:
+      - {name: scope_id, type: weft.shared.ScopeId}
+
+commands:
+  - name: weft.scope.OpenScope
+    naming:
+      display: Open a scope
+    input:
+      - {name: name, type: String}
+    response:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      - name: name-taken
+        when_related:
+          entity: weft.scope.Scope
+          where:
+            all:
+              - name == input.name
+              - state == Open
+          exists: true
+        error: weft.scope.ScopeNameTaken
+      - name: opened
+        creates: weft.scope.Scope
+        instance: scope_id
+        returns: true
+        sets:
+          name: input.name
+        emits: [weft.scope.ScopeOpened]
+        payload:
+          weft.scope.ScopeOpened:
+            scope_id: {response: scope_id}
+            name: input.name
+
+  - name: weft.scope.CloseScope
+    naming:
+      display: Close a scope
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    outcomes:
+      - name: no-such-scope
+        unknown_instance: true
+        error: weft.scope.NotFound
+      - name: closed
+        moves: weft.scope.Scope.close
+        instance: scope_id
+        emits: [weft.scope.ScopeClosed]
+        payload:
+          weft.scope.ScopeClosed:
+            scope_id: input.scope_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.scope.StateConflict
+
+views:
+  - name: weft.scope.Scopes
+    source: weft.scope.Scope
+    consistency: read_your_writes
+    fields:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: name, type: String}
+      - {name: state, type: weft.scope.Scope.State}

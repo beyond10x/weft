@@ -17,6 +17,11 @@ domains:
   - weft.artifacts
   - weft.cluster
   - weft.formations
+  - weft.topology
+  - weft.scope
+  - weft.limits
+  - weft.services
+  - weft.architecture
   - weft.workloads
   - weft.claims
   - weft.scheduling

@@ -1,3 +1,6 @@
+# Moved from weft@6798e7d:ess/5-runtime/claims.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
 # Claims: what a running instance or a component holds, and the bindings that tie a claim to
 # concrete units. Source: docs/domain-sketch.md section 6 "Resources" (lines 382-405, `Claim` and
 # `Binding` at line 395), the GPU wipe of section 10 (line 459) and the claims of section 4
@@ -36,12 +39,14 @@ naming:
 
 types:
   # Section 6 line 395 (brief): a claim is made by an instance or by a component.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:39
   - name: weft.claims.InstanceHolder
     kind: struct
     fields:
       - {name: instance_id, type: weft.shared.InstanceId}
 
   # Section 4 "Claims" line 304: a component lists claims, per environment of its formation.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:45
   - name: weft.claims.ComponentHolder
     kind: struct
     fields:
@@ -49,6 +54,7 @@ types:
       - {name: environment_id, type: weft.shared.EnvironmentId}
       - {name: component_name, type: weft.shared.ComponentName}
 
+  # weft@6798e7d:ess/5-runtime/claims.yaml:52
   - name: weft.claims.ClaimHolder
     kind: union
     tag: kind
@@ -59,6 +65,7 @@ types:
   # Section 6 line 402: `egress`. Security default deny (line 12): no egress unless declared and
   # allowed, so an egress claim names each destination.
   # OPEN: may a destination be a CIDR or a wildcard host? Taken: one host name and one port each.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:62
   - name: weft.claims.EgressRule
     kind: struct
     fields:
@@ -70,6 +77,7 @@ entities:
   # Section 4 line 304: the formation adds implicit claims (private network, workload identity).
   # OPEN: which domain declares a component's claims when a release is applied (deployments or
   # workloads)? Taken: DeclareClaim is one command any of them calls through its actor.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:73
   - name: weft.claims.Claim
     naming:
       summary: A request by an instance or a component for an amount of one resource class with one sharing mode.
@@ -78,8 +86,8 @@ entities:
       type: weft.shared.ClaimId
     fields:
       # The account the claim is charged to and isolated in (section 1, line 139).
-      - name: account_id
-        type: weft.shared.AccountId
+      - name: scope_id
+        type: weft.shared.ScopeId
       - name: holder
         type: weft.claims.ClaimHolder
       - name: class_name
@@ -112,11 +120,11 @@ entities:
     invariants:
       - amount > 0
     relations:
-      - name: account
+      - name: scope
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
-        via: account_id
+        via: scope_id
       - name: class
         kind: references
         target: weft.inventory.ResourceClass
@@ -163,6 +171,7 @@ entities:
   # node; `address` names the concrete network unit it got.
   # OPEN: the binding does not check that its devices match the claim's class, model and amount;
   # the scheduler's PlacementDecision (section 10) is trusted for that. Should BindClaim check it?
+  # weft@6798e7d:ess/5-runtime/claims.yaml:166
   - name: weft.claims.Binding
     naming:
       summary: The concrete units one claim holds; exclusive units are held by at most one Active binding.
@@ -225,55 +234,75 @@ entities:
         - {name: release, from: [Reserved, Active], to: Released}
 
 errors:
+  # weft@6798e7d:ess/5-runtime/claims.yaml:228
   - name: weft.claims.NotFound
     summary: The addressed record does not exist, and nothing changed.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:230
   - name: weft.claims.StateConflict
     summary: The addressed record is not in a state this command acts from, and nothing changed.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:232
   - name: weft.claims.UnknownClass
     summary: No resource class of this name is defined.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:234
   - name: weft.claims.ClassRetired
     summary: The resource class is retired and takes no new claim.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:236
   - name: weft.claims.InvalidAmount
     summary: The amount is not a positive number.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:238
   - name: weft.claims.SharingNotAdmitted
     summary: The class does not admit the sharing mode the claim asks for; isolation is not weakened.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:240
   - name: weft.claims.QuotaExceeded
-    summary: The claim would exceed the quota of the account or of an account above it.
+    summary: The claim would exceed the quota of the scope.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:242
   - name: weft.claims.EgressDenied
     summary: The cluster's policy does not allow a destination of the egress allow list.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:244
   - name: weft.claims.DomainNotVerified
-    summary: The account has not proved that it controls the domain it claims.
+    summary: The scope has not proved that it controls the domain it claims.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:246
   - name: weft.claims.UnitNotFound
     summary: The device, volume, filesystem or bucket the request names does not exist.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:248
   - name: weft.claims.ForeignResource
-    summary: The unit the request names belongs to another account; nothing crosses accounts.
+    summary: The unit the request names belongs to another scope; nothing crosses scopes.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:250
   - name: weft.claims.UnitNotAvailable
     summary: The unit the request names is not in a usable state.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:252
   - name: weft.claims.DeviceUnavailable
     summary: A device is not Free (bound, wiping, sliced, faulted or removed), so it is not bound again.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:254
   - name: weft.claims.WrongPlacement
     summary: A unit is on another node or in another zone than the binding.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:256
   - name: weft.claims.VolumeClaim
     summary: The claim names a volume as its writer; a writer is committed with CommitVolumeWriter, which enforces one writer.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:258
   - name: weft.claims.ClaimMismatch
     summary: The request does not match the claim it binds (another volume or another sharing mode).
+  # weft@6798e7d:ess/5-runtime/claims.yaml:260
   - name: weft.claims.VolumeBusy
     summary: The volume has a writer, or a writer was asked for while readers are attached.
 
 events:
+  # weft@6798e7d:ess/5-runtime/claims.yaml:264
   - name: weft.claims.ClaimDeclared
     fields:
       - {name: claim_id, type: weft.shared.ClaimId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: holder, type: weft.claims.ClaimHolder}
       - {name: class_name, type: weft.shared.ResourceClassName}
       - {name: amount, type: Integer}
       - {name: sharing, type: weft.shared.Sharing}
 
+  # weft@6798e7d:ess/5-runtime/claims.yaml:273
   - name: weft.claims.ClaimReleased
     fields:
       - {name: claim_id, type: weft.shared.ClaimId}
 
+  # weft@6798e7d:ess/5-runtime/claims.yaml:277
   - name: weft.claims.BindingReserved
     fields:
       - {name: binding_id, type: weft.shared.BindingId}
@@ -284,20 +313,22 @@ events:
       - {name: volume_id, type: Optional<weft.shared.VolumeId>}
       - {name: address, type: Optional<String>}
 
+  # weft@6798e7d:ess/5-runtime/claims.yaml:287
   - name: weft.claims.ClaimBound
     fields:
       - {name: binding_id, type: weft.shared.BindingId}
       - {name: claim_id, type: weft.shared.ClaimId}
 
+  # weft@6798e7d:ess/5-runtime/claims.yaml:292
   - name: weft.claims.BindingReleased
     fields:
       - {name: binding_id, type: weft.shared.BindingId}
 
+  # weft@6798e7d:ess/5-runtime/claims.yaml:296
   - name: weft.claims.ClaimBindingsReleased
     fields:
       - {name: claim_id, type: weft.shared.ClaimId}
       - {name: released, type: Integer}
-
 
 commands:
   # Section 6 line 395: `Claim` (class + amount + sharing). Security default deny (line 12): a
@@ -308,11 +339,12 @@ commands:
   # OPEN: how an account proves it controls a domain, and who issues and renews its certificate
   # (section 6 line 402). Taken: an external refusal, DomainNotVerified; the certificate is not
   # modelled.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:311
   - name: weft.claims.DeclareClaim
     naming:
       display: Declare a claim
     input:
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: holder, type: weft.claims.ClaimHolder}
       - {name: class_name, type: weft.shared.ResourceClassName}
       - {name: amount, type: Integer}
@@ -326,8 +358,8 @@ commands:
     outcomes:
       # hardening pass 1 D3: the claim's account is the account the caller acts in; a claim in
       # another account answers as if that account had nothing to claim in.
-      - name: not-callers-account
-        when: account_id != caller.account_id
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
         error: weft.claims.NotFound
       - name: invalid-amount
         when: amount <= 0
@@ -355,13 +387,13 @@ commands:
       # account's volume, filesystem or bucket cannot be told from a missing one. ESS answers every
       # existence check before any predicate, so the ownership refusals follow all three.
       - name: volume-foreign
-        when_related: {via: input.volume_id, predicate: account_id != input.account_id}
+        when_related: {via: input.volume_id, predicate: scope_id != input.scope_id}
         error: weft.claims.UnitNotFound
       - name: filesystem-foreign
-        when_related: {via: input.filesystem_id, predicate: account_id != input.account_id}
+        when_related: {via: input.filesystem_id, predicate: scope_id != input.scope_id}
         error: weft.claims.UnitNotFound
       - name: bucket-foreign
-        when_related: {via: input.bucket_id, predicate: account_id != input.account_id}
+        when_related: {via: input.bucket_id, predicate: scope_id != input.scope_id}
         error: weft.claims.UnitNotFound
       - name: volume-unavailable
         when_related: {via: input.volume_id, predicate: state == Deleted}
@@ -390,16 +422,16 @@ commands:
         external: the cluster's egress policy does not allow a destination of the allow list
         error: weft.claims.EgressDenied
       - name: domain-not-verified
-        external: the account has not proved that it controls the domain it claims
+        external: the scope has not proved that it controls the domain it claims
         error: weft.claims.DomainNotVerified
       - name: quota-exceeded
-        external: the amount would exceed the quota of the account or of an account above it
+        external: the amount would exceed the quota of the scope
         error: weft.claims.QuotaExceeded
       - name: declared
         creates: weft.claims.Claim
         instance: claim_id
         sets:
-          account_id: input.account_id
+          scope_id: input.scope_id
           holder: input.holder
           class_name: input.class_name
           amount: input.amount
@@ -414,7 +446,7 @@ commands:
         payload:
           weft.claims.ClaimDeclared:
             claim_id: {generated: true}
-            account_id: input.account_id
+            scope_id: input.scope_id
             holder: input.holder
             class_name: input.class_name
             amount: input.amount
@@ -422,6 +454,7 @@ commands:
 
   # Section 6 line 395. A bound claim is unbound first (ReleaseBinding), so no unit stays bound
   # to a released claim.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:425
   - name: weft.claims.ReleaseClaim
     naming:
       display: Release a claim
@@ -433,8 +466,8 @@ commands:
         error: weft.claims.NotFound
       # hardening pass 1 D3: only a claim of the account the caller acts in is released; another
       # account's claim answers as a missing one, before its state is told.
-      - name: not-callers-account
-        when_subject: {predicate: account_id != caller.account_id}
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
         error: weft.claims.NotFound
       - name: released
         moves: weft.claims.Claim.release
@@ -453,6 +486,7 @@ commands:
   # This step checks only that the claim exists (relation `claim`); no command deletes a claim, so
   # the commits find it. The claim's state, the volume and each device's node and state are
   # checked at commit, when they are taken.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:456
   - name: weft.claims.BindClaim
     naming:
       display: Bind a claim
@@ -515,6 +549,7 @@ commands:
   # weft.inventory.Device (layer 1) rows itself, so the commit stays all-or-nothing. weft.inventory
   # has no command of its own that binds a device; ClaimBound names the binding, whose device_ids
   # are the devices moved.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:518
   - name: weft.claims.CommitBinding
     naming:
       display: Commit a binding
@@ -624,6 +659,7 @@ commands:
 
   # Brief (Volume: one writer). The writer's commit: the claim goes Bound and the volume
   # Available -> Attached. Refused while the volume has a writer or any Active reader.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:627
   - name: weft.claims.CommitVolumeWriter
     naming:
       display: Commit a volume writer binding
@@ -717,6 +753,7 @@ commands:
   # The written volume is found without a writer field on the volume: CommitBinding takes a
   # volume only while it is Available and CommitVolumeWriter only while no reader is Active, so
   # the binding's volume is Attached exactly when this binding is its writer.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:720
   - name: weft.claims.ReleaseBinding
     naming:
       display: Release a binding
@@ -777,6 +814,7 @@ commands:
   # OPEN: should ReleaseClaim admit a Bound claim and release its Active binding (devices to
   # Wiping, a written volume detached) in the same outcome, so R5 covers "devices wiped" itself
   # instead of relying on ReleaseBinding having run first?
+  # weft@6798e7d:ess/5-runtime/claims.yaml:780
   - name: weft.claims.ReleaseClaimBindings
     naming:
       display: Release the remaining bindings of a released claim
@@ -805,6 +843,7 @@ views:
   # Every binding of every account, read back by ReleaseClaimBindings (a set effect) and by the
   # control-plane loops (sketch § 14, R5). Granted to ControlPlane and Scheduler only, so no tenant
   # reads another tenant's bindings (integrator, 2026-11-26, from the claims soundness pass).
+  # weft@6798e7d:ess/5-runtime/claims.yaml:808
   - name: weft.claims.BindingIndex
     source: weft.claims.Binding
     consistency: read_your_writes
@@ -816,15 +855,16 @@ views:
       - {name: state, type: weft.claims.Binding.State}
 
   # Section 6 line 395: the claims of an account.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:819
   - name: weft.claims.Claims
     source: weft.claims.Claim
     consistency: read_your_writes
     params:
-      - {name: account_id, type: weft.shared.AccountId}
-    filter: account_id == param.account_id
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
     fields:
       - {name: claim_id, type: weft.shared.ClaimId}
-      - {name: account_id, type: weft.shared.AccountId}
+      - {name: scope_id, type: weft.shared.ScopeId}
       - {name: holder, type: weft.claims.ClaimHolder}
       - {name: class_name, type: weft.shared.ResourceClassName}
       - {name: amount, type: Integer}
@@ -839,6 +879,7 @@ views:
 
   # Section 6 line 395 (`Binding`: concrete units on a node) and section 11 line 467 (the node
   # agent attaches what is bound on its node): the bindings of one node.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:842
   - name: weft.claims.NodeBindings
     source: weft.claims.Binding
     consistency: read_your_writes
@@ -848,9 +889,9 @@ views:
     fields:
       - {name: binding_id, type: weft.shared.BindingId}
       - {name: claim_id, type: weft.shared.ClaimId}
-      - name: account_id
-        type: Optional<weft.shared.AccountId>
-        field: {related: {via: claim_id, field: account_id}}
+      - name: scope_id
+        type: Optional<weft.shared.ScopeId>
+        field: {related: {via: claim_id, field: scope_id}}
       - name: class_name
         type: Optional<weft.shared.ResourceClassName>
         field: {related: {via: claim_id, field: class_name}}
@@ -865,6 +906,7 @@ views:
       - {name: state, type: weft.claims.Binding.State}
 
   # Section 6 line 395: the bindings of one claim, for its holder's owner.
+  # weft@6798e7d:ess/5-runtime/claims.yaml:868
   - name: weft.claims.ClaimBindings
     source: weft.claims.Binding
     consistency: read_your_writes

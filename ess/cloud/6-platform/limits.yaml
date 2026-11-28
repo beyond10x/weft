@@ -1,0 +1,747 @@
+# Moved from weft@6798e7d: ess/8-economy/metering.yaml.
+# Comments are weft's at that commit: "sketch", "section" and "design" cite weft's documents, and
+# where a comment says account or tenant, the block reads scope (docs/boundary.md, D1 A).
+domain: weft.limits
+
+summary: >-
+  The limits a workload or an endpoint consumes: deadlines, concurrency and rates, each set on one
+  target, acquired and released as work runs, and the admission check that reads them.
+
+naming:
+  wire: weft
+  display: Limits
+
+entities:
+
+  # Limits (line 405, "Limits (consumed): `deadline`, `budget`, `concurrency`, `rate`"). Each limit
+  # has a scope: an account and everything below it, or one formation in it, or one component of
+  # that formation. Every limit on the account path of a unit of work applies to it; the
+  # strictest decides.
+  # Each limit `references` its account and formation (integration pass, 2026-11-26).
+  # That formation_id lies in scope_id is checked by the Set commands (hardening pass 1 W5).
+  # UNMAPPED: that component is a component of that formation is `formations`' record; no guard
+  # checks it.
+  # OPEN: may an admin of an account change or remove a limit that a TenantOwner or the admin of
+  # a parent account set on it (a widening from below)? Taken: no rule here; the actor blocks of
+  # the integration pass decide, and the smallest safe answer is that only the level that set a
+  # limit, or one above it, changes or removes it.
+
+  # Line 405 `deadline`; line 243 "`Invocation`: one call, one result, a deadline". The longest a
+  # unit of work (an invocation, a job run, a session) in the scope may run.
+  # OPEN: which shapes a deadline applies to. Taken: invocations, jobs and sessions; a service,
+  # a box or a daemon has no end and is not admitted against a deadline.
+  # weft@6798e7d:ess/8-economy/metering.yaml:376
+  - name: weft.limits.Deadline
+    naming:
+      summary: The longest a unit of work in a scope may run before it is stopped.
+    identity:
+      name: deadline_id
+      type: weft.shared.DeadlineId
+    fields:
+      - name: scope_id
+        type: weft.shared.ScopeId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: max_seconds
+        type: Integer
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - max_seconds >= 1
+      - any: ["not defined(component)", "defined(formation_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+  # Line 405 `concurrency`: how many units of work of the scope run at once. The Scheduler
+  # acquires one unit before it places new work and releases it when the work ends.
+  # OPEN: a counter can leak when a release is lost (a node gone). Taken: a counter; the
+  # Scheduler releases for every instance it sees end, gone nodes' included. A lease per holder
+  # is the alternative.
+  # OPEN: is lowering max_concurrent below in_use a stop of running work? Taken: no; new work
+  # waits until in_use is below the new maximum.
+  # weft@6798e7d:ess/8-economy/metering.yaml:472
+  - name: weft.limits.Concurrency
+    naming:
+      summary: The number of units of work a scope may run at once, and how many run.
+    identity:
+      name: concurrency_id
+      type: weft.shared.ConcurrencyId
+    fields:
+      - name: scope_id
+        type: weft.shared.ScopeId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: max_concurrent
+        type: Integer
+      - name: in_use
+        type: Integer
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - max_concurrent >= 1
+      - in_use >= 0
+      - any: ["not defined(component)", "defined(formation_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+  # Line 405 `rate`: how many requests per window the scope's endpoints or components take.
+  # UNMAPPED: a rate is enforced per request in the data plane (weft-edge for public endpoints,
+  # the link filter between components, line 62); a request over the rate is refused there, not
+  # by a command of this domain. Metering holds the limit; the refusal belongs to the data
+  # plane's protocol.
+  # OPEN: is a rate per caller, per endpoint, or per scope as a whole? Taken: per scope as a whole.
+  # weft@6798e7d:ess/8-economy/metering.yaml:513
+  - name: weft.limits.Rate
+    naming:
+      summary: The number of requests a scope takes per window.
+    identity:
+      name: rate_id
+      type: weft.shared.RateId
+    fields:
+      - name: scope_id
+        type: weft.shared.ScopeId
+      - name: formation_id
+        type: Optional<weft.shared.FormationId>
+      - name: component
+        type: Optional<weft.shared.ComponentName>
+      - name: max_requests
+        type: Integer
+      - name: window_seconds
+        type: Integer
+      - name: set_at
+        type: Timestamp
+    relations:
+      - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
+    invariants:
+      - max_requests >= 1
+      - window_seconds >= 1
+      - any: ["not defined(component)", "defined(formation_id)"]
+    lifecycle:
+      initial: Active
+      states: [Active, Removed]
+      terminal: [Removed]
+      transitions:
+        - name: remove
+          from: [Active]
+          to: Removed
+
+errors:
+  # weft@6798e7d:ess/8-economy/metering.yaml:687
+  - name: weft.limits.NotFound
+    summary: The addressed record does not exist, and nothing changed.
+  # weft@6798e7d:ess/8-economy/metering.yaml:740
+  - name: weft.limits.InvalidLimit
+    summary: A limit's value is 1 or more, and nothing changed.
+  # weft@6798e7d:ess/8-economy/metering.yaml:742
+  - name: weft.limits.ComponentWithoutFormation
+    summary: A limit scoped to a component names the formation of that component, and nothing changed.
+  # weft@6798e7d:ess/8-economy/metering.yaml:744
+  - name: weft.limits.LimitRemoved
+    summary: The limit was removed, and nothing changed.
+  # weft@6798e7d:ess/8-economy/metering.yaml:754
+  - name: weft.limits.ConcurrencySpent
+    summary: Every unit of the scope's concurrency is in use, so no new work starts.
+    fields:
+      - name: max_concurrent
+        type: Integer
+  # weft@6798e7d:ess/8-economy/metering.yaml:759
+  - name: weft.limits.NothingAcquired
+    summary: No unit of the concurrency is in use, so none is released.
+  # weft@6798e7d:ess/8-economy/metering.yaml:763
+  - name: weft.limits.DeadlineTooLong
+    summary: The work asks to run longer than a deadline of its scope allows, so it does not start.
+
+events:
+  # weft@6798e7d:ess/8-economy/metering.yaml:807
+  - name: weft.limits.DeadlineSet
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_seconds, type: Integer}
+  # weft@6798e7d:ess/8-economy/metering.yaml:814
+  - name: weft.limits.DeadlineChanged
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: max_seconds, type: Integer}
+  # weft@6798e7d:ess/8-economy/metering.yaml:818
+  - name: weft.limits.DeadlineRemoved
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+  # weft@6798e7d:ess/8-economy/metering.yaml:852
+  - name: weft.limits.ConcurrencySet
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_concurrent, type: Integer}
+  # weft@6798e7d:ess/8-economy/metering.yaml:859
+  - name: weft.limits.ConcurrencyChanged
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: max_concurrent, type: Integer}
+  # weft@6798e7d:ess/8-economy/metering.yaml:863
+  - name: weft.limits.ConcurrencyRemoved
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+  # weft@6798e7d:ess/8-economy/metering.yaml:866
+  - name: weft.limits.ConcurrencyAcquired
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+  # weft@6798e7d:ess/8-economy/metering.yaml:870
+  - name: weft.limits.ConcurrencyReleased
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+  # weft@6798e7d:ess/8-economy/metering.yaml:874
+  - name: weft.limits.RateSet
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+  # weft@6798e7d:ess/8-economy/metering.yaml:882
+  - name: weft.limits.RateChanged
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+  # weft@6798e7d:ess/8-economy/metering.yaml:887
+  - name: weft.limits.RateRemoved
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+
+commands:
+
+  # Line 405 `deadline`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1294
+  - name: weft.limits.SetDeadline
+    naming:
+      display: Set a deadline
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_seconds, type: Integer}
+    outcomes:
+      # hardening pass 1 D3: the limit's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.limits.NotFound
+      - name: invalid-limit
+        when: max_seconds < 1
+        error: weft.limits.InvalidLimit
+      - name: component-without-formation
+        when:
+          all: ["defined(component)", "not defined(formation_id)"]
+        error: weft.limits.ComponentWithoutFormation
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.limits.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.limits.NotFound
+      - name: set
+        creates: weft.limits.Deadline
+        instance: deadline_id
+        sets:
+          scope_id: input.scope_id
+          formation_id: input.formation_id
+          component: input.component
+          max_seconds: input.max_seconds
+          set_at: {generated: true}
+        emits: [weft.limits.DeadlineSet]
+        payload:
+          weft.limits.DeadlineSet:
+            deadline_id: {generated: true}
+            scope_id: input.scope_id
+            formation_id: input.formation_id
+            component: input.component
+            max_seconds: input.max_seconds
+
+  # Line 405 `deadline`. Work already running keeps the deadline it was admitted with.
+  # OPEN: does a shorter deadline stop running work that is past it. Taken: no; it applies to work
+  # admitted after the change.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1344
+  - name: weft.limits.ChangeDeadline
+    naming:
+      display: Change a deadline
+    input:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: max_seconds, type: Integer}
+    outcomes:
+      - name: invalid-limit
+        when: max_seconds < 1
+        error: weft.limits.InvalidLimit
+      - name: no-such-deadline
+        unknown_instance: true
+        error: weft.limits.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.limits.LimitRemoved
+      - name: changed
+        updates: weft.limits.Deadline
+        instance: deadline_id
+        sets:
+          max_seconds: input.max_seconds
+        emits: [weft.limits.DeadlineChanged]
+        payload:
+          weft.limits.DeadlineChanged:
+            deadline_id: input.deadline_id
+            max_seconds: input.max_seconds
+
+  # Line 405 `deadline`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1377
+  - name: weft.limits.RemoveDeadline
+    naming:
+      display: Remove a deadline
+    input:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+    outcomes:
+      - name: no-such-deadline
+        unknown_instance: true
+        error: weft.limits.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
+      - name: removed
+        moves: weft.limits.Deadline.remove
+        instance: deadline_id
+        emits: [weft.limits.DeadlineRemoved]
+        payload:
+          weft.limits.DeadlineRemoved:
+            deadline_id: input.deadline_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.limits.LimitRemoved
+
+  # Line 405 `concurrency`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1625
+  - name: weft.limits.SetConcurrency
+    naming:
+      display: Set a concurrency limit
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_concurrent, type: Integer}
+    outcomes:
+      # hardening pass 1 D3: the limit's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.limits.NotFound
+      - name: invalid-limit
+        when: max_concurrent < 1
+        error: weft.limits.InvalidLimit
+      - name: component-without-formation
+        when:
+          all: ["defined(component)", "not defined(formation_id)"]
+        error: weft.limits.ComponentWithoutFormation
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.limits.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.limits.NotFound
+      - name: set
+        creates: weft.limits.Concurrency
+        instance: concurrency_id
+        sets:
+          scope_id: input.scope_id
+          formation_id: input.formation_id
+          component: input.component
+          max_concurrent: input.max_concurrent
+          in_use: 0
+          set_at: {generated: true}
+        emits: [weft.limits.ConcurrencySet]
+        payload:
+          weft.limits.ConcurrencySet:
+            concurrency_id: {generated: true}
+            scope_id: input.scope_id
+            formation_id: input.formation_id
+            component: input.component
+            max_concurrent: input.max_concurrent
+
+  # Line 405 `concurrency`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1674
+  - name: weft.limits.ChangeConcurrency
+    naming:
+      display: Change a concurrency limit
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: max_concurrent, type: Integer}
+    outcomes:
+      - name: invalid-limit
+        when: max_concurrent < 1
+        error: weft.limits.InvalidLimit
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.limits.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.limits.LimitRemoved
+      - name: changed
+        updates: weft.limits.Concurrency
+        instance: concurrency_id
+        sets:
+          max_concurrent: input.max_concurrent
+        emits: [weft.limits.ConcurrencyChanged]
+        payload:
+          weft.limits.ConcurrencyChanged:
+            concurrency_id: input.concurrency_id
+            max_concurrent: input.max_concurrent
+
+  # Line 405 `concurrency`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1707
+  - name: weft.limits.RemoveConcurrency
+    naming:
+      display: Remove a concurrency limit
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+    outcomes:
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.limits.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
+      - name: removed
+        moves: weft.limits.Concurrency.remove
+        instance: concurrency_id
+        emits: [weft.limits.ConcurrencyRemoved]
+        payload:
+          weft.limits.ConcurrencyRemoved:
+            concurrency_id: input.concurrency_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.limits.LimitRemoved
+
+  # Line 405 `concurrency` consumed; line 113 (Scheduler places instances). One unit per
+  # instance, acquired on every concurrency limit of the work's scope before it is placed; a
+  # refusal is the named refusal of new work.
+  # OPEN: the Scheduler acquires on several limits (one per level of the tree) one by one; a
+  # refusal after an earlier acquire must release that one. Taken: the Scheduler releases; no
+  # transaction across limits here.
+  # UNMAPPED (hardening pass 1, metering.yaml:1610): that the instance lies in the limit's scope
+  # is not checked here or in ReleaseConcurrency. The scope is an account and everything below
+  # it, and Instance carries its own scope_id only (no account path, no formation), so a guard
+  # cannot tell a sub-account's instance from another tenant's.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1742
+  - name: weft.limits.AcquireConcurrency
+    naming:
+      display: Acquire a unit of concurrency
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.limits.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.limits.LimitRemoved
+      - name: spent
+        when_subject: {predicate: in_use >= max_concurrent}
+        error: weft.limits.ConcurrencySpent
+        payload:
+          weft.limits.ConcurrencySpent: {max_concurrent: {subject: max_concurrent}}
+      - name: acquired
+        updates: weft.limits.Concurrency
+        instance: concurrency_id
+        sets:
+          in_use: {increment: 1}
+        emits: [weft.limits.ConcurrencyAcquired]
+        payload:
+          weft.limits.ConcurrencyAcquired:
+            concurrency_id: input.concurrency_id
+            instance_id: input.instance_id
+
+  # Line 405 `concurrency`: the unit comes back when the work ends. A removed limit takes no
+  # release.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1773
+  - name: weft.limits.ReleaseConcurrency
+    naming:
+      display: Release a unit of concurrency
+    input:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: instance_id, type: weft.shared.InstanceId}
+    outcomes:
+      - name: no-such-concurrency
+        unknown_instance: true
+        error: weft.limits.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.limits.LimitRemoved
+      - name: nothing-acquired
+        when_subject: {predicate: in_use <= 0}
+        error: weft.limits.NothingAcquired
+      - name: released
+        updates: weft.limits.Concurrency
+        instance: concurrency_id
+        sets:
+          in_use: {expr: "subject.in_use - 1"}
+        emits: [weft.limits.ConcurrencyReleased]
+        payload:
+          weft.limits.ConcurrencyReleased:
+            concurrency_id: input.concurrency_id
+            instance_id: input.instance_id
+
+  # Line 405 `rate`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1801
+  - name: weft.limits.SetRate
+    naming:
+      display: Set a rate limit
+    input:
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+    outcomes:
+      # hardening pass 1 D3: the limit's account is the account the request acts in; another
+      # account answers as not found.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.limits.NotFound
+      - name: invalid-requests
+        when: max_requests < 1
+        error: weft.limits.InvalidLimit
+      - name: invalid-window
+        when: window_seconds < 1
+        error: weft.limits.InvalidLimit
+      - name: component-without-formation
+        when:
+          all: ["defined(component)", "not defined(formation_id)"]
+        error: weft.limits.ComponentWithoutFormation
+      # hardening pass 1 W5: the formation of a limit exists and lies in the limit's account; a
+      # formation of another account answers like a missing one, so its existence is not disclosed.
+      - name: formation-missing
+        when_related: {via: input.formation_id, exists: false}
+        error: weft.limits.NotFound
+      - name: formation-foreign
+        when_related: {via: input.formation_id, predicate: scope_id != input.scope_id}
+        error: weft.limits.NotFound
+      - name: set
+        creates: weft.limits.Rate
+        instance: rate_id
+        sets:
+          scope_id: input.scope_id
+          formation_id: input.formation_id
+          component: input.component
+          max_requests: input.max_requests
+          window_seconds: input.window_seconds
+          set_at: {generated: true}
+        emits: [weft.limits.RateSet]
+        payload:
+          weft.limits.RateSet:
+            rate_id: {generated: true}
+            scope_id: input.scope_id
+            formation_id: input.formation_id
+            component: input.component
+            max_requests: input.max_requests
+            window_seconds: input.window_seconds
+
+  # Line 405 `rate`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1855
+  - name: weft.limits.ChangeRate
+    naming:
+      display: Change a rate limit
+    input:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+    outcomes:
+      - name: invalid-requests
+        when: max_requests < 1
+        error: weft.limits.InvalidLimit
+      - name: invalid-window
+        when: window_seconds < 1
+        error: weft.limits.InvalidLimit
+      - name: no-such-rate
+        unknown_instance: true
+        error: weft.limits.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
+      - name: removed
+        when_subject: {predicate: state == Removed}
+        error: weft.limits.LimitRemoved
+      - name: changed
+        updates: weft.limits.Rate
+        instance: rate_id
+        sets:
+          max_requests: input.max_requests
+          window_seconds: input.window_seconds
+        emits: [weft.limits.RateChanged]
+        payload:
+          weft.limits.RateChanged:
+            rate_id: input.rate_id
+            max_requests: input.max_requests
+            window_seconds: input.window_seconds
+
+  # Line 405 `rate`.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1894
+  - name: weft.limits.RemoveRate
+    naming:
+      display: Remove a rate limit
+    input:
+      - {name: rate_id, type: weft.shared.RateId}
+    outcomes:
+      - name: no-such-rate
+        unknown_instance: true
+        error: weft.limits.NotFound
+      # hardening pass 1 D3: a limit of another account than the one the request acts in
+      # answers as not found, before any state of it is told.
+      - name: not-callers-scope
+        when_subject: {predicate: scope_id != caller.scope_id}
+        error: weft.limits.NotFound
+      - name: removed
+        moves: weft.limits.Rate.remove
+        instance: rate_id
+        emits: [weft.limits.RateRemoved]
+        payload:
+          weft.limits.RateRemoved:
+            rate_id: input.rate_id
+      - name: wrong-state
+        wrong_state: true
+        error: weft.limits.LimitRemoved
+
+  # Line 405 Limits, caller's "when spent, a named refusal for new work": the Scheduler asks before
+  # it places new work (line 113). Refused while a budget on the work's account path (or of its
+  # formation) is spent, or while a deadline there is shorter than the work asks for. Admits
+  # otherwise and changes nothing; concurrency is acquired with AcquireConcurrency.
+  # OPEN: a deadline limit and work that names no deadline of its own. Taken: max_seconds is the
+  # run time the work asks for (its shape's deadline); work with no end (a service) sends 0 and
+  # is not refused by a deadline; workloads then stops nothing by it.
+  # weft@6798e7d:ess/8-economy/metering.yaml:1926
+  - name: weft.limits.AdmitWork
+    naming:
+      display: Admit new work against the limits
+    input:
+      - {name: scope_path, type: List<weft.shared.ScopeId>}
+      - {name: formation_id, type: weft.shared.FormationId}
+      - {name: component, type: weft.shared.ComponentName}
+      - {name: max_seconds, type: Integer}
+    outcomes:
+      # cloudspec: weft's `budget-spent` (an exhausted weft.metering.Budget on the path) is cut;
+      # budgets are the multi-tenant example's.
+      - name: deadline-too-long
+        when_related:
+          entity: weft.limits.Deadline
+          where:
+            all:
+              - state == Active
+              - exists: {in: input.scope_path, as: a, that: scope_id == a}
+              - any: ["not defined(formation_id)", formation_id == input.formation_id]
+              - any: ["not defined(component)", component == input.component]
+              - max_seconds < input.max_seconds
+          exists: true
+        error: weft.limits.DeadlineTooLong
+      - name: admitted
+        accepts: nothing
+
+views:
+
+  # Line 405 `deadline`: the deadlines set on one account itself (its formations and components
+  # included); the limits on the accounts above it apply as well.
+  # weft@6798e7d:ess/8-economy/metering.yaml:2415
+  - name: weft.limits.Deadlines
+    source: weft.limits.Deadline
+    consistency: read_your_writes
+    params:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
+    fields:
+      - {name: deadline_id, type: weft.shared.DeadlineId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_seconds, type: Integer}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.limits.Deadline.State}
+
+  # Line 405 `concurrency`, with how many units are in use.
+  # weft@6798e7d:ess/8-economy/metering.yaml:2450
+  - name: weft.limits.Concurrencies
+    source: weft.limits.Concurrency
+    consistency: read_your_writes
+    params:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
+    fields:
+      - {name: concurrency_id, type: weft.shared.ConcurrencyId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_concurrent, type: Integer}
+      - {name: in_use, type: Integer}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.limits.Concurrency.State}
+
+  # Line 405 `rate`. weft-edge and the link filter read it to enforce the rate.
+  # weft@6798e7d:ess/8-economy/metering.yaml:2467
+  - name: weft.limits.Rates
+    source: weft.limits.Rate
+    consistency: read_your_writes
+    params:
+      - {name: scope_id, type: weft.shared.ScopeId}
+    filter: scope_id == param.scope_id
+    fields:
+      - {name: rate_id, type: weft.shared.RateId}
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: formation_id, type: Optional<weft.shared.FormationId>}
+      - {name: component, type: Optional<weft.shared.ComponentName>}
+      - {name: max_requests, type: Integer}
+      - {name: window_seconds, type: Integer}
+      - {name: set_at, type: Timestamp}
+      - {name: state, type: weft.limits.Rate.State}
