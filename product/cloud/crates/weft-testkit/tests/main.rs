@@ -1,5 +1,6 @@
 //! The one integration-test binary of weft-testkit.
 
+mod plan_apply;
 mod ratchet;
 
 mod trivial {
