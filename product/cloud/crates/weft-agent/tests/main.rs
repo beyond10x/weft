@@ -1,5 +1,9 @@
 //! The one integration-test binary of weft-agent.
 
+mod follow_adversary;
+mod follow_bookkeeping;
+mod seeds;
+
 /// `join` (`story:skeleton-node-join-session`): `weft-agent` joins the node `ProvisionPoolNode`
 /// made with its token, reports what it observed, and opens its session with a `hello` frame on
 /// the node channel of the control host, which records it as `OpenNodeSession` sent by the
@@ -540,5 +544,289 @@ mod dial {
         let error = weft_client::dial(&[dead_address(), dead_address()], Duration::from_secs(5))
             .expect_err("nothing listens");
         assert_eq!(error.kind(), std::io::ErrorKind::ConnectionRefused);
+    }
+}
+
+/// `follow` (`story:skeleton-node-run-assignment`): from a seeded state of two nodes, each with
+/// one `Scheduled` instance and an `Active` assignment, `weft-agent` follows its own work list:
+/// it verifies its instance (`RecordArtifactVerified`), starts its process through the `exec`
+/// port, records it running (`RecordInstanceRunning`), and writes its exit to the report file.
+/// The other node's instance is never started. Each test runs a `ControlHost` of its own.
+mod follow {
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    use serde_json::{json, Value};
+    use weft_client::{Client, Expect};
+    use weft_testkit::{ControlHost, NodeAgent};
+
+    use crate::seeds::{self, Seed};
+
+    /// How long the agent may take from its start to the exit of its instance's process.
+    const RUN_LIMIT: Duration = Duration::from_secs(30);
+
+    /// A control host on the seeded state, with this node's join token digest beside its node,
+    /// as `ProvisionPoolNode` keeps it. The digest is not a row: the host is started once on the
+    /// rows, stopped, given the digest through the storage port, and started again before any
+    /// agent runs.
+    fn seeded(seed: &Seed) -> ControlHost {
+        let mut host = ControlHost::start_seeded(seed.rows.clone());
+        host.stop();
+        {
+            let ports = weft_impl::Ports::open(&host.state_path()).expect("the state file opens");
+            ports.store().set_join_token_digest(
+                &weft_types::shared::NodeId(weft_types::primitives::Uuid(
+                    seed.this.node_id.clone(),
+                )),
+                &weft_impl::context::decider::join_token_digest(&seed.join_token),
+            );
+        }
+        host.restart()
+    }
+
+    /// The row of `weft.workloads.Instances` of `instance_id`.
+    fn instance(client: &Client, instance_id: &str) -> Value {
+        let answer = client.view("weft.workloads.Instances", &[]).ok_body(200);
+        answer["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .find(|row| row["instance_id"] == json!(instance_id))
+            .unwrap_or_else(|| panic!("no instance {instance_id}: {answer}"))
+            .clone()
+    }
+
+    /// The `pass` of the `started` line of `instance_id`.
+    fn started_pass(lines: &[Value], instance_id: &str) -> Option<u64> {
+        lines
+            .iter()
+            .find(|line| line["started"] == json!(instance_id))
+            .and_then(|line| line["pass"].as_u64())
+    }
+
+    /// The highest number of a `{"pass": n}` line.
+    fn last_pass(lines: &[Value]) -> Option<u64> {
+        lines
+            .iter()
+            .filter(|line| line.get("started").is_none())
+            .filter_map(|line| line["pass"].as_u64())
+            .max()
+    }
+
+    /// The exit line of `instance_id`.
+    fn exit_line<'a>(lines: &'a [Value], instance_id: &str) -> Option<&'a Value> {
+        lines.iter().find(|line| {
+            line["instance_id"] == json!(instance_id) && line.get("exit_code").is_some()
+        })
+    }
+
+    /// The report holds the exit line of `instance_id` and a pass line after the pass that
+    /// started it.
+    fn finished(lines: &[Value], instance_id: &str) -> bool {
+        exit_line(lines, instance_id).is_some()
+            && started_pass(lines, instance_id)
+                .is_some_and(|started| last_pass(lines).is_some_and(|last| last > started))
+    }
+
+    /// Whether any member of `line` is `value`.
+    fn names(line: &Value, value: &str) -> bool {
+        line.as_object()
+            .is_some_and(|members| members.values().any(|member| member == &json!(value)))
+    }
+
+    /// Statements 1 to 8: the agent's instance reads `Running`, its process ran through the exec
+    /// port on substrate-daemon and printed `weft`; the other node's instance is untouched; the
+    /// control host log holds one 2xx `RecordInstanceRunning` and the two edge bindings of the
+    /// instance's first readiness as declared.
+    #[test]
+    fn the_agent_starts_its_assigned_instance_confined_and_records_it_running() {
+        let seed = seeds::two_nodes();
+        let host = seeded(&seed);
+        let client = host.client();
+        let this = &seed.this.instance_id;
+        let other = &seed.other.instance_id;
+        assert_eq!(instance(&client, this)["state"], json!("Scheduled"));
+
+        let before_seq = host.last_seq();
+        let mut agent = NodeAgent::start(&host, &seed.this.node_id, &seed.join_token);
+        let lines = agent.wait_for(RUN_LIMIT, |lines| finished(lines, this));
+
+        // 1. Its instance reads Running.
+        let row = instance(&client, this);
+        assert_eq!(row["state"], json!("Running"), "{row}");
+
+        // 2. The exit line of its process.
+        assert!(
+            lines.contains(&json!({"instance_id": this, "exit_code": 0, "stdout": "weft\n"})),
+            "{lines:?}"
+        );
+
+        // 3. After a pass later than the one that started its instance, the other node's
+        // instance still reads Scheduled.
+        let row = instance(&client, other);
+        assert_eq!(row["state"], json!("Scheduled"), "{row}");
+
+        // 4. No line names the other instance, and none has its output.
+        for line in &lines {
+            assert!(
+                !names(line, other),
+                "a line names the other instance: {line}"
+            );
+            assert!(
+                !line["stdout"]
+                    .as_str()
+                    .is_some_and(|stdout| stdout.contains("other")),
+                "a line has the other instance's output: {line}"
+            );
+        }
+
+        let log = host.log_after(before_seq);
+        // 5. One request line of RecordInstanceRunning, answered 2xx.
+        let running: Vec<&Value> = log
+            .iter()
+            .filter(|line| {
+                line["kind"] == "request"
+                    && line["operation"] == "weft.workloads.RecordInstanceRunning"
+            })
+            .collect();
+        assert_eq!(running.len(), 1, "{log:?}");
+        let status = running[0]["status"].as_u64().expect("a status");
+        assert!((200..300).contains(&status), "{}", running[0]);
+
+        let bindings = |id: &str| -> Vec<&Value> {
+            log.iter()
+                .filter(|line| line["kind"] == "binding" && line["binding"] == id)
+                .collect()
+        };
+        // 6. One edge-backend-ready line, applied.
+        let ready = bindings("edge-backend-ready");
+        assert_eq!(ready.len(), 1, "{log:?}");
+        assert_eq!(ready[0]["result"], json!("applied"), "{}", ready[0]);
+
+        // 7. One edge-backend-restore line, not-out-of-traffic dropped.
+        let restore = bindings("edge-backend-restore");
+        let dropped: Vec<&&Value> = restore
+            .iter()
+            .filter(|line| line["refusal"] == "not-out-of-traffic" && line["result"] == "dropped")
+            .collect();
+        assert_eq!(dropped.len(), 1, "{log:?}");
+
+        // 8. No edge-backend-restore line retried.
+        assert!(
+            restore.iter().all(|line| line["result"] != "retried"),
+            "{restore:?}"
+        );
+    }
+
+    /// The agent starts its processes through the `exec` port and through nothing else: with a
+    /// stub port that runs nothing and answers `stub`, the report holds the stub's output, the
+    /// stub was given the instance's command, and the instance still reads `Running`.
+    #[test]
+    fn the_agent_starts_its_processes_only_through_the_exec_port() {
+        use std::sync::{Arc, Mutex};
+        use weft_platform::node::{
+            Capacity, Exec, ExecError, ExecState, Exited, Facts, Isolation, IsolationLevel,
+            NodeFacts, Process,
+        };
+        use weft_platform::Refusal;
+
+        struct Stub(Arc<Mutex<Vec<Vec<String>>>>);
+        impl NodeFacts for Stub {
+            fn observe(&self) -> Result<Facts, Refusal> {
+                Ok(Facts {
+                    capacity: vec![Capacity {
+                        resource_class: "cpu".to_owned(),
+                        amount: 1,
+                    }],
+                    isolation: Isolation {
+                        levels: vec![IsolationLevel::Container],
+                        cgroups_delegated: Some(true),
+                        egress_denied: Some(true),
+                        kvm_present: Some(false),
+                        gpu_passthrough: Some(false),
+                    },
+                })
+            }
+        }
+        impl Exec for Stub {
+            fn run(
+                &self,
+                process: &Process,
+                on_state: &mut dyn FnMut(ExecState),
+            ) -> Result<Exited, ExecError> {
+                self.0
+                    .lock()
+                    .expect("the argv lock")
+                    .push(process.argv.clone());
+                on_state(ExecState::Accepted);
+                on_state(ExecState::Running);
+                on_state(ExecState::Exited);
+                Ok(Exited {
+                    code: Some(0),
+                    stdout: b"stub\n".to_vec(),
+                    stderr: Vec::new(),
+                    truncated: false,
+                })
+            }
+        }
+
+        let seed = seeds::two_nodes();
+        let host = seeded(&seed);
+        let client = host.client();
+        let this = seed.this.instance_id.clone();
+        let report = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("follow-stub-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&report);
+        let options = weft_agent::agent::Options::parse([
+            "--control".to_owned(),
+            format!("http://{}", host.address()),
+            "--node-id".to_owned(),
+            seed.this.node_id.clone(),
+            "--join-token".to_owned(),
+            seed.join_token.clone(),
+            "--substrate".to_owned(),
+            "/nonexistent/substrate.sock".to_owned(),
+            "--report".to_owned(),
+            report.to_string_lossy().into_owned(),
+        ])
+        .expect("the arguments parse");
+        let argv = Arc::new(Mutex::new(Vec::new()));
+        let stub: &'static Stub = Box::leak(Box::new(Stub(Arc::clone(&argv))));
+        // The agent holds its session until it is stopped; its thread ends with the test.
+        std::thread::spawn(move || weft_agent::agent::run(&options, stub, stub));
+
+        let start = Instant::now();
+        let lines = loop {
+            let text = std::fs::read_to_string(&report).unwrap_or_default();
+            let complete = text.rfind('\n').map_or("", |end| &text[..end]);
+            let lines: Vec<Value> = complete
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("a report line"))
+                .collect();
+            if finished(&lines, &this) {
+                break lines;
+            }
+            assert!(
+                start.elapsed() < RUN_LIMIT,
+                "the report is not complete after {RUN_LIMIT:?}: {lines:?}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let _ = std::fs::remove_file(&report);
+
+        assert!(
+            lines.contains(&json!({"instance_id": this, "exit_code": 0, "stdout": "stub\n"})),
+            "{lines:?}"
+        );
+        assert_eq!(
+            argv.lock().expect("the argv lock").clone(),
+            vec![vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                seeds::THIS_SNIPPET.to_owned()
+            ]]
+        );
+        let row = instance(&client, &this);
+        assert_eq!(row["state"], json!("Running"), "{row}");
     }
 }

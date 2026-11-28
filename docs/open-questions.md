@@ -482,3 +482,18 @@ First line of each marker in the new entities and commands; the full text and th
 - Second root: `AddDeployGate` needs an `Environment`; `CreateEnvironment/created` is gap 9 too.
 - `--synthesis-seed` does not reach these: it supplies only a command's own subject row, and both rows are related rows named by an input.
 - ConnectForge's `foreign-secret` (a related row's field compared with an input) beside the `exists` row set is the shape the deployments pass names as blocking; to be re-measured once `Account` is reachable.
+
+## Where the transformation to a target runs (owner, 2026-11-28)
+
+- D5 A (2026-11-28 about 02:14 CET): cloudspec owns translation and generation; weft receives a
+  cloudspec architecture. The owner, about 03:51 CET: "we might have actually more control if
+  [...] the transformation maybe would happen in Weft itself, but we will see. For now it's good",
+  and there could be invariants under which weft would not hand it to cloudspec. Open: which
+  invariants (candidates: a target weft must reconcile and observe after deploy, such as its own
+  deployment or a tenant formation on its kubernetes placement). Assumed until answered: cloudspec
+  generates, weft applies and reconciles the generated output.
+- The owner's reason, about 03:53 CET: "for the same reason as we're not using the generator
+  for the UI. Instead, we're using our own renderer for the UI." weft's consoles read ess-ui/1
+  documents and draw them with weft's own renderer (`product/console/src/renderer`); by the same
+  pattern weft could read a cloudspec architecture and apply it with its own transformation,
+  cloudspec keeping the format and the reference generators.

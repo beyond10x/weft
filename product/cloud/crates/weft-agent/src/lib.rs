@@ -2,4 +2,5 @@
 //! runs on only through the ports of `weft-platform`.
 
 pub mod agent;
+pub mod follow;
 pub mod report;
