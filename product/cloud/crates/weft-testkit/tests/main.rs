@@ -4,6 +4,7 @@ mod cloudspec_submit;
 mod plan_apply;
 mod plan_from_source;
 mod ratchet;
+mod release_steps;
 
 mod trivial {
     #[test]
