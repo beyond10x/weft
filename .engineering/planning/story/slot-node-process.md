@@ -10,6 +10,7 @@ relations:
 - depends_on: story:ports-node-workloads-local
 - depends_on: story:cloud-blocks-layer-refactor-pin
 - depends_on: story:cloudspec-submission-plan-from-source
+- depends_on: story:cloudspec-submission-apply-workloads
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-agent/src/follow.rs
