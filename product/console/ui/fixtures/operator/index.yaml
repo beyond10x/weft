@@ -2,6 +2,7 @@
 # Invented sample data for product/console (fixture mode); no real person, company or host.
 views:
   weft.infrastructure.Clouds: infrastructure.yaml
+  weft.infrastructure.CloudRuntimes: infrastructure.yaml
   weft.infrastructure.Zones: infrastructure.yaml
   weft.infrastructure.NodePools: infrastructure.yaml
   weft.infrastructure.Nodes: infrastructure.yaml
@@ -25,6 +26,7 @@ views:
   weft.accounts.TenantQuotas: tenancy.yaml
   weft.accounts.Principals: tenancy.yaml
   weft.accounts.RoleBindings: tenancy.yaml
+  weft.scope.Scopes: tenancy.yaml
   weft.workloads.RuntimeList: platform.yaml
   weft.deployments.Translators: platform.yaml
   weft.identity.TrustDomains: platform.yaml

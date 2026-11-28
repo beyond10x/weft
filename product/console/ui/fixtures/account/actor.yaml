@@ -5,6 +5,7 @@
 principal_id: 033c4566-9be4-4e65-bd34-328836684ec5
 tenant_id: a38fd8ba-fa25-42c4-9a58-974e92dcf880
 account_id: e4a5db1f-595f-4057-b315-8750cf2855d3
+scope_id: 6c227a2a-074f-4c4e-ae67-e170a75dd7b2
 roles:
   - deployer
   - account_admin

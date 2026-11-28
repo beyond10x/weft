@@ -166,15 +166,15 @@ pages:
           running: [running]
     sections:
       - {name: board, remove: true}
-      - {name: formations, component: metric, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, aggregate: count, label: Formations}
+      - {name: formations, component: metric, reads: {view: weft.architecture.Formations, params: {scope_id: actor.scope_id}}, aggregate: count, label: Formations}
       - {name: instances, component: metric, reads: {view: weft.workloads.Instances}, aggregate: count, label: Instances}
-      - {name: services, component: metric, reads: {view: weft.catalog.ServiceInstanceList, params: {account_id: actor.account_id}}, aggregate: count, label: Managed services}
-      - {name: cost, component: metric, reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}, aggregate: sum, field: cost, label: Cost in the last 30 days}
+      - {name: services, component: metric, reads: {view: weft.services.ServiceInstanceList, params: {scope_id: actor.scope_id}}, aggregate: count, label: Managed services}
+      - {name: cost, component: metric, reads: {view: weft.metering.CostRollup, params: {scope_id: actor.scope_id, from: state.window.from, to: state.window.to}}, aggregate: sum, field: cost, label: Cost in the last 30 days}
       - name: spend
         component: chart
         title: Cost by meter, last 30 days
         chart: bar
-        reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        reads: {view: weft.metering.CostRollup, params: {scope_id: actor.scope_id, from: state.window.from, to: state.window.to}}
         x: meter
         series: [cost]
         degrades: {no_charts: table}
@@ -182,10 +182,10 @@ pages:
         component: collection
         title: Alerts
         style: list
-        reads: {view: weft.observability.Alerts, key: alert_id, params: {account_id: actor.account_id}}
+        reads: {view: weft.observability.Alerts, key: alert_id, params: {scope_id: actor.scope_id}}
         sort: {by: fired_at, dir: desc, mode: client}
         columns:
-          - {field: alert_rule_id, label: Rule, host: AlertRuleName, reason: "ess-ui/1 label_from reads its view without params; AlertRules takes account_id", stands_in_for: none, reads: {view: weft.observability.AlertRules, params: {account_id: actor.account_id}}}
+          - {field: alert_rule_id, label: Rule, host: AlertRuleName, reason: "ess-ui/1 label_from reads its view without params; AlertRules takes scope_id", stands_in_for: none, reads: {view: weft.observability.AlertRules, params: {scope_id: actor.scope_id}}}
           - {field: value, as: number}
           - {field: fired_at, label: Fired, as: timestamp}
           - {field: state, as: badge, tone_by: alert_state}
@@ -219,7 +219,7 @@ pages:
       - name: list
         component: collection
         style: cards
-        reads: {view: weft.formations.Formations, key: formation_id, params: {account_id: actor.account_id}, filter: row contains state.search}
+        reads: {view: weft.architecture.Formations, key: formation_id, params: {scope_id: actor.scope_id}, filter: row contains state.search}
         columns:
           - {field: name, label: Formation}
           - {field: internal_domain, label: Internal domain}
@@ -227,19 +227,27 @@ pages:
           - {field: state, as: badge, tone_by: lifecycle}
         row_actions:
           - {name: open, navigate: {to: formations.detail, params: {formation_id: row.formation_id}}, label: Open}
-          - {name: retire, does: weft.formations.RetireFormation, bind: {formation_id: row.formation_id}, label: Retire, visible: "row.state == Active", confirm: {title: Retire this formation, confirm_label: Retire}}
+          - {name: pin, opens: pin, label: Pin to cluster, visible: "row.state == Active"}
+          - {name: retire, does: weft.architecture.RetireFormation, bind: {formation_id: row.formation_id}, label: Retire, visible: "row.state == Active", confirm: {title: Retire this formation, confirm_label: Retire}}
         states: {empty: {title: No formations, message: "A formation is one system: its components, links, routes and environments.", action: {name: create, opens: create, label: New formation}}}
     overlays:
       create:
         kind: drawer
         component: form
         title: New formation
-        does: weft.formations.CreateFormation
+        does: weft.architecture.CreateFormation
         fields:
           - name
           - {field: zones, as: tags, help: {text: The zones its instances may run in.}}
-          - {field: cluster_id, label: Cluster, as: choice, choice: {component: choice, reads: {view: weft.cluster.ClustersOfAccount, params: {account_id: actor.account_id}}, value: cluster_id, label: name}}
         submit: {label: Create formation}
+      pin:
+        kind: drawer
+        component: form
+        title: Pin to a cluster
+        does: weft.cluster.PinFormation
+        fields:
+          - {field: cluster_id, label: Cluster, as: choice, choice: {component: choice, reads: {view: weft.cluster.ClustersOfAccount, params: {scope_id: actor.scope_id}}, value: cluster_id, label: name}, help: {text: "The cluster the formation's instances are placed in. A formation is placed nowhere until it is pinned, and it is pinned once."}}
+        submit: {label: Pin}
 
   formations.detail:
     kind: detail_page
@@ -251,7 +259,7 @@ pages:
       title_from: {section: summary, field: name}
       switch: [formations.detail, formations.network, formations.config]
       actions:
-        - {name: commit, does: weft.formations.CommitRevision, bind: {formation_id: params.formation_id, account_id: actor.account_id}, label: Commit revision}
+        - {name: commit, does: weft.architecture.CommitRevision, bind: {formation_id: params.formation_id, scope_id: actor.scope_id}, label: Commit revision}
     layout:
       columns:
         - {name: side, sections: [summary, revisions], width: narrow}
@@ -261,7 +269,7 @@ pages:
         component: collection
         title: Formation
         style: list
-        reads: {view: weft.formations.Formations, key: formation_id, params: {account_id: actor.account_id}, filter: "row.formation_id == params.formation_id"}
+        reads: {view: weft.architecture.Formations, key: formation_id, params: {scope_id: actor.scope_id}, filter: "row.formation_id == params.formation_id"}
         columns:
           - {field: name, label: Formation}
           - {field: internal_domain, label: Internal domain}
@@ -271,19 +279,19 @@ pages:
         component: collection
         title: Revisions
         style: list
-        reads: {view: weft.formations.FormationRevisions, key: revision_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.architecture.FormationRevisions, key: revision_id, params: {formation_id: params.formation_id}}
         sort: {by: number, dir: desc, mode: client}
         columns: [{field: number, label: Revision, as: number}, {field: document_digest, label: Document}]
       - name: components
         component: collection
         title: Components
-        reads: {view: weft.formations.FormationComponents, key: component_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.architecture.FormationComponents, key: component_id, params: {formation_id: params.formation_id}}
         columns:
           - {field: name, label: Component}
           - {field: internal_name, label: Internal name}
           - {field: on_border, label: On the border, as: badge, tone_by: ready, labels: {"true": "Yes", "false": "No"}}
         row_actions:
-          - {name: remove, does: weft.formations.RemoveComponent, bind: {component_id: row.component_id}, label: Remove, confirm: {title: Remove this component, confirm_label: Remove}}
+          - {name: remove, does: weft.architecture.RemoveComponent, bind: {formation_id: params.formation_id, scope_id: actor.scope_id, component_id: row.component_id}, label: Remove, confirm: {title: Remove this component, confirm_label: Remove}}
       - name: workloads
         component: collection
         title: Workloads
@@ -299,7 +307,7 @@ pages:
       - name: environments
         component: collection
         title: Environments
-        reads: {view: weft.formations.Environments, key: environment_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.architecture.Environments, key: environment_id, params: {formation_id: params.formation_id}}
         columns:
           - {field: name, label: Environment}
           - {field: quota_slice, label: Quota slice, as: list}
@@ -313,37 +321,24 @@ pages:
     params: {formation_id: FormationId}
     switch_to: [formations.detail, formations.config]
     actor: weft.actors.Deployer
+    # Border routes (weft.edge.FormationBorder) and endpoints (weft.edge.Endpoints) are not shown:
+    # the vendored spec moved them to weft.edge, owned by weft-edge, which is not `reached_by:
+    # network` (OPEN in ess/components.yaml at weft-edge), so no HTTP surface serves them.
     header:
       switch: [formations.detail, formations.network, formations.config]
     sections:
       - name: summary
         component: collection
         title: Links between components
-        reads: {view: weft.formations.FormationLinks, key: link_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.architecture.FormationLinks, key: link_id, params: {formation_id: params.formation_id}}
         columns:
           - {field: caller_name, label: Caller}
           - {field: target_name, label: Target}
           - {field: protocol, as: badge, tone: info}
           - {field: port, as: number}
         row_actions:
-          - {name: remove, does: weft.formations.RemoveLink, bind: {link_id: row.link_id}, label: Remove, confirm: {title: Remove this link, confirm_label: Remove}}
+          - {name: remove, does: weft.architecture.RemoveLink, bind: {formation_id: params.formation_id, scope_id: actor.scope_id, link_id: row.link_id}, label: Remove, confirm: {title: Remove this link, confirm_label: Remove}}
         states: {empty: {message: No component calls another.}}
-      - name: border
-        component: collection
-        title: Border routes
-        reads: {view: weft.formations.FormationBorder, key: route_id, params: {formation_id: params.formation_id}}
-        columns:
-          - {field: host}
-          - {field: path}
-          - {field: component_name, label: Component}
-          - {field: port, as: number}
-        states: {empty: {message: Nothing of this formation is reachable from outside.}}
-      - name: endpoints
-        component: collection
-        title: Endpoints
-        style: list
-        reads: {view: weft.formations.Endpoints, key: endpoint_id, params: {formation_id: params.formation_id}}
-        columns: [{field: host}]
 
   formations.config:
     kind: detail_page
@@ -357,25 +352,25 @@ pages:
       - name: summary
         component: collection
         title: Configs
-        reads: {view: weft.formations.Configs, key: config_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.architecture.Configs, key: config_id, params: {formation_id: params.formation_id}}
         columns: [{field: name, label: Config}, {field: data, as: map}]
         states: {empty: {message: This formation has no config.}}
       - name: mounts
         component: collection
         title: Mounts
-        reads: {view: weft.formations.ConfigMounts, key: mount_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.architecture.ConfigMounts, key: mount_id, params: {formation_id: params.formation_id}}
         columns: [{field: config_id, label: Config}, {field: component_id, label: Component}, {field: kind, as: badge, tone: info}, {field: target}]
       - name: bindings
         component: collection
         title: Managed service bindings
-        reads: {view: weft.catalog.FormationServiceBindings, key: binding_id, params: {formation_id: params.formation_id}}
+        reads: {view: weft.services.FormationServiceBindings, key: binding_id, params: {formation_id: params.formation_id}}
         columns:
           - {field: service_instance_id, label: Service}
           - {field: component}
           - {field: mode, as: badge, tone: info}
           - {field: state, as: badge, tone_by: lifecycle}
         row_actions:
-          - {name: unbind, does: weft.catalog.UnbindService, bind: {binding_id: row.binding_id}, label: Unbind, confirm: {title: Unbind this service, confirm_label: Unbind}}
+          - {name: unbind, does: weft.services.UnbindService, bind: {binding_id: row.binding_id, scope_id: actor.scope_id}, label: Unbind, confirm: {title: Unbind this service, confirm_label: Unbind}}
 
   workloads:
     kind: list_page
@@ -390,7 +385,7 @@ pages:
         binds: [state.formation, state.search]
         search: {binds: state.search, placeholder: Search component or package}
         choices:
-          - {name: formation, component: choice, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
+          - {name: formation, component: choice, reads: {view: weft.architecture.Formations, params: {scope_id: actor.scope_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
       - name: list
         component: collection
         reads: {view: weft.workloads.WorkloadList, key: workload_id, params: {formation_id: state.formation}, filter: row contains state.search}
@@ -582,7 +577,7 @@ pages:
       actions:
         - {name: pause, does: weft.workloads.PauseInstance, bind: {instance_id: params.instance_id}, label: Pause}
         - {name: resume, does: weft.workloads.ResumeInstance, bind: {instance_id: params.instance_id}, label: Resume}
-        - {name: snapshot, does: weft.workloads.TakeSnapshot, bind: {instance_id: params.instance_id, account_id: actor.account_id}, label: Take snapshot}
+        - {name: snapshot, does: weft.workloads.TakeSnapshot, bind: {instance_id: params.instance_id, scope_id: actor.scope_id, workload_id: section.summary.row.workload_id}, label: Take snapshot}
         - {name: stop, does: weft.workloads.StopInstance, bind: {instance_id: params.instance_id}, label: Stop, confirm: {title: Stop this instance, confirm_label: Stop}}
     layout:
       columns:
@@ -618,7 +613,7 @@ pages:
       - name: logs
         component: collection
         title: Log streams
-        reads: {view: weft.observability.InstanceLogStreams, key: log_stream_id, params: {account_id: actor.account_id, instance_id: params.instance_id}}
+        reads: {view: weft.observability.InstanceLogStreams, key: log_stream_id, params: {scope_id: actor.scope_id, instance_id: params.instance_id}}
         columns:
           - {field: kind, as: badge, tone: info}
           - {field: process}
@@ -630,7 +625,7 @@ pages:
         host: LogTail
         reason: "Log lines arrive over the exec channel (protocols/exec-channel.yaml, a logs session), not from an ESS view; ess-ui/1 has no node for a stream of lines"
         stands_in_for: none
-        reads: {view: weft.observability.InstanceLogStreams, params: {account_id: actor.account_id, instance_id: params.instance_id}}
+        reads: {view: weft.observability.InstanceLogStreams, params: {scope_id: actor.scope_id, instance_id: params.instance_id}}
         commands: [weft.nodes.OpenExecSession, weft.nodes.CloseExecSession]
       - name: observations
         component: collection
@@ -678,8 +673,8 @@ pages:
         component: filter_bar
         binds: [state.formation, state.environment]
         choices:
-          - {name: formation, component: choice, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
-          - {name: environment, component: choice, reads: {view: weft.formations.Environments, params: {formation_id: state.formation}}, value: environment_id, label: name, binds: state.environment, placeholder: Pick an environment}
+          - {name: formation, component: choice, reads: {view: weft.architecture.Formations, params: {scope_id: actor.scope_id}}, value: formation_id, label: name, binds: state.formation, placeholder: Pick a formation}
+          - {name: environment, component: choice, reads: {view: weft.architecture.Environments, params: {formation_id: state.formation}}, value: environment_id, label: name, binds: state.environment, placeholder: Pick an environment}
       - name: list
         component: collection
         reads: {view: weft.deployments.Releases, key: release_id, params: {environment_id: state.environment}}
@@ -693,7 +688,7 @@ pages:
           - {field: state, as: badge, tone_by: release_state}
         row_actions:
           - {name: open, navigate: {to: releases.detail, params: {release_id: row.release_id}}, label: Open}
-          - {name: rollback, does: weft.deployments.PlanRollback, bind: {release_id: row.release_id, account_id: actor.account_id, environment_id: row.environment_id}, label: Plan rollback, visible: "row.state in [Live, Superseded]", confirm: {title: Plan a rollback to this release, confirm_label: Plan rollback}}
+          - {name: rollback, does: weft.deployments.PlanRollback, bind: {release_id: row.release_id, scope_id: actor.scope_id, environment_id: row.environment_id}, label: Plan rollback, visible: "row.state in [Live, Superseded]", confirm: {title: Plan a rollback to this release, confirm_label: Plan rollback}}
         states: {empty: {title: Pick an environment, message: Releases are listed per environment of a formation.}}
 
   environments.detail:
@@ -715,7 +710,7 @@ pages:
           - {field: state, as: badge, tone_by: release_state}
         row_actions:
           - {name: open, navigate: {to: releases.detail, params: {release_id: row.release_id}}, label: Open}
-          - {name: rollback, does: weft.deployments.PlanRollback, bind: {release_id: row.release_id, account_id: actor.account_id, environment_id: params.environment_id}, label: Plan rollback, visible: "row.state in [Live, Superseded]", confirm: {title: Plan a rollback to this release, confirm_label: Plan rollback}}
+          - {name: rollback, does: weft.deployments.PlanRollback, bind: {release_id: row.release_id, scope_id: actor.scope_id, environment_id: params.environment_id}, label: Plan rollback, visible: "row.state in [Live, Superseded]", confirm: {title: Plan a rollback to this release, confirm_label: Plan rollback}}
       - name: plans
         component: collection
         title: Plans
@@ -732,7 +727,7 @@ pages:
       - name: scale
         component: collection
         title: Scale settings
-        reads: {view: weft.formations.ScaleSettings, key: scale_setting_id, params: {environment_id: params.environment_id}}
+        reads: {view: weft.architecture.ScaleSettings, key: scale_setting_id, params: {environment_id: params.environment_id}}
         columns: [{field: component_id, label: Component}, {field: min_replicas, label: Minimum, as: number}, {field: max_replicas, label: Maximum, as: number}]
       - name: gates
         component: collection
@@ -795,7 +790,7 @@ pages:
       - name: list
         component: collection
         style: cards
-        reads: {view: weft.catalog.OfferingCatalog, key: offering_id, filter: row contains state.search}
+        reads: {view: weft.services.OfferingCatalog, key: offering_id, filter: row contains state.search}
         columns:
           - {field: name, label: Offering}
           - {field: kind, as: badge, tone: info}
@@ -813,11 +808,11 @@ pages:
         kind: drawer
         component: form
         title: Provision a managed service
-        does: weft.catalog.ProvisionServiceInstance
+        does: weft.services.ProvisionServiceInstance
         fields:
           - name
           - {field: plan_id, label: Plan, as: choice, choice: {component: choice, reads: {view: weft.catalog.OfferingPlans, params: {offering_id: params.offering_id}}, value: plan_id, label: name, style: radio}}
-          - {field: formation_id, label: Formation, as: choice, choice: {component: choice, reads: {view: weft.formations.Formations, params: {account_id: actor.account_id}}, value: formation_id, label: name}}
+          - {field: formation_id, label: Formation, as: choice, choice: {component: choice, reads: {view: weft.architecture.Formations, params: {scope_id: actor.scope_id}}, value: formation_id, label: name}}
         submit: {label: Provision}
 
   managed:
@@ -834,7 +829,7 @@ pages:
         search: {binds: state.search, placeholder: Search services}
       - name: list
         component: collection
-        reads: {view: weft.catalog.ServiceInstanceList, key: service_instance_id, params: {account_id: actor.account_id}, filter: row contains state.search}
+        reads: {view: weft.services.ServiceInstanceList, key: service_instance_id, params: {scope_id: actor.scope_id}, filter: row contains state.search}
         columns:
           - {field: name, label: Service}
           - {field: kind, as: badge, tone: info}
@@ -843,8 +838,8 @@ pages:
           - {field: state, as: badge, tone_by: service_instance}
         row_actions:
           - {name: open, navigate: {to: managed.detail, params: {service_instance_id: row.service_instance_id}}, label: Open}
-          - {name: backup, does: weft.catalog.BackupServiceInstance, bind: {service_instance_id: row.service_instance_id, account_id: actor.account_id}, label: Back up, visible: "row.state == Ready"}
-          - {name: deprovision, does: weft.catalog.DeprovisionServiceInstance, bind: {service_instance_id: row.service_instance_id}, label: Deprovision, visible: "row.state in [Ready, Degraded]", confirm: {title: Deprovision this service, confirm_label: Deprovision}}
+          - {name: backup, does: weft.services.BackupServiceInstance, bind: {service_instance_id: row.service_instance_id, scope_id: actor.scope_id}, label: Back up, visible: "row.state == Ready"}
+          - {name: deprovision, does: weft.services.DeprovisionServiceInstance, bind: {service_instance_id: row.service_instance_id}, label: Deprovision, visible: "row.state in [Ready, Degraded]", confirm: {title: Deprovision this service, confirm_label: Deprovision}}
         states: {empty: {title: No managed services, message: "Provision a queue, a database or a cache from the catalog.", action: {name: catalog, navigate: {to: catalog}, label: Browse catalog}}}
 
   managed.detail:
@@ -855,20 +850,20 @@ pages:
     header:
       title_from: {section: summary, field: name}
       actions:
-        - {name: backup, does: weft.catalog.BackupServiceInstance, bind: {service_instance_id: params.service_instance_id, account_id: actor.account_id}, label: Back up now}
+        - {name: backup, does: weft.services.BackupServiceInstance, bind: {service_instance_id: params.service_instance_id, scope_id: actor.scope_id}, label: Back up now}
     layout:
       columns:
         - {name: side, sections: [summary], width: narrow}
         - {name: main, sections: [bindings, backups, restores], width: wide}
     sections:
-      # ServiceInstanceList(account_id), not ServiceInstanceDetail(service_instance_id): only the list
+      # ServiceInstanceList(scope_id), not ServiceInstanceDetail(service_instance_id): only the list
       # is scoped to the account (as formations.detail reads Formations). It has no degraded_reason:
-      # shown again once the model scopes ServiceInstanceDetail by account_id.
+      # shown again once the model scopes ServiceInstanceDetail by scope_id.
       - name: summary
         component: collection
         title: Service
         style: list
-        reads: {view: weft.catalog.ServiceInstanceList, key: service_instance_id, params: {account_id: actor.account_id}, filter: "row.service_instance_id == params.service_instance_id"}
+        reads: {view: weft.services.ServiceInstanceList, key: service_instance_id, params: {scope_id: actor.scope_id}, filter: "row.service_instance_id == params.service_instance_id"}
         columns:
           - {field: name, label: Service}
           - {field: kind, as: badge, tone: info}
@@ -879,21 +874,21 @@ pages:
       - name: bindings
         component: collection
         title: Bindings
-        reads: {view: weft.catalog.ServiceBindingList, key: binding_id, params: {service_instance_id: params.service_instance_id}}
+        reads: {view: weft.services.ServiceBindingList, key: binding_id, params: {service_instance_id: params.service_instance_id}}
         columns: [{field: formation_id, label: Formation}, {field: component}, {field: mode, as: badge, tone: info}, {field: state, as: badge, tone_by: lifecycle}]
         states: {empty: {message: No component is bound to this service.}}
       - name: backups
         component: collection
         title: Backups
-        reads: {view: weft.catalog.BackupList, key: backup_id, params: {service_instance_id: params.service_instance_id}}
+        reads: {view: weft.services.BackupList, key: backup_id, params: {service_instance_id: params.service_instance_id}}
         columns: [{field: backup_id, label: Backup}, {field: failure_reason, label: Failure}, {field: state, as: badge, tone_by: backup_state}]
         row_actions:
-          - {name: restore, does: weft.catalog.RestoreServiceInstance, bind: {service_instance_id: params.service_instance_id, backup_id: row.backup_id}, label: Restore, visible: "row.state == Completed", confirm: {title: Restore this backup, confirm_label: Restore}}
+          - {name: restore, does: weft.services.RestoreServiceInstance, bind: {service_instance_id: params.service_instance_id, backup_id: row.backup_id, scope_id: actor.scope_id}, label: Restore, visible: "row.state == Completed", confirm: {title: Restore this backup, confirm_label: Restore}}
         states: {empty: {message: No backup was taken.}}
       - name: restores
         component: collection
         title: Restores
-        reads: {view: weft.catalog.RestoreList, key: restore_id, params: {service_instance_id: params.service_instance_id}}
+        reads: {view: weft.services.RestoreList, key: restore_id, params: {service_instance_id: params.service_instance_id}}
         columns: [{field: backup_id, label: Backup}, {field: failure_reason, label: Failure}, {field: state, as: badge, tone_by: backup_state}]
         states: {empty: {message: Nothing was restored.}}
 
@@ -912,7 +907,7 @@ pages:
         search: {binds: state.search, placeholder: Search secrets}
       - name: list
         component: collection
-        reads: {view: weft.secrets.Secrets, key: secret_id, params: {account_id: actor.account_id}, filter: row contains state.search}
+        reads: {view: weft.secrets.Secrets, key: secret_id, params: {scope_id: actor.scope_id}, filter: row contains state.search}
         columns:
           - {field: name, label: Secret}
           - {field: scope, as: badge, tone: info}
@@ -989,20 +984,20 @@ pages:
         component: chart
         title: Cost by meter
         chart: bar
-        reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        reads: {view: weft.metering.CostRollup, params: {scope_id: actor.scope_id, from: state.window.from, to: state.window.to}}
         x: meter
         series: [cost]
         degrades: {no_charts: table}
       - name: total
         component: metric
-        reads: {view: weft.metering.CostRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        reads: {view: weft.metering.CostRollup, params: {scope_id: actor.scope_id, from: state.window.from, to: state.window.to}}
         aggregate: sum
         field: cost
         label: Cost in the window
       - name: list
         component: collection
         title: Usage by meter
-        reads: {view: weft.metering.UsageRollup, params: {account_id: actor.account_id, from: state.window.from, to: state.window.to}}
+        reads: {view: weft.metering.UsageRollup, params: {scope_id: actor.scope_id, from: state.window.from, to: state.window.to}}
         columns:
           - {field: meter}
           - {field: qualifier, as: map}
@@ -1013,7 +1008,7 @@ pages:
       - name: budgets
         component: collection
         title: Budgets
-        reads: {view: weft.metering.Budgets, key: budget_id, params: {account_id: actor.account_id}}
+        reads: {view: weft.metering.Budgets, key: budget_id, params: {scope_id: actor.scope_id}}
         columns:
           - {field: measure, as: badge, tone: info}
           - {field: formation_id, label: Formation}
@@ -1027,7 +1022,7 @@ pages:
       - name: statements
         component: collection
         title: Statements
-        reads: {view: weft.metering.Statements, key: statement_id, params: {account_id: actor.account_id}}
+        reads: {view: weft.metering.Statements, key: statement_id, params: {scope_id: actor.scope_id}}
         sort: {by: period_start, dir: desc, mode: client}
         columns:
           - {field: period_start, label: From, as: date}
