@@ -1120,10 +1120,16 @@ bindings:
   #   R3 time   scheduling.OverdueUnassignedPlacements -> scheduling.ReleasePlacement -> Scheduler
   #             (a Bound placement no node took within 120 s; `released-unassigned` evicts its
   #             instance through r3-evict-on-unassigned-release; read-granted to the Scheduler)
+  #   R4 level  scheduling.PendingRequests        -> scheduling.PlaceInstance       -> Scheduler
+  #             (the decision step: levels from the request's minimum upward, at each level the
+  #             Ready nodes offering it in view order, the first accepted placement ends the row;
+  #             gang members are skipped, BindGang places a gang whole)
   #   R4 level  scheduling.UnassignedPlacements   -> nodes.Assign                   -> Scheduler
   #             (repairs a lost or dropped r4-assign delivery, `assigned_at` from the
   #             Scheduler's clock; an `already-assigned` answer is followed by
-  #             scheduling.RecordPlacementAssigned for the row)
+  #             scheduling.RecordPlacementAssigned for the row only where nodes.Assignments
+  #             holds an Active assignment of the row's decision; otherwise the row is left to
+  #             the R3 time step on scheduling.OverdueUnassignedPlacements)
   #   R6 level  workloads.PendingStopsToWithdraw  -> workloads.StopInstance         -> Scheduler
   #   R7 level  deployments.OpenDrifts            -> deployments.ReapplyDrift (row with step_id)
   #                                                  or deployments.EscalateDrift   -> ReleaseController

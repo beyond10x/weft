@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-27T22:34:48Z",
+  "actor": "human:operator",
+  "artifact": "story:docs-ux-budget",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#24, merged c323c88",
+    "reference": "https://github.com/beyond10x/weft/pull/24"
+  }
+}

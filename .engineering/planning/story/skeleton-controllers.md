@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-controllers
 kind: story
-status: draft
+status: active
 title: 'weft-controllers: placement and assignment repair in the control host, with the PlaceInstance and Assign obligations'
 relations:
 - decomposes: epic:walking-skeleton
@@ -27,7 +27,10 @@ scope:
   path: product/cloud/crates/weft-impl/src/conversions.rs
 - confidence: inferred
   path: product/cloud/crates/weft-impl/src/lib.rs
-revision: 23
+revision: 25
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-27T22:37:32Z", actor: "human:operator", revision: 24, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-27T22:37:32Z", actor: "human:operator", revision: 25, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

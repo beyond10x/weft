@@ -229,13 +229,18 @@ impl Host {
 
     /// One tick of the controllers, as one unit: first the events the bindings hold are
     /// attempted again ([`Runner::retry`]), then every step of [`weft_controllers::tick`] sends
-    /// its commands, given the events still held, each logged as a request line, and what they
-    /// published goes to the bindings.
+    /// its commands, given the events still held and the host's ports (its clock, and the state
+    /// file where the steps keep their waits in this unit's transaction), each logged as a
+    /// request line, and what they published goes to the bindings.
     pub fn tick(&self) {
         self.unit(|unit| {
             unit.retry();
             let held = unit.runner.held_events();
-            for sent in weft_controllers::tick(unit.system, &held) {
+            let context = weft_controllers::Context {
+                ports: &self.ports,
+                held: &held,
+            };
+            for sent in weft_controllers::tick(unit.system, &context) {
                 unit.run(Some(sent.operation), Some(sent.actor.name()), |_| {
                     (sent.answer, sent.events)
                 });

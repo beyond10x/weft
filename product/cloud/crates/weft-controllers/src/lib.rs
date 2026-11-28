@@ -8,16 +8,39 @@
 //! ([`weft_server::weft_control::dispatch_with_events`]), so its answer carries the status the
 //! contract declares, which the control host log records.
 //!
-//! Steps: [`replicas`] (R1 level).
+//! Steps, in the order [`tick`] runs them: [`replicas`] (R1 level), [`placement`] (the
+//! Scheduler's decision step), [`repair`] (R4 level). A step that retries a subject waits
+//! between its attempts ([`waits`]).
 
 use serde_json::Value;
-use weft_impl::System;
+use weft_impl::{Ports, System};
 use weft_server::http::{Request, Response};
 use weft_server::weft_control;
 use weft_system::SystemEvent;
 use weft_types::actor::{Actor, Caller};
 
+pub mod placement;
+pub mod repair;
 pub mod replicas;
+pub mod waits;
+
+/// What a tick's steps read besides the system's views.
+pub struct Context<'a> {
+    /// The ports of the system: the controller clock and the state file, where the steps keep
+    /// their waits in the tick's transaction.
+    pub ports: &'a Ports,
+    /// The events the hand-run bindings hold for another attempt
+    /// ([`weft_impl::bindings::Runner::held_events`]).
+    pub held: &'a [SystemEvent],
+}
+
+impl Context<'_> {
+    /// The controller clock's instant: the clock of the ports, which the control host is opened
+    /// with.
+    pub fn now(&self) -> time::OffsetDateTime {
+        self.ports.now()
+    }
+}
 
 /// One command a step sent.
 #[derive(Debug)]
@@ -32,10 +55,22 @@ pub struct Sent {
     pub events: Vec<SystemEvent>,
 }
 
-/// Runs every step once, given the events the hand-run bindings hold for another attempt
-/// (`held`, [`weft_impl::bindings::Runner::held_events`]): the commands sent, in order.
-pub fn tick(system: &mut System, held: &[SystemEvent]) -> Vec<Sent> {
-    replicas::tick(system, held)
+/// Runs every step once over `context`: the commands sent, in order.
+pub fn tick(system: &mut System, context: &Context<'_>) -> Vec<Sent> {
+    let mut sent = replicas::tick(system, context.held);
+    sent.extend(placement::tick(system, context));
+    sent.extend(repair::tick(system, context));
+    sent
+}
+
+/// The outcome `sent` answered: the `outcome` member of its body; `None` for an answer without
+/// one (an unmet obligation, a refused caller).
+pub fn outcome(sent: &Sent) -> Option<String> {
+    serde_json::from_str::<Value>(&sent.answer.body)
+        .ok()?
+        .get("outcome")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 /// Sends `operation` with `input` to `weft-control` as `actor`.
