@@ -40,7 +40,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'Run weft (Planned)',
       collapsed: false,
-      items: ['run/control-host-and-node', 'run/deploy-a-workload'],
+      items: ['run/control-host-and-node', 'run/deploy-a-workload', 'run/cloudspec-submission'],
     },
     {
       type: 'category',

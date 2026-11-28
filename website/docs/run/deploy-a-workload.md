@@ -77,3 +77,10 @@ be explored with cloudspec-sim today:
 Besides weft's own document, the sources cloudspec translates are a Docker Compose file, a Helm
 chart, Kubernetes manifests, an ESS system and an agenticspec deployment
 ([formations](../concepts/formations.md#deployment-sources)).
+
+## A cloudspec architecture
+
+A cloudspec architecture needs no translator. cloudspec writes it as one submission file, which
+weft checks offline and takes as it is; its `snippet` parts run as Jobs on a node in the control
+host's test build today. The routes, the checks and each refusal are on
+[Submit a cloudspec architecture](cloudspec-submission.md).
