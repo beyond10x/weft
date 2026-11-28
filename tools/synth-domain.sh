@@ -1,25 +1,40 @@
 #!/bin/sh
 # Synthesize the conformance scenarios of one weft domain, fast enough for an edit loop.
 #
-# Builds .check/synth-<name>/ess/ with only the domain and the domains it references, directly or
-# through them (edges from tools/check-layers.sh), plus `weft.shared` and `weft.actors` (grants of kept domains only). No components or bindings:
-# this measures the domain's own scenarios. The gate synthesizes the whole system.
+# Builds .check/synth-<name>/ess/ with only the domain and the domains it needs, directly or
+# through them: those whose types or relations its entities name (edges from
+# tools/check-layers.sh), whose commands move its entities, whose rows its guards read and whose
+# errors its commands answer with; plus `weft.shared`, `weft.actors` (grants of kept domains only)
+# and the conversions of components.yaml. No components or bindings: this measures the domain's own
+# scenarios. The gate synthesizes the whole system. The subset drops the vendored blocks'
+# `one_time_response` declarations (below): a guarantee its scenarios do not check.
 #
-# Usage: tools/synth-domain.sh [--snapshot] <name> [<path under ess/>...]
+# Usage: tools/synth-domain.sh [--snapshot] [--validate] <name> [<path under ess/>...]
 #   <name>      domain name without the prefix: cluster, access, ...
 #   --snapshot  take files from .check/snapshot, the named paths from the working tree
+#   --validate  build the subset and run `ess specify validate` on it only (no synthesis)
 # Prints the synthesis summary, the refusal counts by code for this domain's outcomes, then runs the
 # suite against the interpreted target and prints its summary and the failed scenarios of the domain
-# (disclosure variants left out). SLOT_FLAGS defaults to `--timeout 30m` (2026-11-26: the build node ends a job at 10 min unless it names its time); SLOT_FLAGS=--local keeps the job on this host (a local `ess` build). Synthesis and the run go through `slot` with `--jobs 2` (2026-11-26 05:14 CET: a synthesis held 22 GB and the host ran out of memory). Run one at a time.
+# (disclosure variants left out). SLOT_FLAGS defaults to `--timeout 10m`: a subset synthesizes in
+# 80-130 s (2026-11-28, accounts 82 s, access 89 s, infrastructure 88 s, scheduling 125 s), so a run
+# that reaches 10 minutes is a defect to report, not a job to wait for. SLOT_FLAGS=--local keeps
+# the job on this host (a local `ess` build). Synthesis and the run go through `slot` with
+# `--jobs 2` (2026-11-26 05:14 CET: a synthesis held 22 GB and the host ran out of memory). Run one
+# at a time.
 set -eu
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 from="$root/ess"
-if [ "${1:-}" = "--snapshot" ]; then
-  from="$root/.check/snapshot"
+validate=0
+while :; do
+  case "${1:-}" in
+    --snapshot) from="$root/.check/snapshot" ;;
+    --validate) validate=1 ;;
+    *) break ;;
+  esac
   shift
-fi
-name="${1:?usage: tools/synth-domain.sh [--snapshot] <name> [paths...]}"
+done
+name="${1:?usage: tools/synth-domain.sh [--snapshot] [--validate] <name> [paths...]}"
 shift
 domain="weft.$name"
 
@@ -35,14 +50,6 @@ for p in "$@"; do
 done
 # measure with whatever `ess` is on PATH: the copy requires that release
 sed -i "s/^requires: ess .*/requires: ess $(ess --version | cut -d' ' -f2)/" "$full/ess-inputs.yaml"
-# the vendored cloudspec blocks (ess/cloud/, below every weft layer) go into the subset whole,
-# before the compile step, and their domains are always kept
-if [ -d "$full/cloud" ]; then
-  cp -r "$full/cloud" "$tree/cloud"
-  sed -n 's/^domain: *//p' "$full"/cloud/*/*.yaml | sort -u > "$work/vendored.txt"
-else
-  : > "$work/vendored.txt"
-fi
 
 # edges of the full tree
 ess specify compile --path "$full" --format json > "$work/ir.json" 2> "$work/compile.err" || {
@@ -71,6 +78,20 @@ jq -r '
   | $c.outcomes[]? | ((.affects // [])[].entity, (.subject.entity // empty))
   | split(".")[0:2] | join(".") | select(. != $c.domain) | "\(.) \($c.domain)"
 ' "$work/ir.json" >> "$work/edges.raw"
+# a domain whose command reads a row of another domain in a guard (when_related, a row set) keeps
+# that domain: weft's run-time files guard vendored commands on weft.cluster, weft.nodes and
+# weft.pipelines rows
+jq -r '
+  .commands[] | .domain as $d
+  | [(.outcomes // [])[] | .. | objects | .entity? | strings] | unique[]
+  | split(".")[0:2] | join(".") | select(. != $d) | "\($d) \(.)"
+' "$work/ir.json" >> "$work/edges.raw"
+# and the domain of an error a command answers with (the vendored cluster commands answer with
+# weft.topology errors, metering with weft.limits ones)
+jq -r '
+  .commands[] | .domain as $d | (.outcomes // [])[] | .error? | strings
+  | split(".")[0:2] | join(".") | select(. != $d) | "\($d) \(.)"
+' "$work/ir.json" >> "$work/edges.raw"
 sort -u "$work/edges.raw" > "$work/edges.txt"
 
 # transitive closure from the domain
@@ -85,8 +106,6 @@ grep -qx 'weft.shared' "$work/keep.txt" || echo 'weft.shared' >> "$work/keep.txt
 # actors carry the caller attributes guards read (hardening pass 1): keep them, with only the
 # grants of kept domains (filtered below)
 grep -qx 'weft.actors' "$work/keep.txt" || echo 'weft.actors' >> "$work/keep.txt"
-
-cat "$work/vendored.txt" "$work/keep.txt" | sort -u > "$work/keep.new" && mv "$work/keep.new" "$work/keep.txt"
 
 # subset tree: system.yaml and ess-inputs.yaml list only the kept domains
 sed -n '1,/^domains:$/p' "$full/system.yaml" > "$tree/system.yaml"
@@ -112,10 +131,39 @@ grep -E '^  - (cloud/)?[0-9]+-[a-z-]+/[a-z-]+\.yaml$' "$full/ess-inputs.yaml" | 
   fi
 done
 printf 'scenarios: []\n' >> "$tree/ess-inputs.yaml"
+# the conversions of components.yaml, without its components and bindings: weft.workloads and
+# weft.identity store a StampedAt input as a Timestamp
+sed -n '/^conversions:$/,/^components:$/p' "$full/components.yaml" | sed '$d' \
+  > "$tree/components.yaml"
+sed -i 's/^  - system.yaml$/  - system.yaml\n  - components.yaml/' "$tree/ess-inputs.yaml"
+# The subset's copy of the vendored blocks drops their `one_time_response` declarations:
+# weft.infrastructure ProvisionNode/provisioned, ProvisionPoolNode/provisioned and
+# IssueJoinToken/issued (join_token), and weft.identity ExchangeToken/exchanged (token). ESS writes
+# one disclosure scenario per secret, outcome and actor for each, most of them ending in failed
+# witness searches. 2026-11-28, ess 0.99.2: the accounts subset ran past 1800 s with the three
+# infrastructure ones and took 82 s without them (cloudspec: a subset of its own, over 120 s to
+# 22 s). This removes a guarantee from the subset's scenarios: they do not check that those four
+# responses disclose their secret once only. The whole-system synthesis keeps it; ess/cloud/ is
+# never edited. weft's own declarations (weft.access) stay: the access subset takes 89 s with them.
+for f in "$tree"/cloud/*/*.yaml; do
+  [ -f "$f" ] || continue
+  grep -n '^ *one_time_response: ' "$f" \
+    | sed "s|^|synth-domain: dropped from ${f#"$tree"/}:|" >&2 || true
+  sed -i '/^ *one_time_response: /d' "$f"
+done
+
+if [ "$validate" -eq 1 ]; then
+  echo "domains: $(tr '\n' ' ' < "$work/keep.txt")"
+  status=0
+  ess specify validate --path "$tree" > "$work/validate.log" 2>&1 || status=$?
+  tail -n 1 "$work/validate.log"
+  echo "synth-domain: $domain, subset validate exit $status, log $work/validate.log"
+  exit "$status"
+fi
 
 start=$(date +%s)
 status=0
-slot ${SLOT_FLAGS:---timeout 30m} ess verify conform synthesize --path "$tree" --jobs 2 --out "$work/suite.json" > "$work/synth.log" 2>&1 || status=$?
+slot ${SLOT_FLAGS:---timeout 10m} ess verify conform synthesize --path "$tree" --jobs 2 --out "$work/suite.json" > "$work/synth.log" 2>&1 || status=$?
 end=$(date +%s)
 
 echo "domains: $(tr '\n' ' ' < "$work/keep.txt")"
@@ -128,7 +176,7 @@ echo "synth-domain: $domain, synthesis exit $status, $((end - start)) s, log $wo
 # run the subset suite against the interpreted target (the model executes itself)
 start=$(date +%s)
 run=0
-slot ${SLOT_FLAGS:---timeout 30m} ess verify conform run --target interpreted --path "$tree" --suite "$work/suite.json" --report-format 2 \
+slot ${SLOT_FLAGS:---timeout 10m} ess verify conform run --target interpreted --path "$tree" --suite "$work/suite.json" --report-format 2 \
   --report-out "$work/report.json" > "$work/run.log" 2>&1 || run=$?
 end=$(date +%s)
 tail -n 1 "$work/run.log"
