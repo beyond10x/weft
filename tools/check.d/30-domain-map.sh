@@ -7,10 +7,12 @@
 #   1. the block is byte for byte the one tools/gen-domain-map.sh makes from ess/ now
 #      (written to target/domain-map/block.md);
 #   2. every domain of `ess specify compile` (`.domains | keys[]`, not the generator's list) is
-#      exactly one node line of the block, inside the `subgraph L<n>` of its layer: the number
-#      prefix of the directory of the file under ess/ whose `domain:` names it;
+#      declared by a file, and each of its parts is exactly one node line of the block, inside
+#      the `subgraph L<n>` of its layer: the number prefix of the directory of the file under
+#      ess/ whose `domain:` names it, or `Lcloud` and the node `cloud.<name>` for a vendored file
+#      under ess/cloud/ (weft.workloads has two parts: weft.workloads and cloud.workloads);
 #   3. every pair `tools/check-layers.sh --graph` prints is drawn: an edge `<from> --> <to>`
-#      between the two domain nodes, or `L<n> --> L<m>` between their two layers.
+#      between the two nodes, or `L<n> --> L<m>` between their two layers.
 # Exit 2 when it cannot measure. Reads the committed page; runs `ess` (no network, about 2 s).
 set -u
 LC_ALL=C
@@ -40,14 +42,17 @@ ess specify compile --path ess --format json > "$work/ir.json" 2> "$work/compile
 jq -r '.domains | keys[]' "$work/ir.json" > "$work/domains.txt" || exit 2
 [ -s "$work/domains.txt" ] || { echo "30-domain-map: ess specify compile names no domain" >&2; exit 2; }
 
-# domain -> layer, from the directory of the file that declares it
+# `<part> <layer> <domain>` per file that declares a domain: the layer from its directory, or
+# `cloud` for the vendored files under ess/cloud/, whose part is `cloud.<name>`
 : > "$work/layers.txt"
-for f in ess/[0-9]*-*/*.yaml; do
+for f in ess/[0-9]*-*/*.yaml ess/cloud/[0-9]*-*/*.yaml; do
   [ -f "$f" ] || continue
   d=$(sed -n 's/^domain:[ ]*//p' "$f" | head -n 1)
   [ -n "$d" ] || continue
-  dir=${f#ess/}
-  printf '%s %s\n' "$d" "${dir%%-*}" >> "$work/layers.txt"
+  case $f in
+    ess/cloud/*) printf '%s %s %s\n' "cloud.${d#*.}" cloud "$d" ;;
+    *) dir=${f#ess/}; printf '%s %s %s\n' "$d" "${dir%%-*}" "$d" ;;
+  esac >> "$work/layers.txt"
 done
 
 # the pairs of the graph: `<count> <from> -> <to>` lines, until the blank line
@@ -64,7 +69,7 @@ fi
 # Nodes and edges of the committed block. A node line is one token, `<id>` or `<id>[<label>]`;
 # its subgraph is the innermost open `subgraph <id>`.
 awk '
-  FILENAME == ARGV[1] { layer[$1] = $2; next }
+  FILENAME == ARGV[1] { layer[$1] = $2; parts[$3] = parts[$3] " " $1; next }
   FILENAME == ARGV[2] { want[$1] = 1; next }
   FILENAME == ARGV[3] { pair[$1 " " $2] = 1; next }
   {
@@ -86,9 +91,15 @@ awk '
   }
   END {
     for (d in want) {
-      if (!(d in layer)) { printf "30-domain-map: no file under ess/<n>-<layer>/ declares %s\n", d; bad++; continue }
-      if (nodes[d] != 1) { printf "30-domain-map: %s is %d node lines of the block, not 1\n", d, nodes[d] + 0; bad++; continue }
-      if (where[d] != "L" layer[d]) { printf "30-domain-map: %s is in subgraph %s, not L%s\n", d, (where[d] == "" ? "(none)" : where[d]), layer[d]; bad++ }
+      if (!(d in parts)) { printf "30-domain-map: no file under ess/<n>-<layer>/ or ess/cloud/<n>-<layer>/ declares %s\n", d; bad++; continue }
+      m = split(parts[d], ps, " ")
+      for (i = 1; i <= m; i++) {
+        p = ps[i]
+        if (p in done) continue
+        done[p] = 1
+        if (nodes[p] != 1) { printf "30-domain-map: %s is %d node lines of the block, not 1\n", p, nodes[p] + 0; bad++; continue }
+        if (where[p] != "L" layer[p]) { printf "30-domain-map: %s is in subgraph %s, not L%s\n", p, (where[p] == "" ? "(none)" : where[p]), layer[p]; bad++ }
+      }
     }
     for (p in pair) {
       split(p, q, " ")

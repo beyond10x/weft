@@ -9,18 +9,22 @@
 # equal to it. Tests: tools/test-domain-map.sh.
 #
 # Sources: the domains and their layers from ess/ess-inputs.yaml (the files `<n>-<layer>/*.yaml`
-# it lists and the `domain:` line of each), and the references between domains from
-# `tools/check-layers.sh --graph` (or the file DOMAIN_MAP_GRAPH names, its saved output).
+# and the vendored `cloud/<n>-<layer>/*.yaml` it lists, and the `domain:` line of each), and the
+# references between them from `tools/check-layers.sh --graph` (or the file DOMAIN_MAP_GRAPH
+# names, its saved output). As in tools/check-layers.sh, a node is the part of a domain one layer
+# declares: the domain name for weft's own files, `cloud.<name>` for the vendored files under
+# ess/cloud/, which all sit in one layer `cloud` below layer 0 (a domain such as weft.workloads
+# has a node in each).
 #
-# Drawing: one `subgraph L<n>` per layer, titled with the directory name, layer 9 at the top; one
-# node per domain, its id the domain name and its label the name without `weft.`. A pair of
-# domains the graph prints is drawn as one edge per pair of layers, `L<n> --> L<m>`, when the two
-# domains sit in different layers, and as `<from> --> <to>` between the two domain nodes when they
-# share a layer. Layer edges, because one edge per pair of domains (84 on 2026-11-27) renders as a
-# tangle nobody can follow; the domains of each layer edge are listed in the table after the
-# figure, one row per referring domain with the domains it refers to. Layers are kept in order by
-# invisible links (`~~~`) from the first domain of each layer to the first of the layer below.
-# Output sorted, so the block changes only when ess/ does.
+# Drawing: one `subgraph L<n>` per layer, titled with the directory name, layer 9 at the top and
+# `subgraph Lcloud` at the bottom; one node per part, its id the part name and its label the
+# domain name without `weft.`. A pair of parts the graph prints is drawn as one edge per pair of
+# layers, `L<n> --> L<m>`, when the two parts sit in different layers, and as `<from> --> <to>`
+# between the two nodes when they share a layer. Layer edges, because one edge per pair of
+# domains (84 on 2026-11-27) renders as a tangle nobody can follow; the parts of each layer edge
+# are listed in the table after the figure, one row per referring part with the parts it refers
+# to. Layers are kept in order by invisible links (`~~~`) from the first node of each layer to
+# the first of the layer below. Output sorted, so the block changes only when ess/ does.
 set -u
 LC_ALL=C
 export LC_ALL
@@ -36,13 +40,16 @@ else
   graph=$(tools/check-layers.sh --graph) || { echo "gen-domain-map: tools/check-layers.sh --graph failed" >&2; exit 2; }
 fi
 
-# `<layer> <directory> <domain>` per domain file of ess-inputs.yaml, layer 9 first
-layers=$(sed -n 's/^  - \([0-9][0-9]*-[a-z-]*\/[a-z-]*\.yaml\)$/\1/p' "$inputs" | while read -r path; do
+# `<rank> <layer> <directory> <part>` per domain file of ess-inputs.yaml, layer 9 first, the
+# vendored layer `cloud` (rank -1) last
+layers=$(sed -n 's/^  - \(\(cloud\/\)\{0,1\}[0-9][0-9]*-[a-z-]*\/[a-z-]*\.yaml\)$/\1/p' "$inputs" | while read -r path; do
   domain=$(sed -n 's/^domain:[ ]*//p' "ess/$path" | head -n 1)
   [ -n "$domain" ] || continue
-  dir=${path%%/*}
-  printf '%s %s %s\n' "${dir%%-*}" "$dir" "$domain"
-done | sort -k1,1nr -k3,3)
+  case $path in
+    cloud/*) printf '%s %s %s %s\n' -1 cloud cloud "cloud.${domain#*.}" ;;
+    *) dir=${path%%/*}; printf '%s %s %s %s\n' "${dir%%-*}" "${dir%%-*}" "$dir" "$domain" ;;
+  esac
+done | sort -u | sort -k1,1nr -k4,4)
 [ -n "$layers" ] || { echo "gen-domain-map: no domain file in $inputs" >&2; exit 2; }
 # `<from> <to>` per pair of domains, sorted
 pairs=$(printf '%s\n' "$graph" | awk 'NF == 0 { exit } NF == 4 && $3 == "->" { print $2, $4 }' | sort -u)
@@ -54,12 +61,17 @@ block() {
   echo '```mermaid'
   echo 'flowchart TB'
   printf '%s\n' "$layers" | awk '
-    $1 != cur { if (cur != "") print "  end"; cur = $1; t = $2; sub(/-/, " ", t); printf "  subgraph L%s[\"%s\"]\n", $1, t }
-    { label = $3; sub(/^weft\./, "", label); printf "    %s[\"%s\"]\n", $3, label }
+    $2 != cur {
+      if (cur != "") print "  end"
+      cur = $2; t = $3
+      if (t == "cloud") t = "cloud (vendored)"; else sub(/-/, " ", t)
+      printf "  subgraph L%s[\"%s\"]\n", $2, t
+    }
+    { label = $4; sub(/^[a-z]+\./, "", label); printf "    %s[\"%s\"]\n", $4, label }
     END { if (cur != "") print "  end" }
   '
   printf '%s\n' "$pairs" | GEN_LAYERS="$layers" awk '
-    BEGIN { n = split(ENVIRON["GEN_LAYERS"], row, "\n"); for (i = 1; i <= n; i++) { split(row[i], f, " "); layer[f[3]] = f[1] } }
+    BEGIN { n = split(ENVIRON["GEN_LAYERS"], row, "\n"); for (i = 1; i <= n; i++) { split(row[i], f, " "); layer[f[4]] = f[2] } }
     NF == 2 {
       a = layer[$1]; b = layer[$2]
       if (a == b) print "  " $1 " --> " $2
@@ -67,7 +79,7 @@ block() {
     }
   ' | sort
   printf '%s\n' "$layers" | awk '
-    $1 != cur { if (prev != "") print "  " prev " ~~~ " $3; prev = $3; cur = $1 }
+    $2 != cur { if (prev != "") print "  " prev " ~~~ " $4; prev = $4; cur = $2 }
   '
   echo '```'
   echo
@@ -83,7 +95,7 @@ block() {
         if (f[1] in to) to[f[1]] = to[f[1]] ", `" t "`"; else to[f[1]] = "`" t "`"
       }
     }
-    { d = $3; sub(/^weft\./, "", d); printf "| %s | `%s` | %s |\n", $1, d, ($3 in to ? to[$3] : "none") }
+    { d = $4; sub(/^weft\./, "", d); printf "| %s | `%s` | %s |\n", $2, d, ($4 in to ? to[$4] : "none") }
   '
   echo '<!-- /domain-map -->'
 }
