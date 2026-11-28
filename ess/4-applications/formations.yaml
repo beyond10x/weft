@@ -67,8 +67,8 @@ entities:
     relations:
       - {name: endpoint, kind: references, target: weft.edge.Endpoint, cardinality: one, via: endpoint_id}
       - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
-      - {name: from_account, kind: references, target: weft.accounts.Account, cardinality: one, via: from_account_id}
-      - {name: to_account, kind: references, target: weft.accounts.Account, cardinality: one, via: to_account_id}
+      - {name: from_account, kind: references, target: weft.scope.Scope, cardinality: one, via: from_account_id}
+      - {name: to_account, kind: references, target: weft.scope.Scope, cardinality: one, via: to_account_id}
     lifecycle:
       initial: Active
       states: [Active, Revoked]

@@ -5,6 +5,11 @@ types:
   - name: weft.shared.TenantId
     kind: newtype
     of: Uuid
+  # D-d A: an account of the multi-tenant example keeps an identity of its own; the scope it maps
+  # to (weft.scope.Scope, ScopeId) is a separate row, so the two never share an identity type.
+  - name: weft.shared.AccountId
+    kind: newtype
+    of: Uuid
   - name: weft.shared.ApiTokenId
     kind: newtype
     of: Uuid

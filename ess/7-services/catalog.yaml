@@ -274,7 +274,7 @@ entities:
         via: version_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: formation

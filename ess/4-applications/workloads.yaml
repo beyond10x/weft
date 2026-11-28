@@ -176,7 +176,7 @@ entities:
         via: restored_from
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: artifact

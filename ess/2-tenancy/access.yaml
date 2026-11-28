@@ -216,7 +216,7 @@ entities:
     relations:
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: creator
@@ -303,7 +303,7 @@ entities:
         via: principal_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
     lifecycle:
@@ -416,7 +416,7 @@ entities:
         via: trusted_issuer_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: creator
@@ -510,7 +510,7 @@ entities:
         via: federation_rule_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
     lifecycle:

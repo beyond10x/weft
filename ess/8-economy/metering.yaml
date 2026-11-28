@@ -264,8 +264,8 @@ entities:
         via: price_id
       # A usage record is a fact about what was used; it outlives every entity it names.
       - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: scope_id}
-      - {name: path_accounts, kind: references, target: weft.accounts.Account, cardinality: many, via: account_path}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
+      - {name: path_accounts, kind: references, target: weft.scope.Scope, cardinality: many, via: account_path}
       - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: resource_class_entry, kind: references, target: weft.inventory.ResourceClass, cardinality: one, via: resource_class}
       - {name: instance, kind: references, target: weft.workloads.Instance, cardinality: one, via: instance_id}
@@ -402,7 +402,7 @@ entities:
       - name: set_at
         type: Timestamp
     relations:
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: scope_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
       - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
     invariants:
       - amount > 0
@@ -498,7 +498,7 @@ entities:
         target: weft.metering.PricingModel
         cardinality: one
         via: pricing_model_id
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: scope_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
       - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: product, kind: references, target: weft.catalog.Product, cardinality: one, via: product_id}
       - {name: offering_plan, kind: references, target: weft.catalog.OfferingPlan, cardinality: one, via: offering_plan_id}
@@ -555,7 +555,7 @@ entities:
         type: Timestamp
     relations:
       - {name: tenant, kind: references, target: weft.accounts.Tenant, cardinality: one, via: tenant_id}
-      - {name: account, kind: references, target: weft.accounts.Account, cardinality: one, via: scope_id}
+      - {name: account, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
     invariants:
       - period_end > period_start
       - total >= 0

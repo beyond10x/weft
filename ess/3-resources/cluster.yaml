@@ -85,7 +85,7 @@ entities:
         via: cloud_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: zones
@@ -152,7 +152,7 @@ entities:
         via: cluster_id
       - name: account
         kind: references
-        target: weft.accounts.Account
+        target: weft.scope.Scope
         cardinality: one
         via: scope_id
       - name: in_zone
