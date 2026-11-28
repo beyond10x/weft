@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-runtime-fields
 kind: story
-status: proposed
+status: active
 title: Access mode and control-plane size live on weft rows the vendored commands read and set
 relations:
 - decomposes: epic:cloud-blocks
@@ -13,9 +13,10 @@ scope:
   path: ess/1-infrastructure/infrastructure.yaml
 - confidence: cited
   path: ess/2-tenancy/access.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T08:51:30Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

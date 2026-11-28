@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-account-scope
 kind: story
-status: proposed
+status: active
 title: A weft account opens its own cloudspec scope, and scope-keyed rows reference the scope
 relations:
 - decomposes: epic:cloud-blocks
@@ -17,9 +17,10 @@ scope:
   path: ess/9-actors/actors.yaml
 - confidence: cited
   path: ess/components.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T08:40:12Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

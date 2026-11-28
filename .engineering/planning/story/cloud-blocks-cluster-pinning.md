@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-cluster-pinning
 kind: story
-status: proposed
+status: active
 title: PlaceInstance still refuses a node outside the formation's tenant cluster on the vendored spec
 relations:
 - decomposes: epic:cloud-blocks
@@ -15,9 +15,10 @@ scope:
   path: ess/5-runtime/scheduling.yaml
 - confidence: cited
   path: ess/components.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T08:51:29Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-end-to-end
 kind: story
-status: active
+status: implemented
 title: 'End-to-end: PlaceInstance leads to a confined snippet that runs and an instance view that answers Running'
 relations:
 - decomposes: epic:walking-skeleton
@@ -13,10 +13,11 @@ relations:
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-testkit/tests/main.rs
-revision: 18
+revision: 19
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T03:35:17Z", actor: "human:operator", revision: 17, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T03:35:17Z", actor: "human:operator", revision: 18, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T08:41:03Z", actor: "human:operator", revision: 19, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
