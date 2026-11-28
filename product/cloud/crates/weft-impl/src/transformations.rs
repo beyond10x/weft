@@ -4,7 +4,8 @@
 //! ([`crate::conversions`]).
 //!
 //! - `account-opens-scope` and `sub-account-opens-scope`: the scope an account opens is named by
-//!   the account's identity (`weft.shared.AccountId -> String`).
+//!   the account's identity (`weft.shared.AccountId -> String`); the mapping names no
+//!   `placement`, so the scope has none.
 //! - `cluster-create-node-pool`: the infrastructure pool made for a cluster pool is named by the
 //!   cluster pool's identity (`weft.shared.ClusterNodePoolId -> String`); the zone, machine
 //!   type, image and sizes are the event's.
@@ -38,6 +39,7 @@ impl AccountOpensScopeTransformation for Transformations {
                 &Conversions,
                 event.account_id.clone(),
             )?,
+            placement: None,
         })
     }
 }
@@ -52,6 +54,7 @@ impl SubAccountOpensScopeTransformation for Transformations {
                 &Conversions,
                 event.account_id.clone(),
             )?,
+            placement: None,
         })
     }
 }

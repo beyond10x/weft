@@ -37,11 +37,31 @@ types:
   - name: weft.architecture.ConfigName
     kind: newtype
     of: String
-  # OPEN: the sketch names a link's protocol but no list. Taken: the four below.
+  # OPEN: the sketch names a link's protocol but no list. Taken: the four below, and Ssh
+  # (story:data-links, new in cloudspec): a closed list.
   # weft@6798e7d:ess/4-applications/formations.yaml:58
   - name: weft.architecture.LinkProtocol
     kind: enum
-    variants: [Http, Grpc, Tcp, Udp]
+    variants: [Http, Grpc, Tcp, Udp, Ssh]
+
+  # New in cloudspec (story:data-links): the way a link moves a named data set (its `carries`),
+  # seen from the caller: `Push` copies from the caller to the target, `Pull` from the target to the
+  # caller, `Both` either way.
+  - name: weft.architecture.DataDirection
+    kind: enum
+    variants: [Push, Pull, Both]
+
+  # New in cloudspec (story:scope-parity): a parity constraint between scopes of an architecture,
+  # design-time: work moves between them only when each named fact (a toolchain's commit, its
+  # targets, the version of another toolchain) has the same value in every one of them. Checking
+  # the facts at run time is the runtime's. At least two scopes and one fact.
+  - name: weft.architecture.Parity
+    kind: struct
+    fields:
+      - name: scopes
+        type: List<weft.shared.ScopeId>
+      - name: facts
+        type: List<String>
 
   # Section 3, `Formation` "a quota slice" and `Environment` "its own ... quotas": a list of
   # weft.shared.ResourceAmount, one amount of one resource class (section 6). The shared type
@@ -91,6 +111,9 @@ entities:
       # an error of its own would); the scheduler meets such a zone as one with no node.
       - name: zones
         type: List<weft.shared.ZoneName>
+      # story:scope-parity: the parity constraints between the scopes its parts run in. Empty: none.
+      - name: parity
+        type: List<weft.architecture.Parity>
       # cloudspec (C2): weft's `cluster_id` (the tenant cluster the formation deploys into) is
       # cut; tenant clusters are the multi-tenant example's.
     invariants:
@@ -263,6 +286,9 @@ entities:
         type: weft.architecture.LinkProtocol
       - name: port
         type: weft.edge.Port
+      # story:data-links: absent on a link that moves no data set.
+      - name: data
+        type: Optional<weft.architecture.DataDirection>
     relations:
       - {name: caller, kind: references, target: weft.architecture.Component, cardinality: one, via: caller_component_id}
       - {name: target, kind: references, target: weft.architecture.Component, cardinality: one, via: target_component_id}
@@ -465,6 +491,8 @@ errors:
   # weft@6798e7d:ess/4-applications/formations.yaml:578
   - name: weft.architecture.EmptyFormation
     summary: The formation has no component, so no revision was recorded.
+  - name: weft.architecture.ParityForm
+    summary: A parity names fewer than two scopes or no fact, and nothing was created.
 
 events:
   # weft@6798e7d:ess/4-applications/formations.yaml:582
@@ -622,6 +650,8 @@ commands:
       - {name: name, type: weft.architecture.FormationName}
       # Section 10 line 456, the formation's zone rules (see Formation.zones). Empty: any zone.
       - {name: zones, type: List<weft.shared.ZoneName>}
+      # story:scope-parity (see Formation.parity). Empty: none.
+      - {name: parity, type: List<weft.architecture.Parity>}
     outcomes:
       - name: no-such-scope
         external: the scope does not exist or is closed
@@ -632,6 +662,16 @@ commands:
       - name: not-callers-scope
         when: scope_id != caller.scope_id
         error: weft.architecture.NoSuchScope
+      - name: parity-form
+        when:
+          exists:
+            in: parity
+            as: x
+            that:
+              any:
+                - x.scopes.count < 2
+                - x.facts.count == 0
+        error: weft.architecture.ParityForm
       - name: name-taken
         when_related:
           entity: weft.architecture.Formation
@@ -650,6 +690,7 @@ commands:
           internal_domain: {generated: true}
           quota_slice: []
           zones: input.zones
+          parity: input.parity
         emits: [weft.architecture.FormationCreated]
         payload:
           weft.architecture.FormationCreated:
@@ -1273,6 +1314,7 @@ commands:
       - {name: target_component_id, type: weft.shared.ComponentId}
       - {name: protocol, type: weft.architecture.LinkProtocol}
       - {name: port, type: weft.edge.Port}
+      - {name: data, type: Optional<weft.architecture.DataDirection>}
     outcomes:
       - name: no-such-formation
         when_related: {via: input.formation_id, exists: false}
@@ -1301,6 +1343,7 @@ commands:
               - target_component_id == input.target_component_id
               - protocol == input.protocol
               - port == input.port
+              - data == input.data
           exists: true
         error: weft.architecture.LinkExists
       - name: added
@@ -1312,6 +1355,7 @@ commands:
           target_component_id: input.target_component_id
           protocol: input.protocol
           port: input.port
+          data: input.data
         emits: [weft.architecture.LinkAdded]
         payload:
           weft.architecture.LinkAdded:

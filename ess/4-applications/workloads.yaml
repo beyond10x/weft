@@ -610,7 +610,8 @@ commands:
 
   # Section 10 lines 451-452 (input and output of scheduling) and lines 456-458: an instance is
   # never placed under an isolation weaker than its minimum. This is the refusal the brief names:
-  # a command that would run a workload below its minimum isolation.
+  # a command that would run a workload below its minimum isolation. cloudspec's `None` (no
+  # sandbox) is the weakest level, below ProcessSandbox, as in DefineWorkload below-runtime-isolation.
   - name: weft.workloads.ScheduleInstance
     naming:
       display: Schedule an instance
@@ -631,7 +632,10 @@ commands:
                   - minimum_isolation == UserKernel
                   - input.isolation != MicroVm
                   - input.isolation != UserKernel
-              - all: [minimum_isolation == Container, input.isolation == ProcessSandbox]
+              - all:
+                  - minimum_isolation == Container
+                  - input.isolation: {in: [ProcessSandbox, None]}
+              - all: [minimum_isolation == ProcessSandbox, input.isolation == None]
         error: weft.workloads.IsolationBelowMinimum
       - name: scheduled
         moves: weft.workloads.Instance.schedule

@@ -33,6 +33,9 @@ types:
       # Sketch line 237: "training (later)".
       - Training
       - Graph
+      # The two package kinds of docs/layers.md § 5 Frontends and § 1 Image build.
+      - WebBundle
+      - BuildContext
       # Sketch line 162: "FormationRevision: immutable snapshot of the formation's document"
       # (FormationRevision.document_digest). Decided in integration 2.
       - FormationDocument

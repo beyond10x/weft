@@ -12,7 +12,7 @@
 domain: weft.deployments
 
 summary: >-
-  Deployment sources (weft, Compose, Helm, Kubernetes, ESS system, agent), their
+  Deployment sources (weft, Compose, Helm, Kubernetes, ESS system, agent, cloudspec), their
   deterministic translation into formation revisions with a coverage report, and plans of a
   revision for an environment, with simulation. Releases, their steps, rollbacks and drift are
   weft's run-time records (D7 A).
@@ -37,6 +37,7 @@ types:
       - EssSystem   # ess-system: an ESS system.yaml
       - Agent       # agent: an agent document (a runtime and a task, both by digest)
       - Training    # training (later): a model program + corpus + data pipeline
+      - Cloudspec   # cloudspec: a cloudspec-weft-submission/1 document (architecture, binding, coverage)
 
   # Section 5 "Translation": "source digest". The content digest of the source's bytes (for
   # helm: the chart archive). Values files are digested apart (HelmValues).
@@ -344,6 +345,14 @@ entities:
       # A spec source embedded as one component's package of another source.
       - name: embedded_in
         type: Optional<weft.deployments.EmbeddingPlace>
+      # cloudspec only: the submission's `digests` (docs/layers.md § 11), the sha256 of the
+      # canonical JSON of its `architecture` and of its `binding` (`null` included). Set for kind
+      # Cloudspec and absent for every other kind (SubmitDeploymentSource), so a plan made from the
+      # source (PlanFromSource) traces to both.
+      - name: architecture_digest
+        type: Optional<weft.deployments.SourceDigest>
+      - name: binding_digest
+        type: Optional<weft.deployments.SourceDigest>
       - name: submitted_by
         type: weft.shared.PrincipalId
       - name: submitted_at
@@ -512,6 +521,12 @@ entities:
       # of a rollback (rollback_of, PlanRollback) names a release, a run-time record of weft.
       - name: translation_id
         type: Optional<weft.shared.TranslationId>
+      # A plan of a cloudspec source names the source (PlanFromSource) and no translation: the
+      # revision was copied from the source's architecture with no translator. FormationRevision
+      # (layer 9) cannot name a source of this layer, so this field, beside formation_revision_id,
+      # is the link from the revision to its source and the source's two digests.
+      - name: source_id
+        type: Optional<weft.shared.DeploymentSourceId>
       # The release the diff was taken against; absent for the first release of an environment.
       - name: live_release_id
         type: Optional<weft.shared.ReleaseId>
@@ -529,6 +544,7 @@ entities:
         target: weft.deployments.Translation
         cardinality: one
         via: translation_id
+      - {name: source, kind: references, target: weft.deployments.DeploymentSource, cardinality: one, via: source_id}
       - {name: scope, kind: references, target: weft.scope.Scope, cardinality: one, via: scope_id}
       - {name: formation, kind: references, target: weft.architecture.Formation, cardinality: one, via: formation_id}
       - {name: environment, kind: references, target: weft.architecture.Environment, cardinality: one, via: environment_id}
@@ -645,6 +661,24 @@ errors:
   # weft@6798e7d:ess/6-delivery/deployments.yaml:906
   - name: weft.deployments.NoStepToReapply
     summary: The drift names no release step, so there is nothing to re-apply; it is escalated.
+  - name: weft.deployments.TranslatorRequired
+    summary: >-
+      A source of any kind but cloudspec is translated, and the request names no translator for
+      it.
+  - name: weft.deployments.TranslatorNotAllowed
+    summary: >-
+      A cloudspec source is read unchanged and never translated, and the request names a
+      translator for it.
+  - name: weft.deployments.DigestsRequired
+    summary: >-
+      A cloudspec source records the digests of its architecture and its binding, and the request
+      leaves one out.
+  - name: weft.deployments.DigestsOnlyForCloudspec
+    summary: An architecture or binding digest was given for a source that is not a cloudspec submission.
+  - name: weft.deployments.SourceNotCloudspec
+    summary: >-
+      Only a cloudspec source is planned without a translation; a source of another kind is
+      translated first (TranslateSource, CreatePlan).
 
 events:
   # weft@6798e7d:ess/6-delivery/deployments.yaml:924
@@ -804,8 +838,14 @@ commands:
       # Section 5 "Translator: registered per source kind and version": the translator the caller
       # means to translate this source with, the same choice TranslateSource takes (the CLI picks
       # the newest registered one for the kind and format version). Checked here by its row, so a
-      # source no registered translator reads is refused at submit.
-      - {name: translator_id, type: weft.shared.TranslatorId}
+      # source no registered translator reads is refused at submit. A cloudspec source is read
+      # unchanged and names none (translator-not-allowed); every other kind names one
+      # (translator-required).
+      - {name: translator_id, type: Optional<weft.shared.TranslatorId>}
+      # cloudspec only: the submission's `digests` (docs/layers.md § 11), both required for kind
+      # Cloudspec and refused for every other kind.
+      - {name: architecture_digest, type: Optional<weft.deployments.SourceDigest>}
+      - {name: binding_digest, type: Optional<weft.deployments.SourceDigest>}
     outcomes:
       # hardening pass 1 D3: the account must be the one the request acts in; another account
       # answers like a missing row, so it is not disclosed.
@@ -824,6 +864,36 @@ commands:
             - embedded_in: {defined: true}
             - kind: {in: [Weft, Compose, Helm, Kubernetes]}
         error: weft.deployments.NotASpecSource
+      # Input guards on the kind: they read no row, so they answer before the translator's row is
+      # read, and an absent translator_id (kind Cloudspec) reads no row at all.
+      - name: translator-required
+        when:
+          all:
+            - kind != Cloudspec
+            - translator_id: {defined: false}
+        error: weft.deployments.TranslatorRequired
+      - name: translator-not-allowed
+        when:
+          all:
+            - kind == Cloudspec
+            - translator_id: {defined: true}
+        error: weft.deployments.TranslatorNotAllowed
+      - name: digests-required
+        when:
+          all:
+            - kind == Cloudspec
+            - any:
+                - architecture_digest: {defined: false}
+                - binding_digest: {defined: false}
+        error: weft.deployments.DigestsRequired
+      - name: digests-not-cloudspec
+        when:
+          all:
+            - kind != Cloudspec
+            - any:
+                - architecture_digest: {defined: true}
+                - binding_digest: {defined: true}
+        error: weft.deployments.DigestsOnlyForCloudspec
       # hardening pass 1 W4: a source of one account is never filed under another account's
       # formation (TranslateSource copies the formation into the translation, and every plan and
       # release follows it). A foreign formation answers like a missing one.
@@ -883,6 +953,8 @@ commands:
           source_digest: input.source_digest
           helm_values: input.helm_values
           embedded_in: input.embedded_in
+          architecture_digest: input.architecture_digest
+          binding_digest: input.binding_digest
           # hardening pass 1 D2: the submitter is the authenticated caller, not a request field.
           submitted_by: {caller: principal_id}
           submitted_at: {generated: true}
@@ -1330,6 +1402,80 @@ commands:
             environment_id: input.environment_id
             formation_revision_id: input.formation_revision_id
 
+  # docs/layers.md § 11: a cloudspec source is read unchanged, with no translator and no
+  # translation. The implementation copies the submitted architecture into a new revision of the
+  # source's formation (its document digest is the source's architecture_digest) and plans it for
+  # the environment; the plan names the source, so it traces to both digests.
+  # UNMAPPED: the FormationRevision row itself. One outcome creates one record (here the plan), and
+  # no command of weft.architecture (layer 9) may name a source of this layer, so the revision id
+  # is minted by the implementation, as CommitRevision mints its document digest. Open question for
+  # the integrator: a creation of the revision that a conformance step can observe.
+  - name: weft.deployments.PlanFromSource
+    naming:
+      display: Plan a cloudspec source for an environment
+    input:
+      - {name: source_id, type: weft.shared.DeploymentSourceId}
+      # The account the request acts in, so the source can be tied to the caller (a related row is
+      # not compared with the caller directly), as in CreatePlan.
+      - {name: scope_id, type: weft.shared.ScopeId}
+      - {name: environment_id, type: weft.shared.EnvironmentId}
+    outcomes:
+      # The account must be the one the request acts in; it reads no row and answers like a
+      # missing source.
+      - name: not-callers-scope
+        when: scope_id != caller.scope_id
+        error: weft.deployments.NotFound
+      - name: no-such-source
+        when_related: {via: input.source_id, exists: false}
+        error: weft.deployments.NotFound
+      - name: no-such-environment
+        when_related: {via: input.environment_id, exists: false}
+        error: weft.deployments.NotFound
+      # A source of another account answers like a missing one, after the existence checks and
+      # before its kind or state is read.
+      - name: source-of-other-scope
+        when_related: {via: input.source_id, predicate: scope_id != input.scope_id}
+        error: weft.deployments.NotFound
+      - name: source-not-cloudspec
+        when_related: {via: input.source_id, predicate: kind != Cloudspec}
+        error: weft.deployments.SourceNotCloudspec
+      - name: source-withdrawn
+        when_related: {via: input.source_id, predicate: state == Withdrawn}
+        error: weft.deployments.SourceIsWithdrawn
+      # A plan's environment is an environment of the source's formation, so no plan of one
+      # formation targets another formation's or another account's environment. A foreign
+      # environment answers like a missing one (CreatePlan environment-foreign).
+      - name: environment-foreign
+        when_related:
+          entity: weft.architecture.Environment
+          where:
+            all:
+              - environment_id == input.environment_id
+              - not:
+                  exists:
+                    in: {entity: weft.deployments.DeploymentSource}
+                    as: s
+                    that: {all: [s.source_id == input.source_id, s.formation_id == formation_id]}
+          exists: true
+        error: weft.deployments.NotFound
+      - name: planned
+        creates: weft.deployments.Plan
+        instance: plan_id
+        sets:
+          scope_id: {related: {via: input.source_id, field: scope_id}}
+          formation_id: {related: {via: input.source_id, field: formation_id}}
+          environment_id: input.environment_id
+          formation_revision_id: {generated: true}
+          source_id: input.source_id
+          created_by: {caller: principal_id}
+          created_at: {generated: true}
+        emits: [weft.deployments.PlanCreated]
+        payload:
+          weft.deployments.PlanCreated:
+            plan_id: {generated: true}
+            environment_id: input.environment_id
+            formation_revision_id: {generated: true}
+
   # Section 5 "Simulation: a release checked without running it: placement, policy,
   # reachability. Result: pass, or a list of named violations." The control plane records the
   # diff and the simulation of a plan. Secret values never appear: a violation names a secret.
@@ -1433,6 +1579,8 @@ views:
       - {name: source_digest, type: weft.deployments.SourceDigest}
       - {name: helm_values, type: List<weft.deployments.HelmValues>}
       - {name: embedded_in, type: Optional<weft.deployments.EmbeddingPlace>}
+      - {name: architecture_digest, type: Optional<weft.deployments.SourceDigest>}
+      - {name: binding_digest, type: Optional<weft.deployments.SourceDigest>}
       - {name: submitted_by, type: weft.shared.PrincipalId}
       - {name: submitted_at, type: Timestamp}
       - {name: state, type: weft.deployments.DeploymentSource.State}
@@ -1511,6 +1659,7 @@ views:
       - {name: environment_id, type: weft.shared.EnvironmentId}
       - {name: formation_revision_id, type: weft.shared.FormationRevisionId}
       - {name: translation_id, type: Optional<weft.shared.TranslationId>}
+      - {name: source_id, type: Optional<weft.shared.DeploymentSourceId>}
       - {name: live_release_id, type: Optional<weft.shared.ReleaseId>}
       - {name: diff, type: Optional<weft.deployments.PlanDiff>}
       - {name: simulation, type: Optional<weft.deployments.Simulation>}

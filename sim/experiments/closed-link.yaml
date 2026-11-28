@@ -138,7 +138,7 @@ setup:
     command: weft.architecture.CreateFormation
     actor: weft.actors.AccountAdmin
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {scope_id: "${scope_a}", name: shop, zones: ["${zone}"]}
+    input: {scope_id: "${scope_a}", name: shop, zones: ["${zone}"], parity: []}
     expect: created
     bind: {formation: formation_id}
   - {label: pin, command: weft.cluster.PinFormation, actor: weft.actors.AccountAdmin, caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}, input: {scope_id: "${scope_a}", cluster_id: "${cluster_a}", formation_id: "${formation}"}, expect: pinned}

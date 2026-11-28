@@ -60,8 +60,10 @@ pub const REQUEST_REFUSALS: &[&str] = &[
     "quota-exceeded",
 ];
 
-/// The isolation levels from the weakest to the strongest.
-const LEVELS: [IsolationLevel; 4] = [
+/// The isolation levels from the weakest to the strongest. `None` (no sandbox) is the weakest:
+/// only a request of minimum `None` admits it (default deny).
+const LEVELS: [IsolationLevel; 5] = [
+    IsolationLevel::None,
     IsolationLevel::ProcessSandbox,
     IsolationLevel::Container,
     IsolationLevel::UserKernel,
@@ -80,6 +82,7 @@ fn admitted(minimum: IsolationLevel) -> &'static [IsolationLevel] {
 /// The name of `level` in a command's input.
 fn level_name(level: IsolationLevel) -> &'static str {
     match level {
+        IsolationLevel::None => "None",
         IsolationLevel::ProcessSandbox => "ProcessSandbox",
         IsolationLevel::Container => "Container",
         IsolationLevel::UserKernel => "UserKernel",

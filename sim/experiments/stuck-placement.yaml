@@ -285,21 +285,21 @@ setup:
     command: weft.architecture.CreateFormation
     actor: weft.actors.AccountAdmin
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {scope_id: "${scope_a}", name: shop, zones: ["${zone_a}", "${zone_b}"]}
+    input: {scope_id: "${scope_a}", name: shop, zones: ["${zone_a}", "${zone_b}"], parity: []}
     expect: created
     bind: {formation_shop: formation_id}
   - label: create-formation-etl
     command: weft.architecture.CreateFormation
     actor: weft.actors.AccountAdmin
     caller: {tenant_id: "${tenant_a}", account_id: "${account_a}", scope_id: "${scope_a}"}
-    input: {scope_id: "${scope_a}", name: etl, zones: ["${zone_a}", "${zone_b}"]}
+    input: {scope_id: "${scope_a}", name: etl, zones: ["${zone_a}", "${zone_b}"], parity: []}
     expect: created
     bind: {formation_etl: formation_id}
   - label: create-formation-site
     command: weft.architecture.CreateFormation
     actor: weft.actors.AccountAdmin
     caller: {tenant_id: "${tenant_b}", account_id: "${account_b}", scope_id: "${scope_b}"}
-    input: {scope_id: "${scope_b}", name: site, zones: ["${zone_a}", "${zone_b}"]}
+    input: {scope_id: "${scope_b}", name: site, zones: ["${zone_a}", "${zone_b}"], parity: []}
     expect: created
     bind: {formation_site: formation_id}
   # a formation runs in the cluster that lists it (weft.cluster.PinFormation); PlaceInstance

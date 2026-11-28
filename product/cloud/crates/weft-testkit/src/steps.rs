@@ -84,9 +84,10 @@ pub mod input {
     /// The digest of the skeleton's snippet artifact.
     pub const ARTIFACT_DIGEST: &str = "sha256:weft-skeleton-snippet";
 
-    /// `create-formation-site`: formation `site` of `scope_id`, in no cluster until [`pin_formation`].
+    /// `create-formation-site`: formation `site` of `scope_id`, with no parity constraint, in no
+    /// cluster until [`pin_formation`].
     pub fn create_formation(scope_id: &str) -> Value {
-        json!({"scope_id": scope_id, "name": "site", "zones": ["z1", "z2"]})
+        json!({"scope_id": scope_id, "name": "site", "zones": ["z1", "z2"], "parity": []})
     }
 
     /// `pin-site`: formation `formation_id` of `scope_id` runs in `cluster_id` (the default

@@ -348,10 +348,12 @@ types:
     kind: newtype
     of: Timestamp
   # weft@6798e7d:ess/0-foundation/shared.yaml:420
+  # `None` (new in cloudspec, story:workload-process-daemon): no sandbox; the workload runs as a
+  # named user of the host (weft.workloads.RunAs), which it must name. Weakest, so first.
   - name: weft.shared.IsolationLevel
     kind: enum
     ordered: true
-    variants: [ProcessSandbox, Container, UserKernel, MicroVm]
+    variants: [None, ProcessSandbox, Container, UserKernel, MicroVm]
   # weft@6798e7d:ess/0-foundation/shared.yaml:433
   - name: weft.shared.Sharing
     kind: enum

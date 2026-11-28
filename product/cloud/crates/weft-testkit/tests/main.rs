@@ -1445,7 +1445,8 @@ mod definitions {
             /// A formation of `acme` named `name` in the default cluster, with one component when
             /// `component`: its identity.
             fn formation(&self, name: &str, component: bool) -> String {
-                let input = json!({"scope_id": self.scope(), "name": name, "zones": []});
+                let input =
+                    json!({"scope_id": self.scope(), "name": name, "zones": [], "parity": []});
                 let body = self.accepts(
                     steps::ACCOUNT_ADMIN,
                     &self.caller,
@@ -1638,8 +1639,10 @@ mod definitions {
                     formations,
                 );
             };
-            let request =
-                |scope: &str, name: &str| json!({"scope_id": scope, "name": name, "zones": ["z1"]});
+            let request = |scope: &str, name: &str| json!({"scope_id": scope, "name": name, "zones": ["z1"], "parity": []});
+            let with_parity = |scope: &str, name: &str, parity: Value| {
+                with(&request(scope, name), "/parity", parity)
+            };
 
             // no-such-scope: a scope no row holds, the caller acting in it; and a closed one.
             let nobody = mint();
@@ -1658,12 +1661,45 @@ mod definitions {
 
             // not-callers-scope.
             refuses(&w.other, request(w.scope(), "a"), "not-callers-scope");
+            let one_scope = json!([{"scopes": [w.scope()], "facts": ["rustc"]}]);
+            refuses(
+                &w.other,
+                with_parity(w.scope(), "a", one_scope.clone()),
+                "not-callers-scope",
+            );
+
+            // parity-form: a parity of fewer than two scopes or of no fact, after
+            // not-callers-scope and ahead of name-taken (`site` is taken).
+            let two_scopes = json!([w.scope(), w.other_scope]);
+            refuses(
+                &w.caller,
+                with_parity(w.scope(), "a", one_scope.clone()),
+                "parity-form",
+            );
+            refuses(
+                &w.caller,
+                with_parity(
+                    w.scope(),
+                    "a",
+                    json!([{"scopes": two_scopes.clone(), "facts": []}]),
+                ),
+                "parity-form",
+            );
+            refuses(
+                &w.caller,
+                with_parity(w.scope(), "site", one_scope),
+                "parity-form",
+            );
 
             let body = w.accepts(
                 steps::ACCOUNT_ADMIN,
                 &w.caller,
                 CREATE_FORMATION,
-                &request(w.scope(), "own"),
+                &with_parity(
+                    w.scope(),
+                    "own",
+                    json!([{"scopes": two_scopes, "facts": ["rustc"]}]),
+                ),
                 "created",
             );
 
@@ -1678,6 +1714,9 @@ mod definitions {
                 vec![weft_types::shared::ZoneName("z1".to_owned())]
             );
             assert!(row.data.quota_slice.is_empty());
+            assert_eq!(row.data.parity.len(), 1);
+            assert_eq!(row.data.parity[0].scopes.len(), 2);
+            assert_eq!(row.data.parity[0].facts, vec!["rustc".to_owned()]);
             assert!(
                 !ClusterStorage::list(&w.ports())
                     .iter()
@@ -2162,6 +2201,20 @@ mod definitions {
                 with(&base, "/shape", json!("Box")),
                 "box-package",
             );
+            // run-as-missing: isolation None names the host user it runs as (default deny),
+            // after box-package and ahead of no-main.
+            let unsandboxed = with(&base, "/isolation", json!("None"));
+            refuses(&w.caller, unsandboxed.clone(), "run-as-missing");
+            refuses(
+                &w.caller,
+                with(&unsandboxed, "/processes", json!([])),
+                "run-as-missing",
+            );
+            refuses(
+                &w.caller,
+                with(&unsandboxed, "/shape", json!("Box")),
+                "box-package",
+            );
             refuses(&w.caller, with(&base, "/processes", json!([])), "no-main");
             refuses(
                 &w.caller,
@@ -2369,6 +2422,17 @@ mod definitions {
             );
             let sandboxed = with(&base, "/isolation", json!("ProcessSandbox"));
             refuses(&w.caller, sandboxed, "below-runtime-isolation");
+            // None, the weakest level, with its host user: below a runtime of minimum Container
+            // and below one of minimum ProcessSandbox.
+            let mut as_deployer = unsandboxed.clone();
+            as_deployer["run_as"] = json!({"user": "deployer"});
+            refuses(&w.caller, as_deployer.clone(), "below-runtime-isolation");
+            let process_sandbox = w.runtime(&["Snippet"], "ProcessSandbox");
+            refuses(
+                &w.caller,
+                with(&as_deployer, "/runtime_id", json!(process_sandbox)),
+                "below-runtime-isolation",
+            );
 
             // The artifact, decided from the artifacts domain's rows.
             refuses(
@@ -2434,6 +2498,27 @@ mod definitions {
                 RuntimeId(Uuid(w.ids.runtime_id.clone()))
             );
             assert_eq!(row.data.priority.0, "standard");
+            assert_eq!(row.data.run_as, None);
+
+            // Accepted: isolation None on a runtime of minimum None, with its host user, which
+            // the row records.
+            let unsandboxed_runtime = w.runtime(&["Snippet"], "None");
+            let body = w.accepts(
+                steps::DEPLOYER,
+                &w.caller,
+                DEFINE_WORKLOAD,
+                &with(&as_deployer, "/runtime_id", json!(unsandboxed_runtime)),
+                "defined",
+            );
+            let id = WorkloadId(Uuid(published(&body, "workload_id")));
+            let row = WorkloadStorage::get(&w.ports(), &id).expect("the workload row");
+            assert_eq!(row.data.isolation, weft_types::shared::IsolationLevel::None);
+            assert_eq!(
+                row.data.run_as,
+                Some(weft_types::workloads::RunAs {
+                    user: "deployer".to_owned()
+                })
+            );
         }
 
         #[test]
@@ -2871,7 +2956,8 @@ mod definitions {
             #[test]
             fn the_formation_and_artifact_events_carry_the_values_sent() {
                 let w = World::new();
-                let formation = json!({"scope_id": w.scope(), "name": "events", "zones": []});
+                let formation =
+                    json!({"scope_id": w.scope(), "name": "events", "zones": [], "parity": []});
                 let body = w.accepts(
                     steps::ACCOUNT_ADMIN,
                     &w.caller,
