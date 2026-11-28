@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-account-scope
 kind: story
-status: draft
+status: proposed
 title: A weft account opens its own cloudspec scope, and scope-keyed rows reference the scope
 relations:
 - decomposes: epic:cloud-blocks
@@ -17,7 +17,9 @@ scope:
   path: ess/9-actors/actors.yaml
 - confidence: cited
   path: ess/components.yaml
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -43,12 +45,10 @@ to Scope.
 ## Acceptance
 
 1. `ess specify validate --path ess --strict-requires` reports no `conflicting_declaration` and no
-   `type_mismatch` on Account or Scope.
-2. The compiled model (`ess specify compile --path ess --format json`) has a binding from
-   `weft.accounts.AccountCreated` to `weft.scope.OpenScope`, and grants of `OpenScope` and
-   `CloseScope` to weft actors.
-3. `slot --timeout 30m tools/synth-domain.sh accounts` (about 80 s; outside the test step) reports
-   0 failed scenarios of `weft.accounts`.
+   `type_mismatch` on Account or Scope, and no error naming `AccountCreated`, `OpenScope` or
+   `CloseScope`.
+2. The scenario checks of this story run after the spec compiles, in
+   `story:cloud-blocks-policies` acceptances 3 and 4.
 
 ## Rules for this work
 

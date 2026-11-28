@@ -2,11 +2,14 @@
 format: aep.planning-md/3
 id: epic:cloud-blocks
 kind: epic
-status: draft
+status: active
 title: weft's spec takes cloudspec's blocks as a pinned, renamed copy and keeps only its run-time records and its example
 relations:
 - serves: vision:weft
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:28Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T08:38:28Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Order
 
@@ -17,7 +20,7 @@ design-time pieces; weft keeps its run-time records (`Instance`, `PlacementDecis
 `SecretDelivery`, `Release`, `ReleaseStep`, `Drift`, `Alert`, `Engine`, `OfferingPlan`, the actors
 `Scheduler`, `NodeAgent`, `ControlPlane`). The cloudspec session sent removal request R3 with the
 pin 7f22943; its `vendor.sh` gained `wire` renaming and `--exclude` in e817a3b (cloudspec
-integration PR 7), and the pin is the cloudspec `main` commit that carries it.
+integration PR 7), merged as a485b7f, which is the pin.
 
 ## Outcome
 

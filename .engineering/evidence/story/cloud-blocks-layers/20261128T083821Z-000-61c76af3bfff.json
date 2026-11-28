@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T08:38:21Z",
+  "actor": "human:operator",
+  "artifact": "story:cloud-blocks-layers",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "plan critics approve (acceptance round 4, design, scope and parallel-safety round 3)"
+  }
+}

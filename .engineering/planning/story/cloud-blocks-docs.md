@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-docs
 kind: story
-status: draft
+status: proposed
 title: Docs pages and the spec-diff acknowledgements follow the renamed domains
 relations:
 - decomposes: epic:cloud-blocks
@@ -22,7 +22,9 @@ scope:
   path: website/docs/concepts
 - confidence: cited
   path: website/docs/run/consoles.md
-revision: 5
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T08:38:27Z",
+  "actor": "human:operator",
+  "artifact": "epic:cloud-blocks",
+  "kind": "epic",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "plan critics approve its 11 stories (acceptance round 4, design, scope and parallel-safety round 3)"
+  }
+}

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-lock-gate
 kind: story
-status: draft
+status: proposed
 title: The gate refuses a vendored cloudspec copy that differs from its lock or its pin, with no network
 relations:
 - decomposes: epic:cloud-blocks
@@ -25,7 +25,9 @@ scope:
   path: tools/slow.d/20-vendor-fresh.sh
 - confidence: cited
   path: tools/test-vendor-lock.sh
-revision: 3
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:21Z", actor: "human:operator", revision: 4, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 

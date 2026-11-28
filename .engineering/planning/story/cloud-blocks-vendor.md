@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-vendor
 kind: story
-status: draft
+status: active
 title: ess/cloud holds cloudspec's renamed blocks at the pin, and weft's files keep only what weft keeps
 relations:
 - decomposes: epic:cloud-blocks
@@ -64,7 +64,10 @@ scope:
   path: ess/system.yaml
 - confidence: cited
   path: tools/synth-domain.sh
-revision: 5
+revision: 9
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -73,8 +76,8 @@ come out.
 
 ## Outcome
 
-1. `ess/cloud/` is the output of cloudspec's `scripts/vendor.sh` at the pin (the cloudspec `main`
-   commit that carries e817a3b, merged by its integration PR 7), renamed to `weft`,
+1. `ess/cloud/` is the output of cloudspec's `scripts/vendor.sh` at the pin (cloudspec a485b7f, the merge of
+   its integration PR 7, which carries e817a3b), renamed to `weft`,
    without `13-actors/actors.yaml` and `components.yaml` (D-a, `--exclude`), with `wire: weft`
    (D-c), and `ess/cloud/cloud.lock`.
 2. `CLOUDSPEC_REV` in `Taskfile.yml` changes from 2ed72c2 to the same pin in the same commit (D-f), so the lock
@@ -117,13 +120,13 @@ edit these files after it.
    `access_mode` and `control_plane`, 7; empty policies and `rollback_of`, 6), which
    `story:cloud-blocks-account-scope`, `-cluster-pinning`, `-runtime-fields` and `-policies`
    remove.
-4. `slot --timeout 30m tools/synth-domain.sh accounts` prints a synthesis summary that names
-   `weft.scope`.
+4. After `tools/synth-domain.sh accounts`, `.check/synth-accounts/ess/cloud/` holds every `output`
+   of `cloud.lock` (the run may stop at its compile step while the errors of acceptance 3 remain).
 
 ## Dependencies
 
 - cloudspec's integration PR 7 (`vendor.sh` writes `wire: <system>` and records `--exclude` in
-  the lock) and the pin after it merges.
+  the lock): merged as a485b7f459abd66261af25b558fb92df90570545.
 
 ## Rules for this work
 

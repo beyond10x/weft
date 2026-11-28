@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-runtime-fields
 kind: story
-status: draft
+status: proposed
 title: Access mode and control-plane size live on weft rows the vendored commands read and set
 relations:
 - decomposes: epic:cloud-blocks
@@ -13,7 +13,9 @@ scope:
   path: ess/1-infrastructure/infrastructure.yaml
 - confidence: cited
   path: ess/2-tenancy/access.yaml
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -30,13 +32,10 @@ Decomposes `epic:cloud-blocks`: the run-time fields the blocks dropped get a wef
 
 ## Acceptance
 
-1. `ess specify validate --path ess --strict-requires` reports nothing in either file.
-2. `slot --timeout 30m tools/synth-domain.sh access` reports 0 failed scenarios of
-   `weft.access`, and its suite holds a passing scenario of `ConfigureAccess` whose outcome sets
-   `access_mode`.
-3. `slot --timeout 30m tools/synth-domain.sh infrastructure` reports 0 failed scenarios, and its
-   suite holds a passing scenario of `ScaleControlPlane` whose outcome sets `control_plane`.
-   (Both runs take about 80 s each and run outside the test step, one at a time.)
+1. `ess specify validate --path ess --strict-requires` reports nothing in `infrastructure.yaml`
+   or `access.yaml`.
+2. The scenario checks of `ConfigureAccess` and `ScaleControlPlane` run after the spec compiles,
+   in `story:cloud-blocks-policies` acceptance 4.
 
 ## Rules for this work
 

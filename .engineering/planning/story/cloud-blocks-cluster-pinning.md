@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-cluster-pinning
 kind: story
-status: draft
+status: proposed
 title: PlaceInstance still refuses a node outside the formation's tenant cluster on the vendored spec
 relations:
 - decomposes: epic:cloud-blocks
@@ -15,7 +15,9 @@ scope:
   path: ess/5-runtime/scheduling.yaml
 - confidence: cited
   path: ess/components.yaml
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
@@ -40,9 +42,8 @@ the rest after this story).
 
 1. `ess specify validate --path ess --strict-requires` reports nothing in `cluster.yaml`,
    `scheduling.yaml` or the binding `cluster-create-node-pool`.
-2. `slot --timeout 30m tools/synth-domain.sh scheduling` (about 80 s; outside the test step)
-   reports 0 failed scenarios of `weft.scheduling`, and its suite holds a scenario in which
-   `PlaceInstance` on a node outside the formation's cluster ends in that refusal.
+2. The scenario check of the isolation refusal runs after the spec compiles, in
+   `story:cloud-blocks-policies` acceptance 4.
 
 ## Rules for this work
 

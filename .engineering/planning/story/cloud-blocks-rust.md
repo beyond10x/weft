@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-rust
 kind: story
-status: draft
+status: proposed
 title: The walking skeleton places and runs an instance on the vendored spec
 relations:
 - decomposes: epic:cloud-blocks
@@ -25,7 +25,9 @@ scope:
   path: product/cloud/crates/weft-testkit
 - confidence: cited
   path: quality/ratchet.yaml
-revision: 5
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
