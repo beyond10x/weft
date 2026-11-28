@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T14:03:29Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-plan-from-source",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "plan-critic panel findings on the submission epic applied; coordinator review after the split; D-R85-1 = B"
+  }
+}

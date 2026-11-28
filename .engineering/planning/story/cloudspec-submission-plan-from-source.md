@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloudspec-submission-plan-from-source
 kind: story
-status: draft
+status: active
 title: PlanFromSource copies a submitted cloudspec architecture into a formation revision and a plan naming the source, each refusal tested
 relations:
 - decomposes: epic:cloudspec-submission
@@ -16,7 +16,10 @@ scope:
   path: product/cloud/crates/weft-testkit/tests/main.rs
 - confidence: inferred
   path: product/cloud/crates/weft-testkit/tests/plan_from_source.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T14:03:29Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T14:03:29Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
