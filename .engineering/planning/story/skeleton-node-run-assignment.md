@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:skeleton-node-run-assignment
 kind: story
-status: draft
+status: active
 title: weft-agent follows its assignment, starts the instance confined and records it running
 relations:
 - decomposes: epic:walking-skeleton
@@ -11,6 +11,7 @@ relations:
 - serves: vision:weft
 - depends_on: story:skeleton-replica-instances
 - depends_on: story:skeleton-controllers
+- depends_on: story:ports-node-exec-facts
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-agent/src/agent.rs
@@ -32,14 +33,17 @@ scope:
   path: product/cloud/crates/weft-impl/src/behaviours/restore_backend.rs
 - confidence: cited
   path: product/cloud/crates/weft-impl/src/bindings
-revision: 25
+revision: 29
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-28T02:23:05Z", actor: "human:operator", revision: 28, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T02:23:06Z", actor: "human:operator", revision: 29, decided_on: {"recorded":{"approval":1}}}
 ---
 ## Epic
 
 Decomposes `epic:walking-skeleton`, outcome 5 (take the assignment, start, report running) and
 outcome 3 (the obligations of the last node steps of the path). Depends on
 `story:skeleton-node-join-session` (agent loop, binary, report file),
-`story:skeleton-node-confine` (the `confine` module) and `story:skeleton-replica-instances` (the
+`story:skeleton-node-confine` (confined runs, now behind the `exec` port of `story:ports-node-exec-facts`) and `story:skeleton-replica-instances` (the
 binding runner). Blocked by no ESS gap: it delivers its two edge bindings by hand, with their E2
 policies.
 
@@ -47,17 +51,18 @@ policies.
 
 - Work list: the agent reads `weft.nodes.AssignmentsOfNode` with its own `node_id` (the NodeAgent
   work list, `ess/5-runtime/nodes.yaml`) every 500 ms and takes each `Active` assignment whose
-  instance it has not started. Reading the view makes a restart of the agent and a seeded state work
+  instance reads `Scheduled` (an instance in `Starting` or later was started, by this agent or by
+  one before a restart). Reading the view makes a restart of the agent and a seeded state work
   the same way. It reads the instance row from `weft.workloads.Instances` (`processes`,
   `artifact_digest`, `state`). An assignment of another node is never in its list.
 - Verify: `weft.workloads.RecordArtifactVerified` as NodeAgent, `Scheduled` -> `Starting` under its
   guards (`wrong-node`, `digest-mismatch`, `no-artifact`, `revoked`;
-  `ess/4-applications/workloads.yaml` from line 2454). The skeleton fetches no artifact: the snippet
+  `ess/4-applications/workloads.yaml` from line 2483). The skeleton fetches no artifact: the snippet
   is the command of the instance process; artifact fetch and signature check are a later story.
-- Start: each process through `confine` (`story:skeleton-node-confine`).
+- Start: each process through the `exec` port, `weft_platform::node::Exec::run`, which `agent::run(&dyn Exec, &dyn NodeFacts)` already receives (`story:ports-node-exec-facts`, weft#29); its local adapter is substrate. No code in `weft-agent` calls substrate's SDK (the boundary test of that story).
 - Running: `weft.workloads.RecordInstanceRunning` as NodeAgent once the exec is `running`, or has
   `exited` before the agent saw `running` (it ran); its `running-ready` outcome moves `Starting` ->
-  `Running` (lines 2536-2561).
+  `Running` (from line 2578).
 - Edge: the `running-ready` outcome emits `weft.workloads.InstanceReady`; on it the bindings
   `edge-backend-ready` and `edge-backend-restore` (`ess/components.yaml:2065-2095`) invoke
   `weft.edge.RecordBackendReady` and `weft.edge.RestoreBackend`. Both carry a per-refusal policy,
@@ -94,7 +99,9 @@ policies.
   each node one Instance in state `Scheduled` with that `node_id` and an `Active` Assignment. The
   process of this node is `sh -c "echo weft"`, that of the other node `sh -c "echo other"`, so any
   exec of the other instance would show in the report by its output. Both instances start in
-  `Scheduled`, so the guard of `RecordArtifactVerified` is exercised as well. Seed files live in
+  `Scheduled`, so the guard of `RecordArtifactVerified` is exercised as well. Neither process
+  carries a `Ready` check, so `RecordInstanceRunning` answers `running-ready` and `InstanceReady`
+  is emitted. Seed files live in
   the crate tests.
 
 ## Domain relations
@@ -120,26 +127,33 @@ policies.
 
 - `product/cloud/crates/weft-agent/` (`src/follow.rs`, wiring in `src/agent.rs`, the process, started and pass
   lines in `src/report.rs`, `tests/main.rs` module `follow`,
-  `tests/seeds/`)
+  `tests/seeds/`, and `Cargo.toml` with `Cargo.lock` for the dev-dependencies the seeds need:
+  `weft-impl` rows and the generated `weft-types` snapshots); `Exec::run` blocks until the exec
+  ends, so the follower runs each start on a thread of its own and the work-list passes go on
 - `product/cloud/crates/weft-impl/` (`src/behaviours/`: `record_artifact_verified.rs`,
   `record_instance_running.rs`, `record_backend_ready.rs`, `restore_backend.rs`; the two `edge-*`
   entries of the binding runner in `src/bindings/`)
 
 ## Acceptance
 
-1. From that seeded state, `weft-agent` starts its instance process `sh -c "echo weft"` through
-   `substrate-daemon`, its instance reads `Running` in `weft.workloads.Instances`, and the report
-   file holds the line `{"instance_id": <its instance>, "exit_code": 0, "stdout": "weft\n"}`.
-2. Once the report file holds a `pass` line whose number is greater than the `pass` of the
+1. From that seeded state, after `weft-agent` starts, its instance reads `Running` in
+   `weft.workloads.Instances`.
+2. In the same run, the report file holds the line
+   `{"instance_id": <its instance>, "exit_code": 0, "stdout": "weft\n"}`, the exec having run
+   through the `exec` port on `substrate-daemon`.
+3. Once the report file holds a `pass` line whose number is greater than the `pass` of the
    `started` line of its own instance, the instance assigned to the other node still reads
-   `Scheduled` in `weft.workloads.Instances`, and the report file holds no line with its
-   `instance_id` and no line with `stdout` `other`.
-3. In the control host log of that run, the one request line of `RecordInstanceRunning` (only its
-   own instance runs) has a status other than `501`.
-4. In the same log, after the `seq` read before the agent started, the first readiness of its
-   instance gives one binding line `edge-backend-ready` with result `applied` and one binding line
-   `edge-backend-restore` with refusal `not-out-of-traffic` and result `dropped`, and no
-   `edge-backend-restore` line with result `retried`.
+   `Scheduled` in `weft.workloads.Instances`.
+4. At that point the report file holds no line with the other instance's `instance_id` and no line
+   with `stdout` `other`.
+5. In the control host log of that run, the one request line of `RecordInstanceRunning` has a
+   status in 200-299.
+6. In the same log, after the `seq` read before the agent started, the first readiness of its
+   instance gives one binding line `edge-backend-ready` with result `applied`.
+7. In the same log and range, there is one binding line `edge-backend-restore` with refusal
+   `not-out-of-traffic` and result `dropped`.
+8. In the same log and range, there is no `edge-backend-restore` line with result `retried`.
+
 ## Rules for this work
 
 - Builds and tests run through `slot`: `cargo` is shimmed; anything else that compiles or tests

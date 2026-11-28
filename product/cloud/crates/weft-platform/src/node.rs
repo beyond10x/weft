@@ -36,6 +36,13 @@ pub struct Limits {
     pub output_bytes: u64,
 }
 
+impl Limits {
+    /// The longest `timeout` and `cpu_time` the exec port accepts: substrate's
+    /// `MAX_EXEC_DURATION`, 24 hours. A case of weft-platform's tests holds the two equal and
+    /// runs an exec with it; a longer one is refused `Invalid`.
+    pub const LONGEST: Duration = Duration::from_secs(24 * 60 * 60);
+}
+
 impl Default for Limits {
     fn default() -> Self {
         Self {

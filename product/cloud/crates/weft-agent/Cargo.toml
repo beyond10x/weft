@@ -28,7 +28,9 @@ weft-platform = { path = "../weft-platform" }
 
 [dev-dependencies]
 time = { version = "0.3", features = ["formatting", "parsing"] }
+weft-impl = { path = "../weft-impl" }
 weft-testkit = { path = "../weft-testkit" }
+weft-types = { path = "../../../../target/generated/crates/weft-types" }
 
 [lints]
 workspace = true

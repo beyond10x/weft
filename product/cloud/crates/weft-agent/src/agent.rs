@@ -13,11 +13,13 @@
 //!    closes); a lost connection, no answer at all, is dialed again after the redial delay,
 //!    3000 ms (`lose-transport-dialing`, `redial`).
 //!
-//! Then it holds its session until it is stopped. Heartbeats, lease renewal and the work list come
-//! with later stories.
+//! Then it follows its work list until it is stopped ([`crate::follow`]): it starts the instances
+//! assigned to its node through its `Exec` port and records them running. Heartbeats and lease
+//! renewal come with later stories.
 
 use std::net::ToSocketAddrs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -26,6 +28,7 @@ use time::OffsetDateTime;
 use weft_client::{Addresses, Answer, Client};
 use weft_platform::node::{Capacity, Exec, Isolation, NodeFacts};
 
+use crate::follow::Follower;
 use crate::report::Report;
 
 /// The node agent's actor.
@@ -105,15 +108,19 @@ fn address(url: &str) -> Result<Addresses, String> {
     Ok(Addresses::from(addresses))
 }
 
-/// Runs the agent: join, observe, open the session, then hold it. Returns only on a failure.
-/// It reaches the node through its ports only: `node` for what it observes about itself, and
-/// `_exec` for the processes of its instances, which it starts with a later story.
+/// Runs the agent: join, observe, open the session, then follow its work list. Returns only on a
+/// failure. It reaches the node through its ports only: `node` for what it observes about
+/// itself, and `exec` for the processes of its instances, which it runs on threads of its own.
 ///
 /// # Errors
 ///
 /// The node facts are unavailable, the join or the observation is refused, the control host
 /// cannot be reached for them, or the report file cannot be written.
-pub fn run(options: &Options, _exec: &dyn Exec, node: &dyn NodeFacts) -> Result<(), String> {
+pub fn run(
+    options: &Options,
+    exec: &(dyn Exec + Sync),
+    node: &dyn NodeFacts,
+) -> Result<(), String> {
     let facts = node
         .observe()
         .map_err(|error| format!("node facts: {error}"))?;
@@ -163,9 +170,8 @@ pub fn run(options: &Options, _exec: &dyn Exec, node: &dyn NodeFacts) -> Result<
             }
         }
     }
-    loop {
-        std::thread::sleep(Duration::from_secs(3600));
-    }
+    let report = Mutex::new(report);
+    Follower::new(&client, &options.node_id, exec, &report).follow()
 }
 
 fn write(report: &mut Report, line: &Value) -> Result<(), String> {

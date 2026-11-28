@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T02:23:05Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-node-run-assignment",
+  "kind": "story",
+  "revision": 27,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "plan critics acceptance and design approved revision 27, 2026-11-28 (walking-skeleton goal story, wave on default)"
+  }
+}
