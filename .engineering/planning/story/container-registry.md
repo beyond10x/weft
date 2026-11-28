@@ -8,7 +8,8 @@ relations:
 - decomposes: epic:platform-ports
 - serves: vision:weft
 - depends_on: story:contract-providers
-revision: 1
+- depends_on: story:ports-node-images-local
+revision: 2
 ---
 ## Epic
 
@@ -65,6 +66,11 @@ cloudspec (requested from the cloudspec session the same minute as a contract,
    digest.
 4. A scenario refuses a push from an account without push rights on the repository, naming the
    right.
+5. On the local placement (requirement R80 of the agentic operator, 2026-11-28), an OCI client
+   pushes an image to the registry's loopback address, and `weft.artifacts.Artifacts` lists an
+   `Image` artifact with the pushed manifest's digest.
+6. A workload that names that digest starts and its instance reads `Running` (needs N6 `images` to
+   serve kind `Image`, `story:ports-node-images-local`, substrate gap 5).
 
 ## Dependencies outside weft
 
