@@ -1,5 +1,6 @@
 //! The one integration-test binary of weft-testkit.
 
+mod cloudspec_submit;
 mod ratchet;
 
 mod trivial {

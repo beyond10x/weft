@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 pub mod bindings;
 pub mod context;
 pub mod conversions;
+pub mod documents;
 pub mod log;
 pub mod quota;
 pub mod storage;

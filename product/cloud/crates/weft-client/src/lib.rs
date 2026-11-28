@@ -160,6 +160,32 @@ impl Client {
         self.send("POST", path, None, body.to_string().as_bytes())
     }
 
+    /// Posts the bytes `bytes`, unchanged, to `path` (a query string included) as no caller: a
+    /// file such as a cloudspec submission (`/cloudspec/submissions?formation_id=...`).
+    ///
+    /// # Errors
+    ///
+    /// What the connection refuses, or an answer that is not HTTP.
+    pub fn post_bytes(&self, path: &str, bytes: &[u8]) -> io::Result<Answer> {
+        self.send("POST", path, None, bytes)
+    }
+
+    /// Posts the bytes `bytes` to `path` as `actor` with the caller attributes `caller`.
+    ///
+    /// # Errors
+    ///
+    /// What the connection refuses, or an answer that is not HTTP.
+    pub fn post_bytes_as(
+        &self,
+        path: &str,
+        bytes: &[u8],
+        actor: &str,
+        caller: Value,
+    ) -> io::Result<Answer> {
+        let header = caller_header(actor, caller);
+        self.send("POST", path, Some(&header), bytes)
+    }
+
     fn send(
         &self,
         method: &str,
