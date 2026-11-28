@@ -75,14 +75,17 @@ commands:
             control_plane: input.control_plane
 
 views:
-  # Sketch line 453, hardening pass 4: the live pools made for a tenant cluster's dedicated pool.
-  # The ControlPlane joins it with weft.cluster.UnlinkedClusterNodePools on
-  # requested_for == cluster_node_pool_id (level step in ess/components.yaml).
+  # Sketch line 453, hardening pass 4: the live pools, among them those made for a tenant
+  # cluster's dedicated pool. D-e A (story cloud-blocks-cluster-pinning): the vendored NodePool
+  # has no `requested_for` (cloudspec C2); the binding cluster-create-node-pool names a pool by its
+  # cluster pool's id, so the ControlPlane joins this view with
+  # weft.cluster.UnlinkedClusterNodePools on name == cluster_node_pool_id (level step in
+  # ess/components.yaml). An operator's own pool matches no cluster pool.
   - name: weft.infrastructure.TenantNodePools
     source: weft.infrastructure.NodePool
     consistency: read_your_writes
-    filter: {all: [defined(requested_for), state == Active]}
+    filter: state == Active
     fields:
       - {name: node_pool_id, type: weft.shared.NodePoolId}
-      - {name: requested_for, type: Optional<Uuid>}
+      - {name: name, type: String}
       - {name: zone, type: weft.shared.ZoneName}

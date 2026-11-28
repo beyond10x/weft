@@ -287,9 +287,14 @@ commands:
       # the bindings' claims can be tied to it in one walk (a binding names its claim, the claim
       # its account; the request's account is not reachable inside that walk otherwise).
       - {name: scope_id, type: weft.shared.ScopeId}
-      # design:tenant-clusters step 3: the request's cluster, as PendingRequests shows it, for the
-      # same reason as scope_id: the walks over node pools below compare with it.
+      # design:tenant-clusters step 3: the request's cluster, for the same reason as scope_id: the
+      # walks over node pools below compare with it. D-e A (story cloud-blocks-cluster-pinning):
+      # the vendored SchedulingRequest holds no cluster (cloudspec C2); the cluster is the one whose
+      # `formations` lists the request's formation (weft.cluster.PinFormation), `other-cluster`.
       - {name: cluster_id, type: weft.shared.ClusterId}
+      # D-e A: the request's formation, as the request row holds it (`other-formation`), so
+      # `other-cluster` reads the cluster's list without a second walk.
+      - {name: formation_id, type: weft.shared.FormationId}
       - {name: node_id, type: weft.shared.NodeId}
       # design:tenant-clusters step 3: the node's pool as weft.infrastructure.Node holds it (absent
       # for a node in no pool); `node-pool-differs` ties it to the node.
@@ -297,10 +302,11 @@ commands:
       - {name: zone, type: weft.shared.ZoneName}
       - {name: isolation, type: weft.shared.IsolationLevel}
       - {name: bindings, type: List<weft.shared.BindingId>}
-      # design:tenant-clusters step 2b, scheduling: the topology of the request's cluster, as the
-      # Scheduler reads it from weft.cluster's views, like scope_id and cluster_id above. The
-      # node's pool as a cluster pool (absent for a shared pool), the node's group (absent: no
-      # topology, or the pool is in no group), and the groups of the formation's active placements.
+      # design:tenant-clusters step 2b, scheduling: the topology of the node's cloud (vendored
+      # weft.topology, one per cloud since cloudspec C2), as the Scheduler reads it, like scope_id
+      # and cluster_id above. The node's pool as a cluster pool (absent for a shared pool), the
+      # node's group (absent: no topology, or the pool is in no group), and the groups of the
+      # formation's active placements.
       # Guards tie the first two to the node; the Scheduler's word is taken that peer_groups is
       # complete and that a group is given where one exists (design, "Not checked").
       - {name: cluster_node_pool_id, type: Optional<weft.shared.ClusterNodePoolId>}
@@ -333,16 +339,35 @@ commands:
           where: {all: ["request_id == input.request_id", {state: [Reserved, Bound, Evicting]}]}
           exists: true
         error: weft.scheduling.RequestReserved
-      - name: other-tenant
-        when_related: {via: input.request_id, predicate: tenant_id != input.tenant_id}
-        error: weft.scheduling.RequestMismatch
       # hardening pass 1 scheduling:767: the account named is the request's.
       - name: other-account
         when_related: {via: input.request_id, predicate: scope_id != input.scope_id}
         error: weft.scheduling.RequestMismatch
-      # design:tenant-clusters step 3: the cluster named is the request's.
+      # The tenant named is the request's: the vendored SchedulingRequest holds no tenant
+      # (cloudspec C2), so it is the tenant of the account whose scope the request names (D-d A,
+      # weft.accounts.Account.scope_id). A scope no account records admits no tenant (default
+      # deny), so `shared-kernel` below never compares an unchecked tenant.
+      - name: other-tenant
+        when_related:
+          entity: weft.accounts.Account
+          where:
+            all:
+              - defined(scope_id)
+              - scope_id == input.scope_id
+              - tenant_id == input.tenant_id
+          exists: false
+        error: weft.scheduling.RequestMismatch
+      # D-e A: the formation named is the request's.
+      - name: other-formation
+        when_related: {via: input.request_id, predicate: formation_id != input.formation_id}
+        error: weft.scheduling.RequestMismatch
+      # design:tenant-clusters step 3 and D-e A: the cluster named is the one the request's
+      # formation runs in (weft.cluster.PinFormation). A formation no cluster lists is refused
+      # (default deny); a formation is listed by at most one cluster.
       - name: other-cluster
-        when_related: {via: input.request_id, predicate: cluster_id != input.cluster_id}
+        when_related:
+          via: input.cluster_id
+          predicate: {not: {exists: {in: formations, as: f, that: "f == input.formation_id"}}}
         error: weft.scheduling.RequestMismatch
       # hardening pass 1 scheduling:767: every binding placed holds a claim of the request's
       # account, never another account's devices or volumes.
@@ -514,8 +539,11 @@ commands:
         error: weft.scheduling.NodeOutsideCluster
       # design:tenant-clusters step 2b, scheduling: a placement that crosses a closed link is
       # refused. Three guards, each one walk (ESS 0.99.2): the cluster pool is the node's pool and
-      # the request's cluster's; the group is Active, of the cluster, and lists that pool; no
-      # declared link with crossable false joins the group and a peer group, either direction.
+      # the request's cluster's; the group is Active and lists the node's pool; no declared link
+      # with crossable false joins the group and a peer group, either direction. Since cloudspec
+      # C2 a topology is its cloud's and a group lists infrastructure node pools, not cluster
+      # pools: `node-in-other-cloud` keeps the node, and so the group, in the cluster's cloud, and
+      # the cluster-pool guards above keep the node's pool the cluster's.
       # Derived links are crossable (weft.cluster TopologyLink OPEN), so only a Custom topology's
       # declared links refuse.
       - name: cluster-pool-differs
@@ -541,9 +569,8 @@ commands:
               - topology_group_id == input.topology_group_id
               - any:
                   - state != Active
-                  - cluster_id != input.cluster_id
-                  - not defined(input.cluster_node_pool_id)
-                  - not: {exists: {in: node_pools, as: p, that: "p == input.cluster_node_pool_id"}}
+                  - not defined(input.node_pool_id)
+                  - not: {exists: {in: node_pools, as: p, that: "p == input.node_pool_id"}}
           exists: true
         error: weft.scheduling.TopologyMismatch
       - name: crosses-closed-link

@@ -146,6 +146,7 @@ actors:
       - weft.cluster.DeleteCluster # integrator, 2026-11-26
       - weft.cluster.AddClusterNodePool # integrator, 2026-11-26
       - weft.cluster.RemoveClusterNodePool # integrator, 2026-11-26
+      - weft.cluster.PinFormation # D-e A, story cloud-blocks-cluster-pinning
       - weft.topology.CreateTopology # integrator, 2026-11-26
       - weft.topology.RemoveTopology # integrator, 2026-11-26
       - weft.topology.AddTopologyGroup # integrator, 2026-11-26
@@ -245,6 +246,7 @@ actors:
       - weft.cluster.DeleteCluster # integrator, 2026-11-26
       - weft.cluster.AddClusterNodePool # integrator, 2026-11-26
       - weft.cluster.RemoveClusterNodePool # integrator, 2026-11-26
+      - weft.cluster.PinFormation # D-e A, story cloud-blocks-cluster-pinning
       - weft.topology.CreateTopology # integrator, 2026-11-26
       - weft.topology.RemoveTopology # integrator, 2026-11-26
       - weft.topology.AddTopologyGroup # integrator, 2026-11-26
