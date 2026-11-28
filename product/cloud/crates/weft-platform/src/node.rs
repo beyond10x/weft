@@ -1,4 +1,4 @@
-//! The node-layer ports of the first build (`docs/platform-ports.md` § 5): N1 [`Exec`], one
+//! The node-layer ports of the first build (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 5): N1 [`Exec`], one
 //! confined process that runs to its end, and N2 [`NodeFacts`], what the node observes about
 //! itself. Both are synchronous: `weft-agent` is a blocking program, and an adapter that needs a
 //! runtime keeps its own.
@@ -124,7 +124,7 @@ pub struct Exited {
 }
 
 /// The class of a refusal of the place (`{class, code, message, retriable}`,
-/// `docs/platform-ports.md` § 3.4).
+/// cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 3.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RefusalClass {
     Refused,
@@ -134,7 +134,7 @@ pub enum RefusalClass {
     Failed,
 }
 
-/// The refusals of [`Exec::run`] (`docs/platform-ports.md` § 5 N1).
+/// The refusals of [`Exec::run`] (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 5 N1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExecError {
     /// The process has no command.
@@ -149,7 +149,7 @@ pub enum ExecError {
     /// No `exited` within the exec's timeout and a grace.
     NoExit(Duration),
     /// The place refused the request with its own code, such as `exec.sandbox-unavailable`,
-    /// carried as the place states it (`docs/platform-ports.md` § 3.4).
+    /// carried as the place states it (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 3.4).
     Refused {
         class: RefusalClass,
         code: String,

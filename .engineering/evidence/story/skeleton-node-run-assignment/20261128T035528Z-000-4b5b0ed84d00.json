@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T03:55:28Z",
+  "actor": "human:operator",
+  "artifact": "story:skeleton-node-run-assignment",
+  "kind": "story",
+  "revision": 29,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#32 (integration), merged ab601cb",
+    "reference": "https://github.com/beyond10x/weft/pull/32"
+  }
+}

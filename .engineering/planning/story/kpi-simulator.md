@@ -21,7 +21,7 @@ scope:
   path: tools/kpis.d/50-simulator.sh
 - confidence: cited
   path: tools/sim/tests/ratchet/mod.rs
-revision: 11
+revision: 12
 ---
 ## Epic
 
@@ -55,7 +55,7 @@ explore throughput, debug sections, ESS versions in use) with commands, and
 | `sim.tests` | report | nextest | 18 |
 | `sim.explore-steps-per-second` | ratchet (higher) | `steps_per_s` of the plain explore (M8) | 15594 |
 | `sim.debug-sections` | gate 0 | `readelf -S` on the weft-sim binary | 0 |
-| `sim.ess-revisions` | gate 1 | `ess --version` against the ESS version of the crates in `tools/sim/Cargo.lock` | probe: 2 (CLI 0.99.2, crates 0.99.5 at rev `c0b5f560`) |
+| `sim.ess-revisions` | gate 1 | `ess --version` against the ESS version of the crates in `cloudspec@2ed72c2:crates/cloudspec-sim/Cargo.lock` | probe: 2 (CLI 0.99.2, crates 0.99.5 at rev `c0b5f560`) |
 
 - `sim.search-fitness-spread` is held by `story:kpi-flat-searches`; `sim.explore-from-seconds`
   (catalogue `no`) is already the `explore-time` measurement of `explore-from-setup`.
@@ -69,7 +69,7 @@ Shape (taken here):
 - `tools/kpis.d/50-simulator.sh` builds the test binary through `slot` (the shim does it for
   `cargo`), times the run phase, reads the ten slowest tests and the count, reads `steps_per_s` from
   the plain explore result `story:kpi-specification` writes, runs `readelf -S` on
-  `tools/sim/target/debug/weft-sim`, and compares the ESS versions.
+  `cloudspec@2ed72c2:crates/cloudspec-sim/target/debug/weft-sim`, and compares the ESS versions.
 - A new assessor declaration `quality/assessors/simulator-facts@1.assessor.yaml` names
   `tools/kpis.d/50-simulator.sh` as its command and declares its six outputs. `simulator-tests`
   names it in place of the undeclared `command-timing@1`, and the test step time is a measurement
@@ -79,7 +79,7 @@ Shape (taken here):
   with `reference: {kind: accepted_value}`, a tolerance and an adoption rule (a sampled figure);
   `sim.ess-revisions` with `reference: {kind: accepted_value}` at 2, so it may not rise, until the
   versions agree; `sim.tests` a report.
-- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::simulator_kpis_have_measurements` (the six ids above, a
   list in the test, each with a measurement under the subject `simulator`),
   `ratchet::simulator_gate_kpis_are_merge_requirements` (`sim.test-step-seconds`,

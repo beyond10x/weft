@@ -1,9 +1,9 @@
 ---
-title: Run weft-sim
+title: Run cloudspec-sim
 description: Explore weft's specification with random command sequences, run experiments with faults and controllers, replay one walk, and describe commands.
 ---
 
-weft-sim has four commands. Run them from the repository root; `--spec` defaults to `ess`.
+cloudspec-sim has four commands. Run them from the repository root with `--spec ess` ([install](install.md)).
 
 | Command | Does |
 |---|---|
@@ -18,7 +18,7 @@ Each of `explore` and `simulate` writes `result.json` and `index.html` to its `-
 ## Explore
 
 ```shell-session
-$ weft-sim explore --spec ess --seed 1 --walks 2048 --steps 300 --threads 8 --out sim/out/explore
+$ cloudspec-sim explore --spec ess --seed 1 --walks 2048 --steps 300 --threads 8 --out sim/out/explore
 ```
 
 A walk starts from an empty state and sends up to `--steps` commands. Commands are weighted toward
@@ -65,10 +65,10 @@ Pass more options after `--`, for example `task sim-explore -- --serve`.
 ## Simulate
 
 ```shell-session
-$ weft-sim simulate --spec ess --experiment sim/experiments/node-loss.yaml --out sim/out/node-loss
-weft-sim: exhaustive search over 2 mutation points: 9 combinations (limit 64)
-weft-sim simulate node-loss: 222 steps in 0.1 s; checks 87; violations 0
-weft-sim: wrote sim/out/node-loss/result.json and sim/out/node-loss/index.html
+$ cloudspec-sim simulate --spec ess --experiment sim/experiments/node-loss.yaml --out sim/out/node-loss
+cloudspec-sim: exhaustive search over 2 mutation points: 9 combinations (limit 64)
+cloudspec-sim simulate node-loss: 222 steps in 0.1 s; checks 87; violations 0
+cloudspec-sim: wrote sim/out/node-loss/result.json and sim/out/node-loss/index.html
 ```
 
 An experiment (`format: weft-sim-experiment/1`, YAML) declares:
@@ -102,7 +102,7 @@ The experiments in [`sim/experiments/`](https://github.com/beyond10x/weft/tree/m
 A result keeps the trace of up to 64 walks, and of each walk that broke an invariant. Replay one:
 
 ```shell-session
-$ weft-sim replay --spec ess --trace sim/out/explore/result.json --walk 0
+$ cloudspec-sim replay --spec ess --trace sim/out/explore/result.json --walk 0
 ```
 
 It prints each step with the outcome it got, then a summary such as
@@ -119,7 +119,7 @@ walk its point ran as. Replay reruns that point by its walk number, from the sam
 the run:
 
 ```shell-session
-$ weft-sim replay --spec ess --trace sim/out/simulate/result.json --walk 14
+$ cloudspec-sim replay --spec ess --trace sim/out/simulate/result.json --walk 14
 ```
 
 It loads the experiment the result names (`run.experiment`), applies the row's point, and runs
@@ -150,7 +150,7 @@ Enter or Space.
 ## Describe
 
 ```shell-session
-$ weft-sim describe --spec ess --prefix weft.nodes.
+$ cloudspec-sim describe --spec ess --prefix weft.nodes.
 ```
 
 lists each command under the prefix with the actors that may run it, its inputs, its response

@@ -1,9 +1,0 @@
-format: ess/37
-system: demo
-version: v1
-
-summary: Jobs a controller places, for the explore --settle and --controller-share test.
-
-domains:
-  - demo.job
-  - demo.actors

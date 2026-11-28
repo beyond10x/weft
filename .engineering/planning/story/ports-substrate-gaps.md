@@ -10,12 +10,12 @@ relations:
 scope:
 - confidence: cited
   path: docs/platform-ports.md
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "the substrate gaps". Design:
-`docs/platform-ports.md` § 10. Depends on none.
+`cloudspec@2ed72c2:docs/platform-ports.md` § 10. Depends on none.
 
 ## Context
 
@@ -40,7 +40,7 @@ Decomposes `epic:platform-ports`, epic scope "the substrate gaps". Design:
 
 ## Scope
 
-- `docs/platform-ports.md` (§ 10)
+- `cloudspec@2ed72c2:docs/platform-ports.md` (§ 10)
 
 ## Acceptance
 

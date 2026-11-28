@@ -37,7 +37,7 @@ revision: 30
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T02:23:05Z", actor: "human:operator", revision: 28, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T02:23:06Z", actor: "human:operator", revision: 29, decided_on: {"recorded":{"approval":1}}}
-- {from: "active", to: "implemented", at: "2026-11-28T04:59:33Z", actor: "human:operator", revision: 30, decided_on: {"recorded":{"test_result":1,"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T04:04:29Z", actor: "human:operator", revision: 30, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

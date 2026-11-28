@@ -25,12 +25,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/local/machines.rs
 - confidence: inferred
   path: quality/spec-diff-acknowledgements.json
-revision: 3
+revision: 4
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, design rule 3.2 (the outcome weft records is what the place
-answered). Design: `docs/platform-ports.md` § 9, spec change S3, and § 6 C1 (refusal
+answered). Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 9, spec change S3, and § 6 C1 (refusal
 `CapacityExhausted`). Depends on `story:ports-machines-remove`.
 
 ## Context

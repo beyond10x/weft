@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:agent-workloads
 - serves: vision:weft
 - depends_on: story:agent-run-local-job
-revision: 1
+revision: 2
 ---
 # weft runs an Agent workload as a Loom agent
 
@@ -25,7 +25,7 @@ agent into a Loom agent". The spec already names the source kind `LoomAgent`
 - Agents that run a coding harness go through Metaharness behind an executor the host supplies
   (Loom's README): the executor runs inside the workload.
 - Model access goes through a gateway reached by a named egress destination; the model key is a
-  secret delivered at start (substrate gap 4, `docs/platform-ports.md` § 10).
+  secret delivered at start (substrate gap 4, `cloudspec@2ed72c2:docs/platform-ports.md` § 10).
 - `story:agent-run-local-job` runs a fixture runtime; this story replaces it with Loom.
 - The step agenticspec agent part -> cloudspec agent workload is cloudspec's
   (`translate-in-agenticspec`, `agent-workload-kind` in beyond10x/cloudspec); this story owns

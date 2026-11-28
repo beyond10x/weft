@@ -1,0 +1,9 @@
+format: ess/37
+system: demo
+version: v1
+
+summary: A one-entity model for the self-test of the generated-code cache (tools/test-generated.sh).
+
+domains:
+  - demo.shelf
+  - demo.actors

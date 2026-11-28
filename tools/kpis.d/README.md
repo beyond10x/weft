@@ -19,7 +19,7 @@ Contract of a hook:
   queue: the hook takes the time inside the job.
 - It is never part of `task check` or `task test`, and no file of `tools/check.d/`,
   `tools/test-setup.d/` or `tools/test-teardown.d/` calls it (test `ratchet::check_runs_no_kpi_hook`
-  of `tools/sim/tests/ratchet/mod.rs`).
+  of `product/cloud/crates/weft-testkit/tests/ratchet/mod.rs`).
 - A pool job ends within 10 minutes; one that needs longer names its time with
   `slot --timeout`, at most 30 minutes.
 

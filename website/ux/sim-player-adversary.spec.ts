@@ -1,8 +1,8 @@
-// Adversary cases for weft-sim's search player (`ux/fixtures/sim-player.html`): what the fixture
+// Adversary cases for cloudspec-sim's search player (`ux/fixtures/sim-player.html`): what the fixture
 // search does not reach. Its run has two axes of four short numbers, so the projection of a third
 // axis, an axis of `vars` maps (each value a map of variables, `experiment.rs` `Mutation`), an axis
 // of many values at the narrow viewport and the pickers' swap are never drawn by `sim-player.spec.ts`.
-// Each case gives the page a snapshot of its own through `window.weftPlayer.receive`.
+// Each case gives the page a snapshot of its own through `window.cloudspecPlayer.receive`.
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -46,7 +46,7 @@ async function open(page: Page): Promise<string[]> {
 }
 
 async function receive(page: Page, snap: unknown): Promise<void> {
-  await page.evaluate((s) => (window as unknown as { weftPlayer: { receive(s: unknown): void } }).weftPlayer.receive(s), snap);
+  await page.evaluate((s) => (window as unknown as { cloudspecPlayer: { receive(s: unknown): void } }).cloudspecPlayer.receive(s), snap);
 }
 
 /** A finished snapshot of the fixture run with `axes` and `rows` in place of its own. */

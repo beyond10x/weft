@@ -15,12 +15,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/cloud.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/local
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other ports designed, not built". Design:
-`docs/platform-ports.md` § 6 C2 (`edge`), § 8 (`local`: weft-edge on a loopback port). Depends on
+`cloudspec@2ed72c2:docs/platform-ports.md` § 6 C2 (`edge`), § 8 (`local`: weft-edge on a loopback port). Depends on
 `story:ports-node-endpoints-local` (backends need an inbound endpoint).
 
 ## Context

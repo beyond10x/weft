@@ -37,7 +37,7 @@
 //!   [`r4_record_placement_assigned`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2);
-//! - [`edge_backend_ready`] and [`edge_backend_restore`], ESS
+//! - [`edge_backend_ready`], [`edge_backend_restore`] and [`edge_backend_restarting`], ESS
 //!   `story:the-rust-dispatch-selects-a-binding-failure-policy-per-refusal-of-the-invoked-command-and-counts-attempts`
 //!   (E2).
 
@@ -51,6 +51,7 @@ use crate::log::BindingResult;
 use crate::{Ports, System};
 
 pub mod edge_backend_ready;
+pub mod edge_backend_restarting;
 pub mod edge_backend_restore;
 pub mod r1_create_replica;
 pub mod r1_submit_scheduling_request;
@@ -99,6 +100,7 @@ pub const ENTRIES: &[&Entry] = &[
     &r4_record_placement_assigned::ENTRY,
     &edge_backend_ready::ENTRY,
     &edge_backend_restore::ENTRY,
+    &edge_backend_restarting::ENTRY,
 ];
 
 /// One attempt of a binding: the line the control host logs for it.

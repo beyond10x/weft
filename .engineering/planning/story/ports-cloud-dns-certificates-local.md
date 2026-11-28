@@ -13,12 +13,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/cloud.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/local
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other ports designed, not built". Design:
-`docs/platform-ports.md` § 6 C3 (`dns`) and C4 (`certificates`), § 8 (`local`: names under
+`cloudspec@2ed72c2:docs/platform-ports.md` § 6 C3 (`dns`) and C4 (`certificates`), § 8 (`local`: names under
 `.localhost` only, proved by their form; a CA weft makes in the state directory of the control
 host). Depends on `story:ports-cloud-edge-local`.
 

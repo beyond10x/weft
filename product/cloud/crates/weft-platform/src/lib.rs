@@ -1,5 +1,5 @@
 //! weft-platform: the ports through which weft reaches the place it runs, and their adapters
-//! (`docs/platform-ports.md`). [`node`] holds the node-layer ports, [`local`] the adapters of
+//! (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md)). [`node`] holds the node-layer ports, [`local`] the adapters of
 //! the placement `local`, the only code that names substrate's SDK.
 
 use std::fmt;
@@ -7,7 +7,7 @@ use std::fmt;
 pub mod local;
 pub mod node;
 
-/// The refusals every port shares (`docs/platform-ports.md` § 3.4).
+/// The refusals every port shares (cloudspec's [`docs/platform-ports.md`](https://github.com/beyond10x/cloudspec/blob/2ed72c2866bbd165da2de75250b2bfcb340a96ae/docs/platform-ports.md) § 3.4).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
     /// The place did not answer; transient, the step tries again on its next tick.

@@ -21,7 +21,7 @@ scope:
   path: tools/sim/tests/ratchet/mod.rs
 - confidence: inferred
   path: website/ux/fixtures/sim-player.html
-revision: 11
+revision: 12
 ---
 ## Epic
 
@@ -33,8 +33,8 @@ Order: fifth link of the one chain of `depends_on` edges over the shared weft-si
 surfaces (`story:kpi-repository` -> `story:anim-search-record` -> `story:anim-search-player` ->
 `story:anim-point-replay` -> this story -> `story:kpi-specification` -> `story:kpi-platform-gates`
 -> `story:kpi-flat-searches` -> `story:kpi-simulator` -> `story:kpi-ci-runs` ->
-`story:kpi-docs-site`). It depends on `story:anim-point-replay`: `tools/sim/src/simulate.rs` and
-`tools/sim/tests/main.rs` are edited before it by `story:kpi-repository` and the three `anim-`
+`story:kpi-docs-site`). It depends on `story:anim-point-replay`: `cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs` and
+`cloudspec@2ed72c2:crates/cloudspec-sim/tests/main.rs` are edited before it by `story:kpi-repository` and the three `anim-`
 stories. `quality/assessors/weft-sim-report@1.assessor.yaml` is edited after it by
 `story:kpi-specification`, `story:kpi-platform-gates` and `story:kpi-flat-searches`.
 
@@ -47,7 +47,7 @@ an output for every `Kpis` field in `weft-sim-report@1`.
 
 ## Context
 
-- `tools/sim/src/simulate.rs:231` `struct Kpis` holds the per-run counts; `Kpis::get`
+- `cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs:231` `struct Kpis` holds the per-run counts; `Kpis::get`
   (`simulate.rs:262`) reads a field by its KPI name with `-` for `_`, and `fitness`
   (`simulate.rs:1511`) makes a point infeasible when a `search.gates` KPI is not 0.
 - `design:quality-kpis` § 2 names the missing fields; `design:simulation-and-kpis` § KPIs names
@@ -76,7 +76,7 @@ Definitions (taken here; each is a deterministic count per seed):
   infeasible when the chain stopped early, under the existing "gate is 0" rule.
 
 Test of the declaration: `ratchet::every_kpis_field_is_a_declared_output` in
-`tools/sim/tests/ratchet/mod.rs` (the module of `story:kpi-repository`) enumerates the fields of
+`cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs` (the module of `story:kpi-repository`) enumerates the fields of
 `Kpis` from its JSON form and holds each one to an output of `weft-sim-report@1`, the direction
 `ratchet::the_ratchet_file_is_consistent` (measurement to declared output) does not cover. The
 new fields change the search rows of the fixture page that the Rust test of
@@ -121,7 +121,7 @@ again with the command that test names.
    (a weft-sim test, `task sim-test`).
 8. `weft-sim-report@1.assessor.yaml` declares one output for every field of `Kpis`, the new ones
    included, with its value type, kind and unit: `ratchet::every_kpis_field_is_a_declared_output`
-   (new, in `tools/sim/tests/ratchet/mod.rs`) enumerates the keys of
+   (new, in `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs`) enumerates the keys of
    `serde_json::to_value(weft_sim::simulate::Kpis::default())` and fails naming each key the
    declaration has no output for; it passes on the tree and fails on a copy of the declaration
    with the `instances_lost` output removed (`task sim-test`).

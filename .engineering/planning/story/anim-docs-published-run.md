@@ -38,7 +38,7 @@ scope:
   path: website/ux/baseline.json
 - confidence: inferred
   path: website/ux/published-search.spec.ts
-revision: 10
+revision: 11
 ---
 ## Epic
 
@@ -70,7 +70,7 @@ Order:
 The docs site (`website/`, Docusaurus, published at the `/weft/` base URL by
 `.github/workflows/pages.yml`) has a weft-sim section (`website/sidebars.ts`: `simulator/install`,
 `simulator/run`, `simulator/results`). It shows no search. weft-sim already writes a page that
-needs no server: `index.html` of a run, with the snapshot inlined (`tools/sim/src/report.rs:267`).
+needs no server: `index.html` of a run, with the snapshot inlined (`cloudspec@2ed72c2:crates/cloudspec-sim/src/report.rs:267`).
 
 - The run: a committed experiment with `search.mode: fit` over at least two mutation axes, whose
   recorded run holds at least one `accepted` move, one `rejected` neighbour and one `restart`, and a
@@ -91,13 +91,13 @@ needs no server: `index.html` of a run, with the snapshot inlined (`tools/sim/sr
   `ratchet/references/`. `epic:search-animation` allows exactly that ("Not in this epic"); any
   other KPI or ratchet change stays in `epic:kpi-ratchet`. The tests that hold the rule for every
   experiment are those of `story:kpi-platform-gates` and `story:kpi-flat-searches` in
-  `tools/sim/tests/ratchet/mod.rs`; they enumerate `sim/experiments/`, so they cover the new file
+  `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs`; they enumerate `sim/experiments/`, so they cover the new file
   without a change.
 - `website/ux/baseline.json` gets the values of the new page `/docs/simulator/search` for every
   key the harness of `story:docs-ux-harness` measures, so its ratchet finds no missing value.
 - `task sim-publish` (in `Taskfile.yml`): builds weft-sim, runs that experiment with a fixed seed
   and relative paths, copies its `index.html` to `website/static/weft-sim/search/index.html`, and
-  fails when `tools/sim-publish-check.sh <file>` (POSIX sh) finds an absolute file path or a URL
+  fails when `cloudspec@2ed72c2:crates/cloudspec-sim-publish-check.sh <file>` (POSIX sh) finds an absolute file path or a URL
   the page would load in that file. It writes
   `website/static/weft-sim/search/recording.json` with `experiment`, `seed` and `commit`, the
   last being `git rev-parse HEAD` at record time: the commit the run was recorded from, before the
@@ -129,14 +129,14 @@ needs no server: `index.html` of a run, with the snapshot inlined (`tools/sim/sr
 None of `ess/`.
 
 - Published page to recorded run, one-to-one: the page holds one run, and the docs page names its
-  experiment, seed and commit. Inferable (inferred from `tools/sim/src/report.rs:267`, `page`
+  experiment, seed and commit. Inferable (inferred from `cloudspec@2ed72c2:crates/cloudspec-sim/src/report.rs:267`, `page`
   inlines one snapshot into one page).
 
 ## Scope
 
 - `sim/experiments/node-loss-climb.yaml` (new; working name)
 - `Taskfile.yml` (task `sim-publish`)
-- `tools/sim-publish-check.sh` (new, the check of the written page)
+- `cloudspec@2ed72c2:crates/cloudspec-sim-publish-check.sh` (new, the check of the written page)
 - `website/static/weft-sim/search/index.html` (the recorded page)
 - `website/static/weft-sim/search/recording.json` (new: experiment, seed, commit of the recording)
 - `website/docs/simulator/search.md` (new page)
@@ -174,7 +174,7 @@ spec.
    `website/static/weft-sim/search/recording.json` (`published-search.spec.ts`, test "recording
    named"), and names the `task sim-publish` command (`grep -n 'task sim-publish'
    website/docs/simulator/search.md` prints a line).
-7. `tools/sim-publish-check.sh`, the check `task sim-publish` runs on the page it writes, exits 1
+7. `cloudspec@2ed72c2:crates/cloudspec-sim-publish-check.sh`, the check `task sim-publish` runs on the page it writes, exits 1
    on a copy of the recorded page with an absolute local path (a fixture string built in the test from `$HOME`) inserted, exits 1 on a copy with
    `<script src="https://example.org/a.js"></script>` inserted, and exits 0 on the committed
    page; `grep -n 'sim-publish-check.sh' Taskfile.yml` prints the line of the task that calls it.

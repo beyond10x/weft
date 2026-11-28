@@ -10,7 +10,7 @@ relations:
 - depends_on: story:agent-package-settings
 - depends_on: story:skeleton-node-run-assignment
 - depends_on: story:ports-node-exec-facts
-revision: 1
+revision: 2
 ---
 ## Epic
 
@@ -18,7 +18,7 @@ Decomposes `epic:agent-workloads`, outcome 1 and acceptance 2: one `Agent` packa
 on the `local` placement. Depends on `story:agent-package-settings` (the settings it runs from),
 `story:skeleton-node-run-assignment` (weft-agent follows an assignment and records the instance
 running) and `story:ports-node-exec-facts` (the `exec` port a process that ends runs through,
-`docs/platform-ports.md` § 8). A persistent agent (shape Service) needs a process that runs until
+`cloudspec@2ed72c2:docs/platform-ports.md` § 8). A persistent agent (shape Service) needs a process that runs until
 stopped: it waits for `story:ports-node-workloads-local` and is not part of this story.
 
 ## Context

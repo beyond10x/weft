@@ -1,18 +1,21 @@
 version: '3'
 
+vars:
+  CLOUDSPEC_REV: 2ed72c2866bbd165da2de75250b2bfcb340a96ae
+  CLOUDSPEC_SIM: target/cloudspec-sim/bin/cloudspec-sim
+
 tasks:
   default:
     cmds: [{task: check}]
 
   check:
-    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter, check the docs claims, test weft-sim, test the root workspace, self-test the test budget, then the hooks of tools/check.d.
+    desc: The gate, locally and in CI. Validate the ESS specification, hold its layers and its stamped time, test the CI path filter, check the docs claims, test the root workspace, self-test the test budget, then the hooks of tools/check.d.
     cmds:
       - task: spec
       - task: layers
       - task: stamped-time
       - task: ci-paths
       - task: docs-check
-      - task: sim-test
       - task: test
       - task: gate-budget
       - tools/run-hooks.sh tools/check.d
@@ -81,45 +84,39 @@ tasks:
     cmds:
       - tools/check-domain.sh {{.CLI_ARGS}}
 
-  sim-build:
-    desc: Build weft-sim (tools/sim), the in-memory explorer and simulator.
-    dir: tools/sim
+  sim-install:
+    desc: Install cloudspec-sim, the in-memory explorer and simulator (crates/cloudspec-sim of beyond10x/cloudspec), at the revision CLOUDSPEC_REV into target/cloudspec-sim. Fetches from GitHub; never part of check. A second run with the same revision installs nothing.
     cmds:
-      - cargo build
-
-  sim-test:
-    desc: Test weft-sim. Builds the test binary first; then a test over 60 s is killed and the test step over 120 s fails.
-    dir: tools/sim
-    cmds:
-      - cargo nextest run --no-run
-      - timeout 120 cargo nextest run
+      - cargo install --git https://github.com/beyond10x/cloudspec --rev {{.CLOUDSPEC_REV}} cloudspec-sim --locked --root target/cloudspec-sim
 
   sim-explore:
     desc: Explore the whole spec (measures; runs without slot). Usage, task sim-explore -- --serve
-    deps: [sim-build]
+    deps: [sim-install]
     cmds:
-      - tools/sim/target/debug/weft-sim explore --spec ess --seed 1 --walks 2048 --steps 300 --threads 8 --out sim/out/explore {{.CLI_ARGS}}
+      - '{{.CLOUDSPEC_SIM}} explore --spec ess --seed 1 --walks 2048 --steps 300 --threads 8 --out sim/out/explore {{.CLI_ARGS}}'
 
   sim-explore-from:
     desc: Explore with every walk starting from the full setup, settled by its controllers (measures; runs without slot).
-    deps: [sim-build]
+    deps: [sim-install]
     cmds:
-      - tools/sim/target/debug/weft-sim explore --spec ess --seed 1 --walks 1024 --steps 300 --threads 8 --from sim/experiments/full-setup.yaml --settle 12 --out sim/out/explore-from {{.CLI_ARGS}}
+      - '{{.CLOUDSPEC_SIM}} explore --spec ess --seed 1 --walks 1024 --steps 300 --threads 8 --from sim/experiments/full-setup.yaml --settle 12 --out sim/out/explore-from {{.CLI_ARGS}}'
 
   sim-explore-ticks:
     desc: As sim-explore-from, with 1 step in 10 a tick of the setup's controllers; few walks, a tick costs about 1 s (measures; runs without slot).
-    deps: [sim-build]
+    deps: [sim-install]
     cmds:
-      - tools/sim/target/debug/weft-sim explore --spec ess --seed 1 --walks 32 --steps 300 --threads 8 --from sim/experiments/full-setup.yaml --settle 12 --controller-share 0.1 --out sim/out/explore-ticks {{.CLI_ARGS}}
+      - '{{.CLOUDSPEC_SIM}} explore --spec ess --seed 1 --walks 32 --steps 300 --threads 8 --from sim/experiments/full-setup.yaml --settle 12 --controller-share 0.1 --out sim/out/explore-ticks {{.CLI_ARGS}}'
 
   sim-experiments:
     desc: Run every experiment in sim/experiments (measures; runs without slot).
-    deps: [sim-build]
+    deps: [sim-install]
     cmds:
-      - for f in sim/experiments/*.yaml; do n=$(basename "$f" .yaml); tools/sim/target/debug/weft-sim simulate --spec ess --experiment "$f" --out "sim/out/$n" {{.CLI_ARGS}} || exit 1; done
+      - for f in sim/experiments/*.yaml; do n=$(basename "$f" .yaml); {{.CLOUDSPEC_SIM}} simulate --spec ess --experiment "$f" --out "sim/out/$n" {{.CLI_ARGS}} || exit 1; done
 
   sim-relations:
     desc: Check the metamorphic relations of hardening pass 3 on the full setup (tools/sim-relations.sh; measures; runs without slot).
-    deps: [sim-build]
+    deps: [sim-install]
+    env:
+      CLOUDSPEC_SIM: '{{.CLOUDSPEC_SIM}}'
     cmds:
       - tools/sim-relations.sh

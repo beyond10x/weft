@@ -31,7 +31,10 @@ none is written before the specification of what it implements.
   writes `target/generated/`, cached by the digest of its sources. Crates use it through path dependencies, so a cargo
   command in the root workspace fails with "failed to read
   `.../target/generated/crates/<crate>/Cargo.toml`" until `tools/synth.sh` has run once;
-  `task test` runs it first.
+  `task test` runs it first. A slot build node never receives the build directory (git-ignored paths are
+  not synced), so a node job that runs cargo runs the hook in the same job:
+  `slot sh -c 'tools/test-setup.d/10-generated.sh && cargo …'`, or a `task` target that runs it.
+  Read a job's exit code from slot itself: a `| tail` or `; echo` after it reports its own code.
 - `ess/`: the ESS domain model. `system.yaml`, `ess-inputs.yaml`, `components.yaml`,
   `<layer>/<name>.yaml` (one bounded context per file, one directory per layer, `docs/layers.md`).
   A domain names only domains of its own or a lower layer. Between domains it declares the
@@ -53,9 +56,17 @@ none is written before the specification of what it implements.
   acknowledge). A change to `ess/` makes that file stale: review the change, then acknowledge
   again. Run by
   `tools/check.d/50-spec-diff` in `task check` (hardening pass 3).
+- The simulator is `cloudspec-sim`, a crate of cloudspec
+  ([crates/cloudspec-sim](https://github.com/beyond10x/cloudspec/tree/2ed72c2866bbd165da2de75250b2bfcb340a96ae/crates/cloudspec-sim));
+  it was weft-sim in this repository until 2026-11-28, and cloudspec tests it. `task sim-install`
+  installs it at the revision `CLOUDSPEC_REV` of `Taskfile.yml` (the one place of the pin) under
+  target/cloudspec-sim; the `sim-*` tasks depend on it and pass `--spec ess` (its default is
+  `blocks`). It fetches from GitHub, so `task check` never runs it. weft keeps its inputs:
+  `sim/experiments/` (format `weft-sim-experiment/1`, which cloudspec-sim reads) and
+  `sim/relations/`.
 - `tools/sim-relations.sh [spec dir]` (`task sim-relations`): the metamorphic relations of
-  hardening pass 3, `weft-sim relate` from the full setup; steps in `sim/relations/`. Measures, so
-  it runs without `slot`.
+  hardening pass 3, `cloudspec-sim relate` from the full setup; steps in `sim/relations/`.
+  Measures, so it runs without `slot`.
 - `tools/kpis.sh` (`task kpis`): prints the KPIs of `design:quality-kpis` measured on this
   machine, one line each with its value, unit and command, from the hooks of `tools/kpis.d/`
   (contract in its `README.md`). Measures, so it runs without `slot`; its hooks put the prefix on
@@ -64,9 +75,9 @@ none is written before the specification of what it implements.
 - `quality/ratchet.yaml`: the KPIs as a `ratchet/1` plan, with assessor declarations in
   `quality/assessors/` and accepted values in `ratchet/references/<requirement>.json`
   (`ratchet-reference/1`, written by hand until `ratchet reference adopt` runs). The test
-  `ratchet::the_ratchet_file_is_consistent` in `task sim-test` holds the three together; a new KPI
+  `ratchet::the_ratchet_file_is_consistent` in `task test` holds the three together; a new KPI
   adds a measurement, its requirement, its record when it is a ratchet, and a test of its own in
-  `tools/sim/tests/ratchet/mod.rs`.
+  `product/cloud/crates/weft-testkit/tests/ratchet/mod.rs`.
 - `tools/synth-domain.sh [--snapshot] <name> [paths]`: synthesizes the conformance suite of one
   domain on the subset of domains it needs (about 80 s; the whole system takes 451 s) and runs it
   against the interpreted target. Synthesis goes through `slot` with `--jobs 2`, one run at a time

@@ -4,7 +4,9 @@
 //! test step. The helpers are public so that each `kpi-` story calls them with its own list.
 //!
 //! The module is `tests/ratchet/mod.rs`, not `tests/ratchet.rs`: cargo builds every `tests/*.rs`
-//! as a test binary of its own, and weft-sim has one (`tests/main.rs`).
+//! as a test binary of its own, and weft-testkit has one (`tests/main.rs`). The module came from
+//! weft-sim's tests when weft-sim moved to cloudspec as cloudspec-sim; cloudspec does not test
+//! weft's files.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -13,13 +15,13 @@ use serde_json::Value;
 
 /// The repository root.
 pub fn root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    weft_testkit::repo_root()
 }
 
 /// A YAML file as a JSON value.
 pub fn yaml(path: &Path) -> Value {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
-    ess_yaml::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    serde_norway::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
 /// `quality/ratchet.yaml`.
@@ -448,7 +450,7 @@ fn the_ratchet_file_is_consistent() {
     );
 
     // A fixture: two requirements, one with a record; each defect class broken once.
-    let fixture: Value = ess_yaml::from_str(
+    let fixture: Value = serde_norway::from_str(
         "
 subjects: {s: {kind: codebase}}
 assessments:
@@ -847,7 +849,7 @@ fn adv_repository_hook_says_unavailable_when_git_cannot_read_the_tree() {
         &[
             PIN,
             (
-                "tools/sim/rust-toolchain.toml",
+                "tools/other/rust-toolchain.toml",
                 "[toolchain]\nchannel = \"1.0.0\"\n",
             ),
             ("tools/x.py", "print(1)\n"),
@@ -874,18 +876,16 @@ fn adv_repository_hook_says_unavailable_when_git_cannot_read_the_tree() {
     );
 }
 
-/// The hook's branch "cargo metadata failed": cargo metadata of tools/sim fails while the root's
-/// succeeds (one crate, one test target). The KPI is the most over both workspaces, so it is
-/// `unavailable`, not the root's 1; with both failing, not `null`.
+/// The hook's branch "cargo metadata failed": with cargo metadata of the root failing, the KPI is
+/// `unavailable`, not `null` and not a guessed 0. The control: the same tree with a cargo that
+/// answers one crate with one test target counts 1.
 #[test]
 fn adv_repository_hook_says_unavailable_when_cargo_metadata_fails() {
     let root_meta = r#"{"packages":[{"name":"a","targets":[{"kind":["test"],"name":"main"}]}]}"#;
-    let dir = hook_fixture("cargo-sim-fails", &[PIN], true);
-    let stub = format!(
-        "case \"$*\" in *--manifest-path*) echo 'error: failed to parse manifest' >&2; exit 101;; esac\necho '{root_meta}'"
-    );
+    let dir = hook_fixture("cargo-answers", &[PIN], true);
+    let stub = format!("echo '{root_meta}'");
     let v = run_repository_hook(&dir, &[("cargo", &stub)]);
-    let half = v.get("repo.test-binaries-per-crate").cloned();
+    let counted = v.get("repo.test-binaries-per-crate").cloned();
 
     let dir = hook_fixture("cargo-fails", &[PIN], true);
     let v = run_repository_hook(
@@ -897,9 +897,9 @@ fn adv_repository_hook_says_unavailable_when_cargo_metadata_fails() {
     );
     let none = v.get("repo.test-binaries-per-crate").cloned();
     assert_eq!(
-        (half.as_deref(), none.as_deref()),
-        (Some("unavailable"), Some("unavailable")),
-        "(tools/sim fails, both fail)"
+        (counted.as_deref(), none.as_deref()),
+        (Some("1"), Some("unavailable")),
+        "(cargo answers, cargo fails)"
     );
 }
 
