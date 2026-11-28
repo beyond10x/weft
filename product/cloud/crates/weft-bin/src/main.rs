@@ -14,12 +14,14 @@
 //! (exit 1); what opening repaired in the log is written to stderr.
 //!
 //! The same listener serves the node channel under `/node/` ([`node_channel`]): the node agent
-//! dials it. Cloudspec submissions are taken under `/cloudspec/` ([`cloudspec`]).
+//! dials it. Cloudspec submissions are taken, and the plans of their sources applied
+//! ([`cloudspec_apply`]), under `/cloudspec/` ([`cloudspec`]).
 //!
 //! Every `--tick-ms` milliseconds (default 200, at least 1) the controllers run once
 //! ([`weft_bin::Host::tick`]) under the same lock as the requests.
 
 mod cloudspec;
+mod cloudspec_apply;
 mod node_channel;
 
 use std::io::Write;
