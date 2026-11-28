@@ -8,7 +8,9 @@
 //! - the end of a pass over the work list: `{"pass": <n>}`, `n` counting from 1
 //!   ([`Report::pass`]);
 //! - a finished process: `{"instance_id": "...", "exit_code": <code or null>, "stdout": "..."}`,
-//!   its exit code (`null` when a signal ended it) and its output as text ([`Report::exited`]).
+//!   its exit code (`null` when a signal ended it) and its output as text ([`Report::exited`]);
+//! - a start of a process refused and not made again: `{"instance_id": "...", "refusal":
+//!   "<code>"}`, the place's code or the exec port's ([`Report::refused`]).
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -76,5 +78,15 @@ impl Report {
             "exit_code": exited.code,
             "stdout": String::from_utf8_lossy(&exited.stdout),
         }))
+    }
+
+    /// The exec port refused a start of a process of `instance_id` with `code`, and the agent
+    /// does not start it again.
+    ///
+    /// # Errors
+    ///
+    /// What the file system refuses.
+    pub fn refused(&mut self, instance_id: &str, code: &str) -> io::Result<()> {
+        self.line(&json!({"instance_id": instance_id, "refusal": code}))
     }
 }

@@ -1,5 +1,7 @@
 //! The one integration-test binary of weft-agent.
 
+mod follow_adversary;
+mod follow_bookkeeping;
 mod seeds;
 
 /// `join` (`story:skeleton-node-join-session`): `weft-agent` joins the node `ProvisionPoolNode`

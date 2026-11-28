@@ -22,7 +22,7 @@ use weft_types::shared::{
     AccountId, ArtifactDigest, AssignmentId, CloudId, ComponentName, EnvironmentId, FormationId,
     FormationRevisionId, InstanceId, IsolationFacts, IsolationLevel, NodeId, NodeSessionId,
     PlacementDecisionId, PriorityClassName, ProcessName, ResourceAmount, ResourceClassName,
-    RuntimeId, WorkloadId, ZoneName,
+    RuntimeId, ServiceId, WorkloadId, ZoneName,
 };
 use weft_types::workloads::{
     DesiredRun, InstanceData, InstanceHealth, InstanceSnapshot, InstanceState, PackageKind,
@@ -81,6 +81,40 @@ pub fn two_nodes() -> Seed {
         this,
         other,
     }
+}
+
+/// The seed of [`two_nodes`] with this node's instance row changed by `change`.
+pub fn two_nodes_changed(change: impl FnOnce(&mut InstanceSnapshot)) -> Seed {
+    let mut seed = two_nodes();
+    let instance = seed
+        .rows
+        .iter_mut()
+        .find_map(|row| match row {
+            Row::Instance(instance) if instance.data.instance_id.0 .0 == seed.this.instance_id => {
+                Some(instance)
+            }
+            _ => None,
+        })
+        .expect("this node's instance is seeded");
+    change(instance);
+    seed
+}
+
+/// A `Main` process running `sh -c <snippet>`, named `name`.
+pub fn process(name: &str, snippet: &str) -> Process {
+    Process {
+        name: ProcessName(name.to_owned()),
+        role: ProcessRole::Main,
+        artifact_digest: None,
+        command: vec!["sh".to_owned(), "-c".to_owned(), snippet.to_owned()],
+        environment: BTreeMap::new(),
+        checks: Vec::new(),
+    }
+}
+
+/// A new service identifier.
+pub fn service_id() -> ServiceId {
+    ServiceId(Uuid(mint()))
 }
 
 fn id<T>(wrap: impl FnOnce(Uuid) -> T, text: &str) -> T {

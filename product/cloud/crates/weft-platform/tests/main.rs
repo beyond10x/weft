@@ -1233,6 +1233,28 @@ mod ports_classes {
         }
     }
 
+    /// `Limits::LONGEST`, what `weft-agent` gives a `Service` replica (`story:skeleton-node-run-
+    /// assignment`), is substrate's most, and an exec with it as its `timeout` and `cpu_time`
+    /// runs to `exited`.
+    #[test]
+    fn the_longest_limits_are_the_place_s_most_and_are_accepted() {
+        assert_eq!(Limits::LONGEST, MAX_EXEC_DURATION);
+        let confine = Confine::connect(&socket()).expect("the daemon answers");
+        let ended = confine.run(
+            &Process::new(["sh", "-c", "echo weft"]).limits(Limits {
+                timeout: Limits::LONGEST,
+                cpu_time: Limits::LONGEST,
+                ..Limits::default()
+            }),
+            &mut |_| {},
+        );
+        let exited = ended.expect("an exec with the longest limits runs");
+        assert_eq!(
+            (exited.code, exited.stdout.as_slice()),
+            (Some(0), b"weft\n".as_slice())
+        );
+    }
+
     /// Each fact of the exec floor, withheld alone, takes the level `Container` away; the
     /// machine of the real daemon, answered unchanged by the stand-in, keeps it.
     #[test]
