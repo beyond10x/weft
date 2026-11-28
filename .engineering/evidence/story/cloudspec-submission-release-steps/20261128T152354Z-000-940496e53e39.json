@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-28T15:23:54Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-release-steps",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI gate on weft#37, merged 08d0808; main Gate run 46158756216 success",
+    "reference": "https://github.com/beyond10x/weft/actions/runs/46158756216"
+  }
+}

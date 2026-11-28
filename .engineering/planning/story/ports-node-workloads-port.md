@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ports-node-workloads-port
 kind: story
-status: active
+status: implemented
 title: The Workloads port and an in-memory stub adapter, before any substrate adapter
 relations:
 - decomposes: epic:platform-ports
@@ -14,10 +14,11 @@ scope:
   path: product/cloud/crates/weft-platform/src/node.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/tests/main.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T14:29:24Z", actor: "human:operator", revision: 5, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T14:29:24Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T15:24:40Z", actor: "human:operator", revision: 7, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 
