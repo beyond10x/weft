@@ -23,12 +23,12 @@ scope:
   path: product/cloud/crates/weft-testkit/Cargo.toml
 - confidence: cited
   path: product/cloud/crates/weft-testkit/src/node_agent.rs
-revision: 3
+revision: 4
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, acceptance 3 (the machines port makes a node). Design:
-`docs/platform-ports.md` § 6 C1 (`machines`) and § 12.3. Depends on `story:ports-node-exec-facts`
+`cloudspec@2ed72c2:docs/platform-ports.md` § 6 C1 (`machines`) and § 12.3. Depends on `story:ports-node-exec-facts`
 (the crate and its shared refusals).
 
 ## Context

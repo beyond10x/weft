@@ -13,12 +13,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/cloud.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/local
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other ports designed, not built". Design:
-`docs/platform-ports.md` § 6 C5 (`objects`), § 8 (`local`: a directory under the state directory
+`cloudspec@2ed72c2:docs/platform-ports.md` § 6 C5 (`objects`), § 8 (`local`: a directory under the state directory
 of the control host). Depends on `story:ports-spec-step-block` (the C5 step line and the grant of
 `ReportBucketProvisioned` to ControlPlane).
 

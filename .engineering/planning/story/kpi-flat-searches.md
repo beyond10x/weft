@@ -31,7 +31,7 @@ scope:
   path: tools/sim/tests/ratchet/mod.rs
 - confidence: inferred
   path: website/ux/fixtures/sim-player.html
-revision: 11
+revision: 12
 ---
 ## Epic
 
@@ -45,8 +45,8 @@ surfaces (`story:kpi-repository` -> `story:anim-search-record` -> `story:anim-se
 `story:kpi-platform-gates` -> this story -> `story:kpi-simulator` -> `story:kpi-ci-runs` ->
 `story:kpi-docs-site`). Before it, `story:kpi-specification` and `story:kpi-platform-gates` edit
 `quality/ratchet.yaml` and `quality/assessors/weft-sim-report@1.assessor.yaml`, and the
-`anim-` stories and `story:kpi-sim-fields` edit `tools/sim/src/simulate.rs`,
-`tools/sim/src/page.html` and `tools/sim/tests/main.rs`; after it `story:kpi-simulator` edits
+`anim-` stories and `story:kpi-sim-fields` edit `cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs`,
+`cloudspec@2ed72c2:crates/cloudspec-sim/src/page.html` and `cloudspec@2ed72c2:crates/cloudspec-sim/tests/main.rs`; after it `story:kpi-simulator` edits
 `quality/ratchet.yaml` (the chain gives it a `depends_on` edge to this story).
 
 The spread is taken on the search semantics of `story:anim-search-record`, which comes before this
@@ -70,7 +70,7 @@ failed requirement.
 - `sim.search-fitness-spread` (§ weft-sim itself): max minus min fitness over a search’s feasible
   points, a report today; baselines 0 (duplicate-delivery, cluster-pool-lifecycle), 10 node-loss,
   612 stuck-placement, 420 full-setup.
-- The experiment format refuses unknown fields (`tools/sim/src/experiment.rs`,
+- The experiment format refuses unknown fields (`cloudspec@2ed72c2:crates/cloudspec-sim/src/experiment.rs`,
   `#[serde(deny_unknown_fields)]`), so a marker in a file needs a field weft-sim parses.
 
 Shape (taken here):
@@ -89,7 +89,7 @@ Shape (taken here):
   `merge` gate that it is above 0 for every experiment not marked exhaustive-only.
 - `tools/kpis.d/45-search.sh` prints `sim.search-fitness-spread` per experiment with its command,
   reading the results `task sim-experiments` wrote.
-- Tests in `tools/sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
+- Tests in `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs` (the module and helpers of `story:kpi-repository`,
   file-only, `task sim-test`): `ratchet::every_search_spread_is_measured` (every file of
   `sim/experiments/` with a `search:` block has a measurement of `sim.search-fitness-spread` in
   its assessment), `ratchet::every_unmarked_search_requires_a_spread` (each such experiment

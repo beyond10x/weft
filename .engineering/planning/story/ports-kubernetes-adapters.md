@@ -11,12 +11,12 @@ relations:
 scope:
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/kubernetes
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other adapters (hosts, aws, kubernetes) are designed,
-not built". Design: `docs/platform-ports.md` § 8, column `kubernetes`, § 10 gap 11 and § 11.
+not built". Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 8, column `kubernetes`, § 10 gap 11 and § 11.
 Depends on `story:ports-spec-placement`. Outside the first build: it waits for exec on the
 Kubernetes namespace driver on an enforcing network plugin (substrate gap 11) and for the
 connectors gap of design § 11 (whether the Kubernetes provider writes pods).

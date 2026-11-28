@@ -34,7 +34,7 @@ scope:
   path: website/docs/specification/read.md
 - confidence: cited
   path: website/docs/specification/validate.md
-revision: 6
+revision: 7
 ---
 ## Epic
 
@@ -43,7 +43,7 @@ Decomposes `epic:docs-fidelity`, the KPI `docs.commands-refused` of outcome 1. D
 
 Order:
 
-- `story:anim-point-replay`: it edits the one `USAGE` text of `tools/sim/src/main.rs` (the replay
+- `story:anim-point-replay`: it edits the one `USAGE` text of `cloudspec@2ed72c2:crates/cloudspec-sim/src/main.rs` (the replay
   of a search point) that `website/data/cli/weft-sim.txt` mirrors, and `run.md`; this story
   writes the snapshot after it.
 - `story:docs-figures` (`specification/layers.md`) and `story:docs-figure-search-animation`
@@ -57,7 +57,7 @@ Order:
 `design:quality-kpis`: `docs.commands-refused`, a command line in the docs that the named binary
 refuses (unknown flag, unknown subcommand); "needs a checker over code blocks". On 2026-11-27 the
 `$ ` lines of `website/docs` call `ess` (3), `weft-sim` (5 on `PATH`, 3 as
-`tools/sim/target/debug/weft-sim`), `task` (5), `tools/check-layers.sh` (2),
+`cloudspec@2ed72c2:crates/cloudspec-sim/target/debug/weft-sim`), `task` (5), `tools/check-layers.sh` (2),
 `tools/check-stamped-time.sh` (2), and `git`, `cd`, `cargo` once or twice each.
 
 The docs build of `pages.yml` has neither `ess` nor a weft-sim binary, and building weft-sim there
@@ -66,7 +66,7 @@ has both binaries, holds that text equal to the binaries:
 
 - `website/data/cli/ess.txt`: the `--help` output of every `ess` subcommand path the docs use
   (`ess specify validate`, ...), headed by `ess --version`. `website/data/cli/weft-sim.txt`: the
-  output of `weft-sim --help` (one `USAGE` text in `tools/sim/src/main.rs`).
+  output of `weft-sim --help` (one `USAGE` text in `cloudspec@2ed72c2:crates/cloudspec-sim/src/main.rs`).
 - Hook `tools/docs-check.d/50-commands.sh` reads every `$ ` line of `shell-session`, `console`,
   `shell`, `sh` and `bash` blocks in `website/docs`, and refuses: an `ess` or `weft-sim`
   subcommand or `--flag` the help text does not list; a `task <name>` that `Taskfile.yml` does not
@@ -75,7 +75,7 @@ has both binaries, holds that text equal to the binaries:
   programs (`git`, `cd`, `cargo`) are counted as unchecked and printed, not refused. It prints
   `docs.commands-refused <n>`.
 - Hook `tools/check.d/20-cli-snapshots.sh` (run by `slot task check`): fails unless `ess --version`
-  is the version `ess/ess-inputs.yaml` requires; builds weft-sim with `cargo build` in `tools/sim`
+  is the version `ess/ess-inputs.yaml` requires; builds weft-sim with `cargo build` in `cloudspec@2ed72c2:crates/cloudspec-sim`
   when the binary is absent (shimmed through slot inside the gate job); regenerates both help files
   under `target/` and compares bytes with the committed ones. A weft-sim change that drops a flag
   the docs use thus fails the gate until the help file and the page follow.
@@ -109,7 +109,7 @@ None. This story touches no entity of `ess/`.
 
 1. `tools/check-docs.sh` on the tree prints `docs.commands-refused 0`.
 2. The docs job of `pages.yml` installs no `ess` and builds no weft-sim:
-   `grep -nE 'ess-[0-9]|beyond10x/ess|cargo (build|install)|tools/sim' .github/workflows/pages.yml`
+   `grep -nE 'ess-[0-9]|beyond10x/ess|cargo (build|install)|cloudspec@2ed72c2:crates/cloudspec-sim' .github/workflows/pages.yml`
    prints nothing.
 3. The log of the docs job of `pages.yml` on this story's pull request shows the line
    `docs.commands-refused 0`.

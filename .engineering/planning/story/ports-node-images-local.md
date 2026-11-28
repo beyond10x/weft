@@ -15,12 +15,12 @@ scope:
   path: product/cloud/crates/weft-platform/src/local/substrate.rs
 - confidence: cited
   path: product/cloud/crates/weft-platform/src/node.rs
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, epic scope "other ports designed, not built". Design:
-`docs/platform-ports.md` § 5 N6 (`images`), § 8, § 10 gap 5. Depends on
+`cloudspec@2ed72c2:docs/platform-ports.md` § 5 N6 (`images`), § 8, § 10 gap 5. Depends on
 `story:ports-cloud-objects-local` (the bytes come from the `objects` port). Outside the first
 build: it starts when substrate makes a root filesystem from a content-addressed archive without a
 Docker daemon (gap 5).

@@ -8,7 +8,7 @@ relations:
 - decomposes: epic:platform-ports
 - serves: vision:weft
 - depends_on: story:contract-providers
-revision: 1
+revision: 2
 ---
 ## Epic
 
@@ -30,7 +30,7 @@ cloudspec (requested from the cloudspec session the same minute as a contract,
   (`ess/3-resources/artifacts.yaml`); kind `Image` is "an OCI image by digest"
   (`docs/domain-sketch.md:228`).
 - N6 `images` prepares a root filesystem from an artifact's bytes in C5 `objects`, digest checked
-  on the node (`docs/platform-ports.md` § N6); images "are recorded by observed digest even when
+  on the node (`cloudspec@2ed72c2:docs/platform-ports.md` § N6); images "are recorded by observed digest even when
   given as a tag" (substrate's contract).
 - Nothing in weft serves the OCI distribution protocol: an operator or a pipeline has no place to
   push an image to, and a managed-service engine's image (`weft.catalog.Engine`) has no source.
@@ -53,7 +53,7 @@ cloudspec (requested from the cloudspec session the same minute as a contract,
 ## Scope
 
 - `ess/3-resources/artifacts.yaml` (registry, repository and tag), `ess/7-services/catalog.yaml`
-  (the registry engine), `docs/platform-ports.md` § N6 and § C5, `docs/domain-sketch.md`
+  (the registry engine), `cloudspec@2ed72c2:docs/platform-ports.md` § N6 and § C5, `docs/domain-sketch.md`
   § Artifacts
 
 ## Acceptance

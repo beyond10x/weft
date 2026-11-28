@@ -13,12 +13,12 @@ scope:
   path: product/cloud/crates/weft-controllers/src/machines.rs
 - confidence: cited
   path: product/cloud/crates/weft-controllers/tests/main.rs
-revision: 2
+revision: 3
 ---
 ## Epic
 
 Decomposes `epic:platform-ports`, acceptance 3 (the machines port owns the life of a pool's
-machine, to its end). Design: `docs/platform-ports.md` § 6 C1, step `gone-machines`. Depends on
+machine, to its end). Design: `cloudspec@2ed72c2:docs/platform-ports.md` § 6 C1, step `gone-machines`. Depends on
 `story:ports-local-pool-node` (the steps module and the grants of S2).
 
 ## Context

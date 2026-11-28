@@ -25,7 +25,7 @@ scope:
   path: tools/sim/src/experiment.rs
 - confidence: cited
   path: tools/sim/tests/ratchet/mod.rs
-revision: 11
+revision: 12
 ---
 ## Epic
 
@@ -42,8 +42,8 @@ surfaces (`story:kpi-repository` -> `story:anim-search-record` -> `story:anim-se
 `quality/ratchet.yaml` and `quality/assessors/weft-sim-report@1.assessor.yaml` before it;
 `story:kpi-flat-searches` and `story:kpi-simulator` edit `quality/ratchet.yaml` after it.
 
-Of the weft-sim sources it edits `tools/sim/src/experiment.rs` (the `search.maximised` field) and
-`tools/sim/tests/ratchet/mod.rs` (its tests), both on the same chain: `story:kpi-flat-searches` edits
+Of the weft-sim sources it edits `cloudspec@2ed72c2:crates/cloudspec-sim/src/experiment.rs` (the `search.maximised` field) and
+`cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs` (its tests), both on the same chain: `story:kpi-flat-searches` edits
 both after it.
 
 `sim/experiments/` holds six experiments when this story lands. `story:anim-docs-published-run`
@@ -72,7 +72,7 @@ reads) is held by a requirement.
   objective figures in the § 2 baseline table.
 - The node-loss search (M7, exhaustive, 9 points) matches `healthy-node-lost` at every fault tick
   with `heartbeat-every 3`; weft-sim records each match with its pattern, walk and seed
-  (`tools/sim/src/simulate.rs:676`).
+  (`cloudspec@2ed72c2:crates/cloudspec-sim/src/simulate.rs:676`).
 
 Shape (taken here):
 
@@ -84,10 +84,10 @@ Shape (taken here):
   looks for as an objective and not as a gate, and says so in a field weft-sim parses
   (`design:quality-kpis` § Conventions: "each experiment says which it is"):
   `search.maximised: [{kpi: <id>, reason: <words>}]`. The experiment format refuses unknown fields
-  (`tools/sim/src/experiment.rs:231`, `Search`, `#[serde(deny_unknown_fields)]`), so this story
+  (`cloudspec@2ed72c2:crates/cloudspec-sim/src/experiment.rs:231`, `Search`, `#[serde(deny_unknown_fields)]`), so this story
   adds the field to `Search`; weft-sim refuses an entry without a reason, an entry whose KPI is
   also in `gates`, and an entry whose KPI has no positive weight.
-- Tests in `tools/sim/tests/ratchet/mod.rs` (the module of `story:kpi-repository`, run by
+- Tests in `cloudspec@2ed72c2:crates/cloudspec-sim/tests/ratchet/mod.rs` (the module of `story:kpi-repository`, run by
   `task sim-test`, file-only, each under 1 s):
   - `ratchet::every_search_gates_every_platform_gate_kpi`: reads every file of `sim/experiments/`
     and fails when one with a `search:` block lacks a gate KPI of the list above in

@@ -11,7 +11,7 @@ relations:
 - depends_on: story:ports-machines-remove
 - depends_on: story:ports-cloud-edge-local
 - depends_on: story:skeleton-end-to-end
-revision: 1
+revision: 2
 ---
 ## Epic
 
@@ -30,7 +30,7 @@ instance reads Running).
   (`docs/domain-sketch.md:713`); "In the `local` placement all four server components run in one
   process" (`docs/domain-sketch.md:80`).
 - In the foreground: the control host and one node, every port on its `local` adapter
-  (`docs/platform-ports.md` § 8, column `local`), port bindings on loopback only, state in a
+  (`cloudspec@2ed72c2:docs/platform-ports.md` § 8, column `local`), port bindings on loopback only, state in a
   temporary directory, a join token the command issues to itself. While up it serves the same HTTP
   views on loopback. On exit (end of the workload, or SIGINT/SIGTERM) it tears down every machine
   through the machines port and removes the state directory.
