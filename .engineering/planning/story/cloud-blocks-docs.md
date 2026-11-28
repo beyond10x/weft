@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-docs
 kind: story
-status: proposed
+status: implemented
 title: Docs pages and the spec-diff acknowledgements follow the renamed domains
 relations:
 - decomposes: epic:cloud-blocks
@@ -13,18 +13,38 @@ relations:
 - depends_on: story:cloud-blocks-layers
 scope:
 - confidence: cited
+  path: README.md
+- confidence: cited
   path: quality/spec-diff-acknowledgements.json
+- confidence: cited
+  path: tools/check.d/30-docs-spec-pages.sh
 - confidence: cited
   path: tools/docs-spec-pages.sh
 - confidence: cited
+  path: tools/test-docs-spec-pages.sh
+- confidence: cited
   path: website/data/status-proofs.json
+- confidence: cited
+  path: website/data/status.json
 - confidence: cited
   path: website/docs/concepts
 - confidence: cited
+  path: website/docs/getting-started.md
+- confidence: cited
+  path: website/docs/index.md
+- confidence: cited
   path: website/docs/run/consoles.md
-revision: 6
+- confidence: cited
+  path: website/docs/run/deploy-a-workload.md
+- confidence: cited
+  path: website/docs/specification/read.md
+- confidence: cited
+  path: website/product.json
+revision: 17
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 6, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-11-28T13:48:03Z", actor: "human:operator", revision: 16, decided_on: {"recorded":{"test_result":1,"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T13:48:08Z", actor: "human:operator", revision: 17, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

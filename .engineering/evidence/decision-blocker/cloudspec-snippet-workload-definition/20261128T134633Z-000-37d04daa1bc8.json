@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T13:46:33Z",
+  "actor": "human:operator",
+  "artifact": "decision-blocker:cloudspec-snippet-workload-definition",
+  "kind": "decision-blocker",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "owner's pick D-C1 = A (relayed by the host operator): the control host calls DefineWorkload once per part when the plan is applied, with a fixed profile per part kind (snippet now, process for slot)"
+  }
+}

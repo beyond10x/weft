@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cloud-blocks-vendor
 kind: story
-status: active
+status: implemented
 title: ess/cloud holds cloudspec's renamed blocks at the pin, and weft's files keep only what weft keeps
 relations:
 - decomposes: epic:cloud-blocks
@@ -64,10 +64,11 @@ scope:
   path: ess/system.yaml
 - confidence: cited
   path: tools/synth-domain.sh
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-28T08:38:22Z", actor: "human:operator", revision: 8, decided_on: {"recorded":{"approval":1}}}
 - {from: "proposed", to: "active", at: "2026-11-28T08:38:23Z", actor: "human:operator", revision: 9, decided_on: {"recorded":{"approval":1}}}
+- {from: "active", to: "implemented", at: "2026-11-28T13:47:53Z", actor: "human:operator", revision: 10, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 ## Epic
 

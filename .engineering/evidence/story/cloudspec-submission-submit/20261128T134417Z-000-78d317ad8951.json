@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-28T13:44:17Z",
+  "actor": "human:operator",
+  "artifact": "story:cloudspec-submission-submit",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "coordinator review: no blocker, scope and acceptance checked against the epic; ordered next by the host operator (epic cloudspec-submission first)"
+  }
+}
